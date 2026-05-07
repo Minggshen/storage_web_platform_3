@@ -1,3 +1,0 @@
-32: 式（9）  U_t = {u | V_min≤V^0_{b,t}+s^P_{b,b*}u+s^Q_{b,b*}q_t≤V_max, ∀b∈B;
-33:               I^0_{l,t}+m^P_{l,b*}u+m^Q_{l,b*}q_t≤I_l^rate, ∀l∈L;
-34:               S^0_{tx,t}+n^P_{tx,b*}u+n^Q_{tx,b*}q_t≤S_tx^limit; P^grid_t(u)≥0或满足并网约束 }
