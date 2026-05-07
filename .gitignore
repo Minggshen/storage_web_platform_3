@@ -16,3 +16,5 @@ backend/data/projects/
 .DS_Store
 *.log
 .env
+
+patent_outputs/
