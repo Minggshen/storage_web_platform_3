@@ -13,7 +13,7 @@
 
 ```bash
 # 1. 克隆项目
-git clone <repo-url>
+git clone git@github.com:Minggshen/storage_web_platform_3.git
 cd storage_web_platform_3
 
 # 2. Python 环境
