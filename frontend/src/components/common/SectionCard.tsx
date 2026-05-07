@@ -8,25 +8,9 @@ type Props = {
 
 export default function SectionCard({ title, children, extra }: Props) {
   return (
-    <section
-      style={{
-        background: '#ffffff',
-        border: '1px solid #e5e7eb',
-        borderRadius: 16,
-        padding: 20,
-        boxShadow: '0 4px 14px rgba(15,23,42,0.04)',
-      }}
-    >
-      <div
-        style={{
-          display: 'flex',
-          justifyContent: 'space-between',
-          alignItems: 'center',
-          gap: 12,
-          marginBottom: 14,
-        }}
-      >
-        <h2 style={{ margin: 0, fontSize: 22, color: '#0f172a' }}>{title}</h2>
+    <section className="rounded-2xl border border-border bg-card p-5 shadow-xs">
+      <div className="mb-3.5 flex items-center justify-between gap-3">
+        <h2 className="m-0 text-[22px] font-bold text-foreground">{title}</h2>
         {extra}
       </div>
       {children}

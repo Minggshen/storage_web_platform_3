@@ -2,6 +2,9 @@ import { useEffect, useMemo, useState } from 'react';
 import { Link, Outlet, useLocation, useParams } from 'react-router-dom';
 import { getProjectDashboard } from '../services/projects';
 import type { DashboardPayload, StepPayload } from '../types/api';
+import { Progress } from '@/components/ui/progress';
+import { cn } from '@/lib/utils';
+import { ThemeToggle } from '@/components/common/ThemeToggle';
 
 const navItems = [
   { key: 'overview', label: '项目总览', path: 'overview' },
@@ -50,30 +53,34 @@ export default function AppShell() {
   const topologyCounts = topologyStep?.counts ?? {};
 
   return (
-    <div style={{ minHeight: '100vh', background: '#f8fafc' }}>
-      <div style={{ maxWidth: 1440, margin: '0 auto', display: 'grid', gridTemplateColumns: '240px 1fr', gap: 20, padding: 20 }}>
-        <aside
-          style={{
-            background: '#ffffff',
-            border: '1px solid #e5e7eb',
-            borderRadius: 18,
-            padding: 18,
-            alignSelf: 'start',
-            position: 'sticky',
-            top: 20,
-          }}
-        >
-          <div style={{ fontSize: 13, color: '#64748b', marginBottom: 8 }}>项目工作台</div>
-          <div style={{ fontSize: 20, fontWeight: 800, color: '#0f172a', marginBottom: 14 }}>导航</div>
-          <div style={navProjectCardStyle}>
-            <div style={{ fontWeight: 800, color: '#0f172a', marginBottom: 8 }}>
+    <div className="min-h-screen bg-background">
+      <div className="mx-auto grid max-w-[1440px] grid-cols-[260px_1fr] gap-5 p-5">
+        {/* Sidebar */}
+        <aside className="sticky top-5 self-start rounded-2xl border border-sidebar-border bg-sidebar p-5 shadow-sm">
+          <div className="mb-3 flex items-center justify-between gap-2">
+            <div className="text-[11px] font-semibold tracking-wider text-sidebar-foreground/50 uppercase">
+              项目工作台
+            </div>
+            <ThemeToggle />
+          </div>
+          <div className="mb-4 text-xl font-extrabold tracking-tight text-sidebar-foreground">
+            导航
+          </div>
+
+          {/* Project info card */}
+          <div className="mb-5 rounded-xl bg-sidebar-accent/30 px-3.5 py-3">
+            <div className="mb-1 text-sm font-bold text-sidebar-foreground">
               {dashboard?.project_name || '当前项目'}
             </div>
-            <div style={{ color: '#64748b', fontSize: 13 }}>
-              节点：{String(topologyCounts.nodes ?? dashboard?.node_count ?? 0)} ｜ 负荷：{String(topologyCounts.load_nodes ?? dashboard?.load_node_count ?? 0)}
+            <div className="text-xs text-sidebar-foreground/55">
+              节点：{String(topologyCounts.nodes ?? dashboard?.node_count ?? 0)}
+              {' ｜ '}
+              负荷：{String(topologyCounts.load_nodes ?? dashboard?.load_node_count ?? 0)}
             </div>
           </div>
-          <div style={{ display: 'grid', gap: 8 }}>
+
+          {/* Step navigation */}
+          <nav className="flex flex-col gap-1.5">
             {steps.map((step, index) => {
               const item = navItems.find((nav) => nav.key === step.key);
               const href = step.route || `/projects/${projectId}/${item?.path ?? step.key}`;
@@ -83,54 +90,49 @@ export default function AppShell() {
               const inProgress = status === 'in_progress' || active;
               const failed = status === 'failed';
               const locked = !completed && !inProgress && status === 'not_started';
+
+              const linkClass = cn(
+                'flex items-center gap-2.5 rounded-xl px-3 py-2.5 text-sm font-semibold transition-colors duration-150 no-underline',
+                active && 'bg-sidebar-accent text-sidebar-foreground border border-sidebar-border shadow-sm',
+                !active && !locked && 'text-sidebar-foreground/80 hover:bg-sidebar-accent/50 hover:text-sidebar-foreground',
+                locked && 'text-sidebar-foreground/35 cursor-not-allowed',
+              );
+
+              const circleClass = cn(
+                'flex h-[26px] w-[26px] shrink-0 items-center justify-center rounded-full text-xs font-bold',
+                failed && 'bg-red-600 text-white',
+                completed && 'bg-emerald-500 text-white',
+                inProgress && !failed && !completed && 'bg-sidebar-primary text-sidebar-primary-foreground shadow-sm shadow-primary/30',
+                locked && !failed && 'bg-sidebar-accent/60 text-sidebar-foreground/50',
+              );
+
               return (
-                <Link
-                  key={step.key}
-                  to={href}
-                  style={{
-                    textDecoration: 'none',
-                    borderRadius: 12,
-                    padding: '10px 12px',
-                    fontWeight: 700,
-                    color: active ? '#1d4ed8' : locked ? '#9ca3af' : '#0f172a',
-                    background: active ? '#dbeafe' : '#ffffff',
-                    border: `1px solid ${active ? '#93c5fd' : '#ffffff'}`,
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: 10,
-                  }}
-                >
-                  <span
-                    style={{
-                      width: 26,
-                      height: 26,
-                      borderRadius: 999,
-                      display: 'inline-flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      flex: '0 0 auto',
-                      fontSize: 13,
-                      color: completed || failed || inProgress ? '#ffffff' : '#9ca3af',
-                      background: failed ? '#dc2626' : completed ? '#22c55e' : inProgress ? '#7aa2f7' : '#f1f5f9',
-                    }}
-                  >
-                    {completed ? '✓' : failed ? '!' : inProgress ? '›' : index + 1}
+                <Link key={step.key} to={href} className={linkClass}>
+                  <span className={circleClass}>
+                    {completed ? '\u2713' : failed ? '!' : inProgress ? '\u203A' : index + 1}
                   </span>
-                  <span style={{ flex: 1 }}>{step.label}</span>
-                  {locked ? <span style={{ color: '#9ca3af', fontSize: 12 }}>锁</span> : null}
+                  <span className="flex-1">{step.label}</span>
+                  {locked && (
+                    <span className="text-xs text-sidebar-foreground/30">锁</span>
+                  )}
                 </Link>
               );
             })}
-          </div>
-          <div style={progressBlockStyle}>
-            <div style={{ color: '#64748b', fontWeight: 700, fontSize: 13, marginBottom: 10 }}>完成进度</div>
-            <div style={progressTrackStyle}>
-              <div style={{ ...progressFillStyle, width: `${progressPct}%` }} />
+          </nav>
+
+          {/* Progress bar */}
+          <div className="mt-5 border-t border-sidebar-border pt-4">
+            <div className="mb-2.5 text-xs font-bold text-sidebar-foreground/60">
+              完成进度
             </div>
-            <div style={{ color: '#64748b', textAlign: 'right', marginTop: 8 }}>{completedCount} / {steps.length} 步</div>
+            <Progress value={progressPct} className="h-2 bg-sidebar-accent/50" />
+            <div className="mt-2 text-right text-xs text-sidebar-foreground/50">
+              {completedCount} / {steps.length} 步
+            </div>
           </div>
         </aside>
 
+        {/* Main content */}
         <main>
           <Outlet />
         </main>
@@ -138,29 +140,3 @@ export default function AppShell() {
     </div>
   );
 }
-
-const navProjectCardStyle: React.CSSProperties = {
-  background: '#f8fafc',
-  borderRadius: 12,
-  padding: 14,
-  marginBottom: 18,
-};
-
-const progressBlockStyle: React.CSSProperties = {
-  borderTop: '1px solid #e5e7eb',
-  marginTop: 20,
-  paddingTop: 16,
-};
-
-const progressTrackStyle: React.CSSProperties = {
-  height: 8,
-  borderRadius: 999,
-  background: '#e5e7eb',
-  overflow: 'hidden',
-};
-
-const progressFillStyle: React.CSSProperties = {
-  height: '100%',
-  borderRadius: 999,
-  background: '#22c55e',
-};

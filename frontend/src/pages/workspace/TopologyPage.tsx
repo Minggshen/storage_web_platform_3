@@ -5103,6 +5103,7 @@ const textareaStyle: React.CSSProperties = {
   fontSize: 12,
   fontFamily: 'Consolas, Menlo, Monaco, monospace',
   resize: 'vertical',
+  overscrollBehavior: 'contain',
 };
 
 const errorStyle: React.CSSProperties = {

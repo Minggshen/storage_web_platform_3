@@ -1,6 +1,10 @@
 import React, { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { createProject } from '../../services/projects';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Textarea } from '@/components/ui/textarea';
+import { Label } from '@/components/ui/label';
 
 function ProjectCreatePage() {
   const navigate = useNavigate();
@@ -35,74 +39,62 @@ function ProjectCreatePage() {
   }
 
   return (
-    <div style={{ padding: 24, background: '#f8fafc', minHeight: '100vh' }}>
-      <div style={{ maxWidth: 880, margin: '0 auto' }}>
-        <div style={{ marginBottom: 16 }}>
-          <Link
-            to="/projects"
-            style={{ color: '#2563eb', textDecoration: 'none', fontWeight: 600 }}
-          >
-            ← 返回项目列表
+    <div className="min-h-screen bg-background p-6">
+      <div className="mx-auto max-w-[880px]">
+        {/* Breadcrumb */}
+        <div className="mb-4">
+          <Link to="/projects" className="font-semibold text-primary no-underline hover:underline">
+            &larr; 返回项目列表
           </Link>
         </div>
 
-        <div
-          style={{
-            background: '#ffffff',
-            border: '1px solid #e5e7eb',
-            borderRadius: 16,
-            padding: 24,
-          }}
-        >
-          <div style={{ fontSize: 13, color: '#64748b', marginBottom: 8 }}>项目创建</div>
-          <h1 style={{ margin: 0, fontSize: 32 }}>新建项目</h1>
-          <div style={{ color: '#64748b', marginTop: 8, marginBottom: 20 }}>
+        {/* Form card */}
+        <div className="rounded-2xl border border-border bg-card p-6">
+          <div className="mb-2 text-[13px] text-muted-foreground">项目创建</div>
+          <h1 className="m-0 text-[32px] font-extrabold tracking-tight text-foreground">新建项目</h1>
+          <p className="mt-2 mb-5 text-sm text-muted-foreground">
             创建一个新的配电网储能优化前后端联调项目。
-          </div>
+          </p>
 
           {error ? (
-            <div
-              style={{
-                background: '#fef2f2',
-                border: '1px solid #fecaca',
-                color: '#b91c1c',
-                borderRadius: 12,
-                padding: 14,
-                marginBottom: 16,
-              }}
-            >
+            <div className="mb-4 rounded-xl border border-red-500/30 bg-red-500/10 p-3.5 text-sm text-red-600">
               创建失败：{error}
             </div>
           ) : null}
 
           <form onSubmit={onSubmit}>
-            <div style={{ marginBottom: 16 }}>
-              <label style={labelStyle}>项目名称</label>
-              <input
+            <div className="mb-4">
+              <Label htmlFor="project-name" className="mb-2 block text-sm font-semibold">
+                项目名称
+              </Label>
+              <Input
+                id="project-name"
                 value={name}
                 onChange={(e) => setName(e.target.value)}
-                style={inputStyle}
                 placeholder="请输入项目名称"
               />
             </div>
 
-            <div style={{ marginBottom: 20 }}>
-              <label style={labelStyle}>项目说明</label>
-              <textarea
+            <div className="mb-5">
+              <Label htmlFor="project-desc" className="mb-2 block text-sm font-semibold">
+                项目说明
+              </Label>
+              <Textarea
+                id="project-desc"
                 value={description}
                 onChange={(e) => setDescription(e.target.value)}
-                style={textareaStyle}
                 placeholder="请输入项目说明"
+                className="min-h-[120px]"
               />
             </div>
 
-            <div style={{ display: 'flex', gap: 12 }}>
-              <button type="submit" disabled={submitting || !name.trim()} style={primaryBtnStyle}>
+            <div className="flex gap-3">
+              <Button type="submit" disabled={submitting || !name.trim()}>
                 {submitting ? '创建中...' : '创建项目'}
-              </button>
-              <Link to="/projects" style={secondaryLinkStyle}>
-                取消
-              </Link>
+              </Button>
+              <Button variant="outline" asChild>
+                <Link to="/projects">取消</Link>
+              </Button>
             </div>
           </form>
         </div>
@@ -110,57 +102,6 @@ function ProjectCreatePage() {
     </div>
   );
 }
-
-const labelStyle: React.CSSProperties = {
-  display: 'block',
-  fontSize: 14,
-  color: '#374151',
-  marginBottom: 8,
-  fontWeight: 600,
-};
-
-const inputStyle: React.CSSProperties = {
-  width: '100%',
-  boxSizing: 'border-box',
-  border: '1px solid #d1d5db',
-  borderRadius: 12,
-  padding: '12px 14px',
-  fontSize: 14,
-};
-
-const textareaStyle: React.CSSProperties = {
-  width: '100%',
-  minHeight: 120,
-  boxSizing: 'border-box',
-  border: '1px solid #d1d5db',
-  borderRadius: 12,
-  padding: '12px 14px',
-  fontSize: 14,
-  resize: 'vertical',
-};
-
-const primaryBtnStyle: React.CSSProperties = {
-  padding: '10px 16px',
-  borderRadius: 12,
-  border: '1px solid #111827',
-  background: '#111827',
-  color: '#ffffff',
-  fontWeight: 700,
-  cursor: 'pointer',
-};
-
-const secondaryLinkStyle: React.CSSProperties = {
-  display: 'inline-flex',
-  alignItems: 'center',
-  justifyContent: 'center',
-  padding: '10px 16px',
-  borderRadius: 12,
-  border: '1px solid #d1d5db',
-  background: '#ffffff',
-  color: '#111827',
-  textDecoration: 'none',
-  fontWeight: 600,
-};
 
 export { ProjectCreatePage };
 export default ProjectCreatePage;

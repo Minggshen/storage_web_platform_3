@@ -1,0 +1,31 @@
+式（1）  Φ = [Q_α(p), R^+(p), R^-(p), H_θ(p), E^sur, W^π, H^tx, H^v, H^l]
+式（2）  Q_α(p) = inf{x | Pr(p_t≤x)≥α}，α∈{0.05,0.50,0.95}
+式（3）  R^+(p)=Q_0.95(max(p_t-p_{t-1},0))，R^-(p)=Q_0.95(max(p_{t-1}-p_t,0))
+式（4）  H_θ(p)=max{|I|Δt | I为连续时段且p_t≥θ·P_peak, t∈I}
+式（5）  W^π_t = 1{π_t≥Q_0.75(π)} - 1{π_t≤Q_0.25(π)}
+式（6）  ΔV_{b,t} ≈ s^P_{b,b*}·u_t + s^Q_{b,b*}·q_t
+式（7）  ΔI_{l,t} ≈ m^P_{l,b*}·u_t + m^Q_{l,b*}·q_t
+式（8）  ΔS_{tx,t} ≈ n^P_{tx,b*}·u_t + n^Q_{tx,b*}·q_t
+式（9）  U_t = {u | V_min≤V^0_{b,t}+s^P_{b,b*}u+s^Q_{b,b*}q_t≤V_max, ∀b∈B;
+式（10）  P_dis^rob = Q_β({U_t^+ | t∈T_dis}) - κ·CVaR_β(ε^V_t+ε^I_t)
+式（11）  P_ch^rob = Q_β({U_t^- | t∈T_ch}) - κ·CVaR_β(ε^V_t+ε^I_t)
+式（12）  P_max = min(P_dev^max, P_grid^max, P_dis^rob, P_ch^rob, P_tx^rob)
+式（13）  ψ_t^dis = w_1·1{p_t≥Q_0.90(p)} + w_2·1{π_t≥Q_0.75(π)} + w_3·r^V_t + w_4·r^I_t
+式（14）  ψ_t^ch = a_1·1{p_t≤Q_0.30(p)} + a_2·1{π_t≤Q_0.25(π)} + a_3·max(-p_t,0) + a_4·H^tx_t
+式（15）  E_e^need = Σ_{t∈e} min(P_max, p_t-Q_θ(p))_+ · Δt / η_dis
+式（16）  E_c^rec = Σ_{t∈c} min(P_ch^rob, H^tx_t, H^grid_t) · η_ch · Δt
+式（17）  E_max = min(Q_β(E_e^need)/ΔSOC, Q_β(E_c^rec)/ΔSOC, P_max·T_dev^max)
+式（18）  J(P,E)=B_arbitrage+B_demand+B_service+B_loss-C_cap-C_om-C_deg-Λ_grid
+式（19）  ∂J/∂E ≤ c_E^cap + c_E^deg + δ  ⇒  E 上界停止外扩
+式（20）  ∂J/∂P ≤ c_P^cap + δ_P  ⇒  P 上界停止外扩
+式（21）  D_0 = {(P_i,E_i,T_i)∈Ω | (P_i,E_i,T_i)∈F⊕M}
+式（22）  i 被 j 支配 ⇔ P_j≥P_i, E_j≥E_i, C_j≤C_i, Risk_j≤Risk_i 且至少一项严格优于 i
+式（23）  D = D_0 \ {被支配型号}
+式（24）  A_c^r = N_c^fail / N^eval
+式（25）  γ_c^{r+1}=clip(γ_c^r·[1+η(A_c^r-A_0)], γ_min, γ_max)
+式（26）  F^{r+1}=F^r ∩ {x | h_c(x)≤γ_c^{r+1}, ∀c} ⊕ M^r
+式（27）  M^r = max(M_min, z_{1-α}·σ_h^r + ρ·dist(x, Pareto_ε^r))
+式（28）  η_invalid = N_invalid / N_eval
+式（29）  g_ε = min{g | |J_g^best-J_final^best| / |J_final^best| ≤ ε}
+式（30）  R_T = 1 - T_adaptive / T_baseline
+式（31）  R_N = 1 - N_eval,adaptive / N_eval,baseline

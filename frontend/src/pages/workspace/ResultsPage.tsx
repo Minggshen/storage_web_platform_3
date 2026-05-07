@@ -1218,35 +1218,86 @@ function SocCashflowChart(props: { data: ResultChartPoint[] }) {
 }
 
 function YearlySocChart(props: { data: ResultChartPoint[] }) {
+  const dataLen = props.data.length;
+  const [startIndex, setStartIndex] = useState(0);
+  const [endIndex, setEndIndex] = useState(Math.max(0, dataLen - 1));
+  const containerRef = useRef<HTMLDivElement>(null);
+  const rangeRef = useRef({ start: startIndex, end: endIndex });
+  rangeRef.current = { start: startIndex, end: endIndex };
+
+  useEffect(() => {
+    const max = Math.max(0, dataLen - 1);
+    setStartIndex(0);
+    setEndIndex(max);
+  }, [dataLen]);
+
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    const onWheel = (e: WheelEvent) => {
+      if (dataLen === 0) return;
+      e.preventDefault();
+      const rect = el.getBoundingClientRect();
+      const mouseXRatio = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+      const { start, end } = rangeRef.current;
+      const currentRange = end - start;
+      const centerIdx = Math.round(start + currentRange * mouseXRatio);
+      const zoomFactor = 1.5;
+      let newRange: number;
+      if (e.deltaY < 0) { newRange = Math.round(currentRange / zoomFactor); }
+      else { newRange = Math.round(currentRange * zoomFactor); }
+      newRange = Math.max(24, Math.min(dataLen - 1, newRange));
+      const half = Math.round(newRange / 2);
+      let newStart = centerIdx - half;
+      let newEnd = centerIdx + half;
+      if (newStart < 0) { newEnd -= newStart; newStart = 0; }
+      if (newEnd >= dataLen) { newStart -= newEnd - (dataLen - 1); newEnd = dataLen - 1; }
+      newStart = Math.max(0, newStart);
+      newEnd = Math.min(dataLen - 1, newEnd);
+      setStartIndex(newStart);
+      setEndIndex(newEnd);
+    };
+    el.addEventListener('wheel', onWheel, { passive: false });
+    return () => el.removeEventListener('wheel', onWheel);
+  }, [dataLen]);
+
   return (
-    <ResponsiveContainer width="100%" height={310}>
-      <ComposedChart data={props.data} margin={{ top: 10, right: 18, bottom: 8, left: 0 }}>
-        <CartesianGrid stroke={COLORS.grid} strokeDasharray="3 3" />
-        <XAxis
-          dataKey="hourOfYear"
-          tickFormatter={formatHourOfYearTick}
-          minTickGap={28}
-        />
-        <YAxis domain={[0, 1]} />
-        <Tooltip formatter={numberTooltipFormatter} labelFormatter={formatHourOfYearLabel} />
-        <Legend />
-        <Line
-          type="monotone"
-          dataKey="socClose"
-          name="SOC"
-          stroke={COLORS.accent2}
-          strokeWidth={1.8}
-          dot={false}
-          isAnimationActive={false}
-        />
-        <Brush
-          dataKey="hourOfYear"
-          height={22}
-          travellerWidth={8}
-          tickFormatter={formatHourOfYearTick}
-        />
-      </ComposedChart>
-    </ResponsiveContainer>
+    <div ref={containerRef} style={{ overflow: 'hidden' }}>
+      <ResponsiveContainer width="100%" height={310}>
+        <ComposedChart data={props.data} margin={{ top: 10, right: 18, bottom: 8, left: 0 }}>
+          <CartesianGrid stroke={COLORS.grid} strokeDasharray="3 3" />
+          <XAxis
+            dataKey="hourOfYear"
+            tickFormatter={formatHourOfYearTick}
+            minTickGap={28}
+          />
+          <YAxis domain={[0, 1]} />
+          <Tooltip formatter={numberTooltipFormatter} labelFormatter={formatHourOfYearLabel} />
+          <Legend />
+          <Line
+            type="monotone"
+            dataKey="socClose"
+            name="SOC"
+            stroke={COLORS.accent2}
+            strokeWidth={1.8}
+            dot={false}
+            isAnimationActive={false}
+          />
+          <Brush
+            dataKey="hourOfYear"
+            height={22}
+            travellerWidth={8}
+            tickFormatter={formatHourOfYearTick}
+            startIndex={startIndex}
+            endIndex={endIndex}
+            onChange={(e) => {
+              setStartIndex(e.startIndex ?? 0);
+              setEndIndex(e.endIndex ?? dataLen - 1);
+            }}
+          />
+        </ComposedChart>
+      </ResponsiveContainer>
+    </div>
   );
 }
 
@@ -1493,15 +1544,39 @@ function NetworkTopologyPanel(props: { data: NetworkTopologyChart | null }) {
   const [pan, setPan] = useState({ x: 0, y: 0 });
   const panDragRef = useRef<{ clientX: number; clientY: number; panX: number; panY: number } | null>(null);
   const topologySvgRef = useRef<SVGSVGElement | null>(null);
+  const topologyWheelRef = useRef<HTMLDivElement | null>(null);
+  const topologyStateRef = useRef({ zoom: 1, pan: { x: 0, y: 0 }, minX: 0, minY: 0, baseWidth: 600, baseHeight: 420 });
   useEffect(() => {
-    const element = topologySvgRef.current;
-    if (!element) return undefined;
-    const guardWheel = (event: WheelEvent) => {
-      if (fullscreenOpen) event.preventDefault();
+    const element = topologyWheelRef.current;
+    if (!element) return;
+    const onWheel = (event: WheelEvent) => {
+      event.preventDefault();
+      const st = topologyStateRef.current;
+      const nextZoom = Math.max(0.45, Math.min(3.5, st.zoom * (event.deltaY < 0 ? 1.12 : 0.89)));
+      const rect = element.getBoundingClientRect();
+      if (!rect.width || !rect.height) {
+        setZoom(nextZoom);
+        return;
+      }
+      const pointerXRatio = (event.clientX - rect.left) / rect.width;
+      const pointerYRatio = (event.clientY - rect.top) / rect.height;
+      const currentX = st.minX + st.pan.x;
+      const currentY = st.minY + st.pan.y;
+      const zoomedWidth = st.baseWidth / st.zoom;
+      const zoomedHeight = st.baseHeight / st.zoom;
+      const pointerModelX = currentX + pointerXRatio * zoomedWidth;
+      const pointerModelY = currentY + pointerYRatio * zoomedHeight;
+      const nextWidth = st.baseWidth / nextZoom;
+      const nextHeight = st.baseHeight / nextZoom;
+      setZoom(nextZoom);
+      setPan({
+        x: pointerModelX - pointerXRatio * nextWidth - st.minX,
+        y: pointerModelY - pointerYRatio * nextHeight - st.minY,
+      });
     };
-    element.addEventListener('wheel', guardWheel, { passive: false });
-    return () => element.removeEventListener('wheel', guardWheel);
-  }, [fullscreenOpen]);
+    element.addEventListener('wheel', onWheel, { passive: false });
+    return () => element.removeEventListener('wheel', onWheel);
+  });
   if (!nodes.length) return <EmptyChart />;
 
   const nodeById = new Map(nodes.map((node) => [String(node.id ?? ''), node]));
@@ -1513,6 +1588,7 @@ function NetworkTopologyPanel(props: { data: NetworkTopologyChart | null }) {
   const maxY = Math.max(...ys, 520) + 120;
   const baseWidth = Math.max(600, maxX - minX);
   const baseHeight = Math.max(420, maxY - minY);
+  topologyStateRef.current = { zoom, pan, minX, minY, baseWidth, baseHeight };
   const zoomedWidth = baseWidth / zoom;
   const zoomedHeight = baseHeight / zoom;
   const viewBox = `${minX + pan.x} ${minY + pan.y} ${zoomedWidth} ${zoomedHeight}`;
@@ -1551,29 +1627,6 @@ function NetworkTopologyPanel(props: { data: NetworkTopologyChart | null }) {
   const resetView = () => {
     setZoom(1);
     setPan({ x: 0, y: 0 });
-  };
-  const handleTopologyWheel = (event: React.WheelEvent<SVGSVGElement>) => {
-    event.preventDefault();
-    event.stopPropagation();
-    const nextZoom = Math.max(0.45, Math.min(3.5, zoom * (event.deltaY < 0 ? 1.12 : 0.89)));
-    const rect = event.currentTarget.getBoundingClientRect();
-    if (!rect.width || !rect.height) {
-      setZoom(nextZoom);
-      return;
-    }
-    const pointerXRatio = (event.clientX - rect.left) / rect.width;
-    const pointerYRatio = (event.clientY - rect.top) / rect.height;
-    const currentX = minX + pan.x;
-    const currentY = minY + pan.y;
-    const pointerModelX = currentX + pointerXRatio * zoomedWidth;
-    const pointerModelY = currentY + pointerYRatio * zoomedHeight;
-    const nextWidth = baseWidth / nextZoom;
-    const nextHeight = baseHeight / nextZoom;
-    setZoom(nextZoom);
-    setPan({
-      x: pointerModelX - pointerXRatio * nextWidth - minX,
-      y: pointerModelY - pointerYRatio * nextHeight - minY,
-    });
   };
   const handleTopologyPointerDown = (event: React.PointerEvent<SVGSVGElement>) => {
     panDragRef.current = { clientX: event.clientX, clientY: event.clientY, panX: pan.x, panY: pan.y };
@@ -1621,7 +1674,7 @@ function NetworkTopologyPanel(props: { data: NetworkTopologyChart | null }) {
       <div style={topologyLegendStripStyle}>
         <TopologyLegend />
       </div>
-      <div style={canvasStyle}>
+      <div ref={topologyWheelRef} style={canvasStyle}>
         <svg
           ref={topologySvgRef}
           viewBox={viewBox}
@@ -1629,7 +1682,6 @@ function NetworkTopologyPanel(props: { data: NetworkTopologyChart | null }) {
           height="100%"
           preserveAspectRatio="xMidYMid meet"
           style={topologySvgStyle}
-          onWheel={handleTopologyWheel}
           onPointerDown={handleTopologyPointerDown}
           onPointerMove={handleTopologyPointerMove}
           onPointerUp={handleTopologyPointerUp}
@@ -2544,4 +2596,4 @@ const tdStyle: React.CSSProperties = { padding: 10, borderBottom: '1px solid #e5
 const resultTableStyle: React.CSSProperties = { width: '100%', borderCollapse: 'collapse', minWidth: 920 };
 const resultTableHeadStyle: React.CSSProperties = { textAlign: 'left', padding: 10, borderBottom: '1px solid #d1d5db', background: '#f9fafb', fontSize: 12, color: '#475569', whiteSpace: 'nowrap' };
 const resultTableCellStyle: React.CSSProperties = { padding: 10, borderBottom: '1px solid #e5e7eb', verticalAlign: 'top', fontSize: 13 };
-const preStyle: React.CSSProperties = { whiteSpace: 'pre-wrap', wordBreak: 'break-word', background: '#f8fafc', padding: 12, border: '1px solid #e5e7eb', borderRadius: 8, maxHeight: 560, overflow: 'auto' };
+const preStyle: React.CSSProperties = { whiteSpace: 'pre-wrap', wordBreak: 'break-word', background: '#f8fafc', padding: 12, border: '1px solid #e5e7eb', borderRadius: 8, maxHeight: 560, overflow: 'auto', overscrollBehavior: 'contain' };

@@ -9,7 +9,26 @@
       "Bash(powershell -Command \"Get-ChildItem -Path 'd:\\\\storage_web_platform_3\\\\backend\\\\pytest-cache-files-7adg7n8z' -Recurse -File | Measure-Object -Property Length -Sum | Select-Object Count, Sum\")",
       "Bash(powershell -Command \"Get-ChildItem -Path 'd:\\\\storage_web_platform_3\\\\storage_engine_project' -Recurse -Filter '*.spec' -File | Select-Object FullName, Length\")",
       "Bash(powershell -Command \"Get-ChildItem -Path 'd:\\\\storage_web_platform_3\\\\backend' -Recurse -Filter '*.spec' -File | Select-Object FullName, Length\")",
-      "Bash(powershell -Command \"Get-ChildItem -Path 'd:\\\\storage_web_platform_3\\\\' -Depth 0 -File | Select-Object Name, Length\")"
+      "Bash(powershell -Command \"Get-ChildItem -Path 'd:\\\\storage_web_platform_3\\\\' -Depth 0 -File | Select-Object Name, Length\")",
+      "Skill(claude-hud:configure)",
+      "WebFetch(domain:github.com)",
+      "Bash(gh repo *)",
+      "Bash(gh api *)",
+      "Bash(git clone *)",
+      "Bash(python *)",
+      "Bash(npx --version)",
+      "Bash(cmd *)",
+      "mcp__ide__executeCode",
+      "Bash(where python *)",
+      "Bash(where python3 *)",
+      "Read(//c/Users/M/AppData/Local/Programs/**)",
+      "Bash(/d/storage_web_platform_3/.venv/Scripts/python.exe *)",
+      "Bash(npx skills *)",
+      "Bash(/d/nodejs/npx.cmd skills *)",
+      "Bash(/d/nodejs/npx.cmd *)",
+      "WebFetch(domain:skills.sh)",
+      "Bash(git *)",
+      "Bash(echo \"EXIT:$?\")"
     ]
   }
 }

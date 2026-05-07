@@ -9,6 +9,7 @@ import {
   uploadRuntimeFile,
 } from '../../services/assets';
 import { fetchProjectTopology } from '../../services/topology';
+import { Button } from '@/components/ui/button';
 
 type DashboardPayload = {
   project_id: string;
@@ -35,17 +36,23 @@ type LoadNodeOption = {
   };
 };
 
+function Row(props: { label: string; value: React.ReactNode }) {
+  return (
+    <div className="flex items-center justify-between gap-4 border-b border-border py-2">
+      <span className="text-muted-foreground">{props.label}</span>
+      <strong className="min-w-0 text-right break-words">{props.value}</strong>
+    </div>
+  );
+}
+
 function AssetsPage() {
   const { projectId = '' } = useParams();
-
   const [loading, setLoading] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
-
   const [dashboard, setDashboard] = useState<DashboardPayload | null>(null);
   const [loadNodes, setLoadNodes] = useState<LoadNodeOption[]>([]);
-
   const [tariffFile, setTariffFile] = useState<File | null>(null);
   const [libraryFile, setLibraryFile] = useState<File | null>(null);
   const [runtimeNodeId, setRuntimeNodeId] = useState('');
@@ -178,10 +185,8 @@ function AssetsPage() {
 
   async function onUploadRuntime(kind: 'year_map' | 'model_library') {
     if (!projectId) return;
-
     const file = kind === 'year_map' ? yearMapFile : modelLibraryFile;
     if (!file) return;
-
     setUploading(true);
     setError(null);
     setMessage(null);
@@ -206,44 +211,54 @@ function AssetsPage() {
   }
 
   return (
-    <div style={{ padding: 24, background: '#f8fafc', minHeight: '100vh' }}>
-      <div style={{ maxWidth: 1280, margin: '0 auto' }}>
-        <div style={{ marginBottom: 16 }}>
-          <Link
-            to="/projects"
-            style={{ color: '#2563eb', textDecoration: 'none', fontWeight: 600 }}
-          >
-            ← 返回项目列表
+    <div className="min-h-screen bg-background p-6">
+      <div className="mx-auto max-w-[1280px]">
+        <div className="mb-4">
+          <Link to="/projects" className="font-semibold text-primary no-underline hover:underline">
+            &larr; 返回项目列表
           </Link>
         </div>
 
-        <div style={heroStyle}>
-          <div style={{ fontSize: 13, color: '#64748b', marginBottom: 8 }}>资产绑定</div>
-          <h1 style={{ margin: 0, fontSize: 32 }}>资产与文件绑定</h1>
-          <div style={{ color: '#64748b', marginTop: 8 }}>
+        {/* Page Header */}
+        <div className="mb-5 rounded-2xl border border-border bg-card p-5">
+          <div className="mb-2 text-[13px] text-muted-foreground">资产绑定</div>
+          <h1 className="m-0 text-[32px] font-extrabold tracking-tight text-foreground">资产与文件绑定</h1>
+          <p className="mt-2 text-sm text-muted-foreground">
             上传电价表、设备策略库以及 runtime 文件，并查看当前绑定状态。
-          </div>
-          <div style={{ color: '#64748b', marginTop: 12 }}>项目 ID：{projectId}</div>
+          </p>
+          <div className="mt-3 text-sm text-muted-foreground">项目 ID：{projectId}</div>
         </div>
 
-        <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginBottom: 20 }}>
-          <Link to={`/projects/${projectId}/overview`} style={navBtnStyle}>
-            返回项目总览
-          </Link>
-          <Link to={`/projects/${projectId}/build`} style={navBtnStyle}>
-            进入构建校验
-          </Link>
-          <button onClick={loadDashboard} disabled={loading || uploading} style={primaryBtnStyle}>
+        {/* Action buttons */}
+        <div className="mb-5 flex gap-3 flex-wrap">
+          <Button variant="outline" size="sm" asChild>
+            <Link to={`/projects/${projectId}/overview`}>返回项目总览</Link>
+          </Button>
+          <Button variant="outline" size="sm" asChild>
+            <Link to={`/projects/${projectId}/build`}>进入构建校验</Link>
+          </Button>
+          <Button size="sm" onClick={loadDashboard} disabled={loading || uploading}>
             {loading ? '刷新中...' : '刷新状态'}
-          </button>
+          </Button>
         </div>
 
-        {error ? <div style={errorStyle}>错误：{error}</div> : null}
-        {message ? <div style={successStyle}>{message}</div> : null}
+        {/* Error / Success messages */}
+        {error ? (
+          <div className="mb-4 rounded-xl border border-red-500/30 bg-red-500/10 p-3.5 text-sm text-red-600">
+            错误：{error}
+          </div>
+        ) : null}
+        {message ? (
+          <div className="mb-4 rounded-xl border border-emerald-500/30 bg-emerald-500/10 p-3.5 text-sm text-emerald-600">
+            {message}
+          </div>
+        ) : null}
 
-        <div style={gridStyle}>
-          <section style={cardStyle}>
-            <h2 style={cardTitleStyle}>当前状态</h2>
+        {/* Main grid */}
+        <div className="grid gap-4" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))' }}>
+          {/* Status */}
+          <section className="rounded-2xl border border-border bg-card p-5">
+            <h2 className="mb-4 mt-0 text-[22px] font-bold text-foreground">当前状态</h2>
             <Row label="电价表" value={dashboard?.has_tariff ? '已配置' : '未配置'} />
             <Row label="设备库" value={dashboard?.has_device_library ? '已配置' : '未配置'} />
             <Row
@@ -252,156 +267,139 @@ function AssetsPage() {
             />
           </section>
 
-          <section style={cardStyle}>
-            <h2 style={cardTitleStyle}>上传电价表</h2>
+          {/* Tariff upload */}
+          <section className="rounded-2xl border border-border bg-card p-5">
+            <h2 className="mb-4 mt-0 text-[22px] font-bold text-foreground">上传电价表</h2>
             <input
               type="file"
               accept=".xlsx,.xls,.csv"
+              className="text-sm text-muted-foreground"
               onChange={(e) => setTariffFile(e.target.files?.[0] ?? null)}
             />
-            <div style={{ marginTop: 12 }}>
-              <button
-                onClick={onUploadTariff}
-                disabled={!tariffFile || uploading}
-                style={primaryBtnStyle}
-              >
+            <div className="mt-3">
+              <Button size="sm" onClick={onUploadTariff} disabled={!tariffFile || uploading}>
                 上传电价表
-              </button>
+              </Button>
             </div>
           </section>
 
-          <section style={cardStyle}>
-            <h2 style={cardTitleStyle}>上传设备策略库</h2>
+          {/* Device library upload */}
+          <section className="rounded-2xl border border-border bg-card p-5">
+            <h2 className="mb-4 mt-0 text-[22px] font-bold text-foreground">上传设备策略库</h2>
             <input
               type="file"
               accept=".xlsx,.xls,.csv"
+              className="text-sm text-muted-foreground"
               onChange={(e) => setLibraryFile(e.target.files?.[0] ?? null)}
             />
-            <div style={{ marginTop: 12 }}>
-              <button
-                onClick={onUploadLibrary}
-                disabled={!libraryFile || uploading}
-                style={primaryBtnStyle}
-              >
+            <div className="mt-3">
+              <Button size="sm" onClick={onUploadLibrary} disabled={!libraryFile || uploading}>
                 上传设备库
-              </button>
+              </Button>
             </div>
           </section>
 
-          <section style={cardStyle}>
-            <h2 style={cardTitleStyle}>上传 runtime 文件</h2>
+          {/* Runtime upload */}
+          <section className="rounded-2xl border border-border bg-card p-5">
+            <h2 className="mb-4 mt-0 text-[22px] font-bold text-foreground">上传 runtime 文件</h2>
 
-            <div style={runtimeWorkbenchGridStyle}>
-              <div style={runtimeStatusCardStyle}>
+            <div className="grid gap-4 items-start" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))' }}>
+              {/* Runtime status */}
+              <div className="rounded-xl border border-blue-500/20 bg-blue-500/5 p-3.5">
                 {selectedRuntimeNode ? (
                   <>
-                    <div style={runtimeStatusHeaderStyle}>
-                      <div style={{ minWidth: 0 }}>
-                        <div style={runtimeStatusTitleStyle}>当前节点 runtime 状态</div>
-                        <div style={runtimeStatusNodeStyle}>{selectedRuntimeNode.label}</div>
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <div className="text-sm font-bold text-foreground">当前节点 runtime 状态</div>
+                        <div className="mt-1 text-xs leading-relaxed text-foreground/70 break-words">
+                          {selectedRuntimeNode.label}
+                        </div>
                       </div>
                       <span
-                        style={
-                          selectedRuntimeBound ? runtimeBoundBadgeStyle : runtimePendingBadgeStyle
-                        }
+                        className={`inline-flex shrink-0 items-center justify-center rounded-full border px-2.5 py-0.5 text-xs font-bold ${
+                          selectedRuntimeBound
+                            ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-600'
+                            : 'border-amber-500/40 bg-amber-500/10 text-amber-600'
+                        }`}
                       >
                         {selectedRuntimeBound ? '已完成绑定' : '未完成绑定'}
                       </span>
                     </div>
-                    <div style={runtimeInfoGridStyle}>
-                      <div style={runtimeInfoItemStyle}>
-                        <div style={runtimeInfoLabelStyle}>绑定 year_map</div>
-                        <div style={runtimeInfoValueStyle}>
-                          {selectedRuntimeNode.runtimeBinding?.yearMapFileName || '未绑定'}
-                        </div>
-                      </div>
-                      <div style={runtimeInfoItemStyle}>
-                        <div style={runtimeInfoLabelStyle}>绑定 model_library</div>
-                        <div style={runtimeInfoValueStyle}>
-                          {selectedRuntimeNode.runtimeBinding?.modelLibraryFileName || '未绑定'}
-                        </div>
-                      </div>
-                      <div style={runtimeInfoItemStyle}>
-                        <div style={runtimeInfoLabelStyle}>已上传 year_map</div>
-                        <div style={runtimeInfoValueStyle}>
-                          {selectedRuntimeNode.currentRuntimeFiles?.yearMapFileName || '未上传'}
-                        </div>
-                      </div>
-                      <div style={runtimeInfoItemStyle}>
-                        <div style={runtimeInfoLabelStyle}>已上传 model_library</div>
-                        <div style={runtimeInfoValueStyle}>
-                          {selectedRuntimeNode.currentRuntimeFiles?.modelLibraryFileName || '未上传'}
-                        </div>
-                      </div>
+                    <div className="mt-3 grid gap-2.5" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))' }}>
+                      <RuntimeInfo label="绑定 year_map" value={selectedRuntimeNode.runtimeBinding?.yearMapFileName || '未绑定'} />
+                      <RuntimeInfo label="绑定 model_library" value={selectedRuntimeNode.runtimeBinding?.modelLibraryFileName || '未绑定'} />
+                      <RuntimeInfo label="已上传 year_map" value={selectedRuntimeNode.currentRuntimeFiles?.yearMapFileName || '未上传'} />
+                      <RuntimeInfo label="已上传 model_library" value={selectedRuntimeNode.currentRuntimeFiles?.modelLibraryFileName || '未上传'} />
                     </div>
-                    <div style={{ marginTop: 10, color: '#64748b', fontSize: 12, lineHeight: 1.5 }}>
+                    <div className="mt-2.5 text-xs leading-relaxed text-muted-foreground">
                       选择不同负荷节点时，这里会同步显示该节点当前已绑定的 runtime 文件。
                     </div>
                   </>
                 ) : (
                   <>
-                    <div style={runtimeStatusTitleStyle}>当前节点 runtime 状态</div>
-                    <div style={{ marginTop: 8, color: '#64748b', fontSize: 13, lineHeight: 1.5 }}>
+                    <div className="text-sm font-bold text-foreground">当前节点 runtime 状态</div>
+                    <div className="mt-2 text-[13px] leading-relaxed text-muted-foreground">
                       请选择一个负荷节点后查看其 runtime 绑定情况。
                     </div>
                   </>
                 )}
               </div>
 
-              <div style={runtimeControlPanelStyle}>
-                <label style={{ ...labelStyle, marginTop: 0 }}>负荷节点</label>
-                <select
-                  value={runtimeNodeId}
-                  onChange={(e) => setRuntimeNodeId(e.target.value)}
-                  style={inputStyle}
-                >
-                  <option value="">请选择负荷节点</option>
-                  {loadNodes.map((node) => (
-                    <option key={node.id} value={node.id}>
-                      {node.label}
-                    </option>
-                  ))}
-                </select>
-                {loadNodes.length === 0 ? (
-                  <div style={{ marginTop: 8, color: '#b45309', fontSize: 13 }}>
-                    当前拓扑没有负荷节点，请先在拓扑建模页添加并保存负荷节点。
-                  </div>
-                ) : null}
+              {/* Runtime upload controls */}
+              <div className="min-w-0">
+                <div className="mb-2">
+                  <label className="mb-1.5 block text-[13px] text-muted-foreground">负荷节点</label>
+                  <select
+                    value={runtimeNodeId}
+                    onChange={(e) => setRuntimeNodeId(e.target.value)}
+                    className="w-full rounded-xl border border-border bg-card px-3 py-2.5 text-sm box-border"
+                  >
+                    <option value="">请选择负荷节点</option>
+                    {loadNodes.map((node) => (
+                      <option key={node.id} value={node.id}>
+                        {node.label}
+                      </option>
+                    ))}
+                  </select>
+                  {loadNodes.length === 0 ? (
+                    <div className="mt-2 text-[13px] font-semibold text-amber-600">
+                      当前拓扑没有负荷节点，请先在拓扑建模页添加并保存负荷节点。
+                    </div>
+                  ) : null}
+                </div>
 
-                <div style={runtimeUploadGridStyle}>
-                  <div style={runtimeUploadBlockStyle}>
-                    <label style={labelStyle}>runtime_year_model_map.csv</label>
+                <div className="mt-3.5 grid gap-3.5" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))' }}>
+                  <div className="min-w-0">
+                    <label className="mb-1.5 mt-2 block text-[13px] text-muted-foreground">
+                      runtime_year_model_map.csv
+                    </label>
                     <input
                       type="file"
                       accept=".csv"
+                      className="text-sm text-muted-foreground"
                       onChange={(e) => setYearMapFile(e.target.files?.[0] ?? null)}
                     />
-                    <div style={{ marginTop: 10 }}>
-                      <button
-                        onClick={() => onUploadRuntime('year_map')}
-                        disabled={!runtimeNodeId || !yearMapFile || uploading}
-                        style={primaryBtnStyle}
-                      >
+                    <div className="mt-2.5">
+                      <Button size="sm" onClick={() => onUploadRuntime('year_map')} disabled={!runtimeNodeId || !yearMapFile || uploading}>
                         上传 year_map
-                      </button>
+                      </Button>
                     </div>
                   </div>
 
-                  <div style={runtimeUploadBlockStyle}>
-                    <label style={labelStyle}>runtime_model_library.csv</label>
+                  <div className="min-w-0">
+                    <label className="mb-1.5 mt-2 block text-[13px] text-muted-foreground">
+                      runtime_model_library.csv
+                    </label>
                     <input
                       type="file"
                       accept=".csv"
+                      className="text-sm text-muted-foreground"
                       onChange={(e) => setModelLibraryFile(e.target.files?.[0] ?? null)}
                     />
-                    <div style={{ marginTop: 10 }}>
-                      <button
-                        onClick={() => onUploadRuntime('model_library')}
-                        disabled={!runtimeNodeId || !modelLibraryFile || uploading}
-                        style={primaryBtnStyle}
-                      >
+                    <div className="mt-2.5">
+                      <Button size="sm" onClick={() => onUploadRuntime('model_library')} disabled={!runtimeNodeId || !modelLibraryFile || uploading}>
                         上传 model_library
-                      </button>
+                      </Button>
                     </div>
                   </div>
                 </div>
@@ -414,207 +412,16 @@ function AssetsPage() {
   );
 }
 
-function Row(props: { label: string; value: React.ReactNode }) {
+function RuntimeInfo({ label, value }: { label: string; value: string }) {
   return (
-    <div
-      style={{
-        display: 'flex',
-        justifyContent: 'space-between',
-        gap: 16,
-        padding: '8px 0',
-        borderBottom: '1px solid #e5e7eb',
-      }}
-    >
-      <span style={{ color: '#64748b' }}>{props.label}</span>
-      <strong style={{ minWidth: 0, textAlign: 'right', overflowWrap: 'anywhere' }}>{props.value}</strong>
+    <div className="rounded-xl border border-border bg-card px-3 py-2.5 min-w-0">
+      <div className="text-xs leading-tight text-muted-foreground">{label}</div>
+      <div className="mt-1 text-[13px] font-semibold leading-relaxed text-foreground break-words">
+        {value}
+      </div>
     </div>
   );
 }
-
-const heroStyle: React.CSSProperties = {
-  background: '#ffffff',
-  border: '1px solid #e5e7eb',
-  borderRadius: 16,
-  padding: 20,
-  marginBottom: 20,
-};
-
-const gridStyle: React.CSSProperties = {
-  display: 'grid',
-  gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))',
-  gap: 16,
-};
-
-const cardStyle: React.CSSProperties = {
-  background: '#ffffff',
-  border: '1px solid #e5e7eb',
-  borderRadius: 16,
-  padding: 20,
-};
-
-const cardTitleStyle: React.CSSProperties = {
-  margin: '0 0 16px 0',
-  fontSize: 22,
-};
-
-const navBtnStyle: React.CSSProperties = {
-  display: 'inline-flex',
-  alignItems: 'center',
-  justifyContent: 'center',
-  padding: '10px 14px',
-  background: '#ffffff',
-  color: '#111827',
-  textDecoration: 'none',
-  border: '1px solid #d1d5db',
-  borderRadius: 12,
-  fontWeight: 600,
-};
-
-const primaryBtnStyle: React.CSSProperties = {
-  padding: '10px 14px',
-  borderRadius: 12,
-  border: '1px solid #111827',
-  background: '#111827',
-  color: '#ffffff',
-  fontWeight: 700,
-  cursor: 'pointer',
-};
-
-const errorStyle: React.CSSProperties = {
-  background: '#fef2f2',
-  border: '1px solid #fecaca',
-  color: '#b91c1c',
-  borderRadius: 12,
-  padding: 14,
-  marginBottom: 16,
-};
-
-const successStyle: React.CSSProperties = {
-  background: '#f0fdf4',
-  border: '1px solid #bbf7d0',
-  color: '#166534',
-  borderRadius: 12,
-  padding: 14,
-  marginBottom: 16,
-};
-
-const labelStyle: React.CSSProperties = {
-  display: 'block',
-  fontSize: 13,
-  color: '#64748b',
-  marginTop: 8,
-  marginBottom: 6,
-};
-
-const inputStyle: React.CSSProperties = {
-  width: '100%',
-  boxSizing: 'border-box',
-  border: '1px solid #d1d5db',
-  borderRadius: 10,
-  padding: '10px 12px',
-};
-
-const runtimeStatusCardStyle: React.CSSProperties = {
-  padding: 14,
-  borderRadius: 12,
-  border: '1px solid #dbeafe',
-  background: '#f8fbff',
-};
-
-const runtimeWorkbenchGridStyle: React.CSSProperties = {
-  display: 'grid',
-  gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))',
-  gap: 16,
-  alignItems: 'start',
-};
-
-const runtimeControlPanelStyle: React.CSSProperties = {
-  minWidth: 0,
-};
-
-const runtimeStatusHeaderStyle: React.CSSProperties = {
-  display: 'flex',
-  justifyContent: 'space-between',
-  alignItems: 'flex-start',
-  gap: 12,
-};
-
-const runtimeStatusTitleStyle: React.CSSProperties = {
-  fontSize: 14,
-  fontWeight: 700,
-  color: '#0f172a',
-};
-
-const runtimeStatusNodeStyle: React.CSSProperties = {
-  marginTop: 4,
-  color: '#475569',
-  fontSize: 12,
-  lineHeight: 1.4,
-  overflowWrap: 'anywhere',
-};
-
-const runtimeBoundBadgeStyle: React.CSSProperties = {
-  display: 'inline-flex',
-  alignItems: 'center',
-  justifyContent: 'center',
-  minHeight: 24,
-  padding: '0 10px',
-  borderRadius: 999,
-  background: '#dcfce7',
-  border: '1px solid #86efac',
-  color: '#166534',
-  fontSize: 12,
-  fontWeight: 700,
-  flexShrink: 0,
-};
-
-const runtimePendingBadgeStyle: React.CSSProperties = {
-  ...runtimeBoundBadgeStyle,
-  background: '#fff7ed',
-  border: '1px solid #fdba74',
-  color: '#9a3412',
-};
-
-const runtimeInfoGridStyle: React.CSSProperties = {
-  display: 'grid',
-  gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
-  gap: 10,
-  marginTop: 12,
-};
-
-const runtimeInfoItemStyle: React.CSSProperties = {
-  padding: '10px 12px',
-  borderRadius: 10,
-  background: '#ffffff',
-  border: '1px solid #e2e8f0',
-  minWidth: 0,
-};
-
-const runtimeInfoLabelStyle: React.CSSProperties = {
-  color: '#64748b',
-  fontSize: 12,
-  lineHeight: 1.3,
-};
-
-const runtimeInfoValueStyle: React.CSSProperties = {
-  marginTop: 4,
-  color: '#0f172a',
-  fontSize: 13,
-  fontWeight: 600,
-  lineHeight: 1.4,
-  overflowWrap: 'anywhere',
-};
-
-const runtimeUploadGridStyle: React.CSSProperties = {
-  display: 'grid',
-  gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))',
-  gap: 14,
-  marginTop: 14,
-};
-
-const runtimeUploadBlockStyle: React.CSSProperties = {
-  minWidth: 0,
-};
 
 export { AssetsPage };
 export default AssetsPage;

@@ -3,6 +3,8 @@ import { useParams } from 'react-router-dom';
 import { cancelSolverTask, fetchLatestSolverTask, fetchTaskLogs, rerunSolver } from '../../services/solver';
 import { fetchProjectTopology } from '../../services/topology';
 import type { SolverTask } from '../../types/api';
+import { Button } from '@/components/ui/button';
+import { Progress } from '@/components/ui/progress';
 
 type TargetOption = {
   id: string;
@@ -28,6 +30,15 @@ function formatDurationSeconds(task: SolverTask | null): string {
   const end = new Date(task.completed_at).getTime();
   if (Number.isNaN(start) || Number.isNaN(end)) return '--';
   return `${Math.max(Math.round((end - start) / 1000), 0)} s`;
+}
+
+function Mini(props: { label: string; value: string }) {
+  return (
+    <div className="rounded-xl border border-border bg-card p-3.5">
+      <div className="mb-2 text-[13px] text-muted-foreground">{props.label}</div>
+      <div className="font-bold text-foreground">{props.value}</div>
+    </div>
+  );
 }
 
 export default function SolverPage() {
@@ -189,169 +200,145 @@ export default function SolverPage() {
   useEffect(() => {
     const taskId = String(latestTask?.task_id ?? '');
     const terminalStatus = new Set(['completed', 'failed', 'cancelled', 'canceled']);
-
     setDisplayProgress((previous) => {
-      if (!taskId) {
-        return { taskId: '', ...rawProgress };
-      }
-      if (previous.taskId !== taskId) {
-        return { taskId, ...rawProgress };
-      }
+      if (!taskId) return { taskId: '', ...rawProgress };
+      if (previous.taskId !== taskId) return { taskId, ...rawProgress };
       if (terminalStatus.has(taskStatus)) {
-        return {
-          taskId,
-          ...rawProgress,
-          percent: Math.max(previous.percent, rawProgress.percent),
-        };
+        return { taskId, ...rawProgress, percent: Math.max(previous.percent, rawProgress.percent) };
       }
-      return {
-        taskId,
-        ...rawProgress,
-        percent: Math.max(previous.percent, rawProgress.percent),
-      };
+      return { taskId, ...rawProgress, percent: Math.max(previous.percent, rawProgress.percent) };
     });
   }, [latestTask?.task_id, rawProgress, taskStatus]);
 
+  const runDisabled = loading || rerunning || taskIsActive || hasNoTargetOptions || mustChooseTarget;
+
   return (
-    <div style={{ padding: 24, background: '#f8fafc', minHeight: '100vh' }}>
-      <div style={{ maxWidth: 1280, margin: '0 auto' }}>
-        <div style={{ marginBottom: 16 }}>
-          <h1 style={{ margin: 0, fontSize: 32 }}>计算运行</h1>
-          <div style={{ marginTop: 8, color: '#6b7280' }}>查看最近任务状态、日志文本，并支持重新发起任务。</div>
+    <div className="min-h-screen bg-background p-6">
+      <div className="mx-auto max-w-[1280px]">
+        {/* Page Header */}
+        <div className="mb-4">
+          <h1 className="m-0 text-[32px] font-extrabold tracking-tight text-foreground">计算运行</h1>
+          <p className="mt-2 text-sm text-muted-foreground">
+            查看最近任务状态、日志文本，并支持重新发起任务。
+          </p>
         </div>
 
-        {error ? <div style={errorStyle}>加载失败：{error}</div> : null}
+        {error ? (
+          <div className="mb-4 rounded-xl border border-red-500/30 bg-red-500/10 p-3.5 text-sm text-red-600">
+            加载失败：{error}
+          </div>
+        ) : null}
 
-        <section style={sectionStyle}>
-          <h2 style={sectionTitleStyle}>运行参数</h2>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 12 }}>
-            <label style={fieldStyle}>
-              <span style={labelStyle}>population_size</span>
+        {/* Run Parameters */}
+        <section className="mb-4 rounded-2xl border border-border bg-card p-5">
+          <h2 className="mb-3.5 mt-0 text-2xl font-bold text-foreground">运行参数</h2>
+          <div className="grid gap-3" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))' }}>
+            <label className="grid gap-1.5">
+              <span className="text-[13px] font-bold text-foreground/70">population_size</span>
               <input
-                type="number"
-                min={1}
-                step={1}
+                type="number" min={1} step={1}
                 value={populationSize}
-                onChange={(event) => setPopulationSize(event.target.value)}
-                style={inputStyle}
+                onChange={(e) => setPopulationSize(e.target.value)}
+                className="h-10 rounded-xl border border-border bg-card px-2.5 text-sm"
               />
             </label>
-            <label style={fieldStyle}>
-              <span style={labelStyle}>generations</span>
+            <label className="grid gap-1.5">
+              <span className="text-[13px] font-bold text-foreground/70">generations</span>
               <input
-                type="number"
-                min={1}
-                step={1}
+                type="number" min={1} step={1}
                 value={generations}
-                onChange={(event) => setGenerations(event.target.value)}
-                style={inputStyle}
+                onChange={(e) => setGenerations(e.target.value)}
+                className="h-10 rounded-xl border border-border bg-card px-2.5 text-sm"
               />
             </label>
-            <label style={fieldStyle}>
-              <span style={labelStyle}>配储目标负荷</span>
+            <label className="grid gap-1.5">
+              <span className="text-[13px] font-bold text-foreground/70">配储目标负荷</span>
               <select
                 value={targetId}
-                onChange={(event) => setTargetId(event.target.value)}
-                style={inputStyle}
+                onChange={(e) => setTargetId(e.target.value)}
                 disabled={hasNoTargetOptions}
+                className="h-10 rounded-xl border border-border bg-card px-2.5 text-sm"
               >
                 <option value="">
                   {hasNoTargetOptions ? '未找到候选配储目标' : '请选择候选配储目标'}
                 </option>
                 {targetOptions.map((option) => (
-                  <option key={option.id} value={option.id}>
-                    {option.label}
-                  </option>
+                  <option key={option.id} value={option.id}>{option.label}</option>
                 ))}
               </select>
             </label>
-            <label style={fieldStyle}>
-              <span style={labelStyle}>年度初始 SOC</span>
+            <label className="grid gap-1.5">
+              <span className="text-[13px] font-bold text-foreground/70">年度初始 SOC</span>
               <input
-                type="number"
-                min={0}
-                max={1}
-                step={0.01}
+                type="number" min={0} max={1} step={0.01}
                 value={initialSoc}
-                onChange={(event) => setInitialSoc(event.target.value)}
-                style={inputStyle}
+                onChange={(e) => setInitialSoc(e.target.value)}
+                className="h-10 rounded-xl border border-border bg-card px-2.5 text-sm"
               />
             </label>
           </div>
+
           {hasNoTargetOptions ? (
-            <div style={hintWarnStyle}>
-              拓扑建模中没有设置为候选配储目标的负荷节点，请先把目标用户负荷的 optimize_storage 设置为“是”。
+            <div className="mt-2.5 text-[13px] font-semibold text-amber-600">
+              拓扑建模中没有设置为候选配储目标的负荷节点，请先把目标用户负荷的 optimize_storage 设置为"是"。
             </div>
           ) : mustChooseTarget ? (
-            <div style={hintWarnStyle}>
+            <div className="mt-2.5 text-[13px] font-semibold text-amber-600">
               当前有多个候选配储目标，请先选择本次要单独配储优化的负荷节点。
             </div>
           ) : (
-            <div style={hintStyle}>
+            <div className="mt-2.5 text-[13px] text-muted-foreground">
               下拉列表只包含拓扑建模中设置为候选配储目标的负荷；其他启用负荷会作为背景负荷参与 OpenDSS 潮流。
             </div>
           )}
+
           {selectedTargetOption ? (
-            <div style={targetDetailStyle}>
+            <div className="mt-3 grid gap-2.5" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))' }}>
               <Mini label="当前选择目标" value={selectedTargetOption.label} />
               <Mini label="OpenDSS 母线" value={selectedTargetOption.busName || '--'} />
               <Mini label="DSS 负荷对象" value={selectedTargetOption.dssLoadName || '--'} />
               <Mini label="背景负荷策略" value="其他启用负荷参与全网潮流" />
             </div>
           ) : null}
-          <div style={{ marginTop: 12, color: '#4b5563', fontSize: 13 }}>
+
+          <div className="mt-3 text-[13px] text-muted-foreground">
             计算运行会在 fast_proxy 代表日和 full_recheck 全年重校核中调用 OpenDSS 全负荷潮流；页面会自动刷新任务状态和日志。
           </div>
-          <div style={hintStyle}>
+          <div className="mt-2.5 text-[13px] text-muted-foreground">
             年度初始 SOC 只用于首日开局；进入全年逐日重校核后，次日初始 SOC 会自动继承前一日末 SOC，不再强制要求单日首尾回到固定值。
           </div>
-          <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginTop: 16 }}>
-            <button
-              onClick={onRerun}
-              disabled={loading || rerunning || taskIsActive || hasNoTargetOptions || mustChooseTarget}
-              style={{
-                ...primaryBtnStyle,
-                opacity: loading || rerunning || taskIsActive || hasNoTargetOptions || mustChooseTarget ? 0.55 : 1,
-                cursor: loading || rerunning || taskIsActive || hasNoTargetOptions || mustChooseTarget ? 'not-allowed' : 'pointer',
-              }}
-            >
+
+          <div className="mt-4 flex gap-2.5 flex-wrap">
+            <Button onClick={onRerun} disabled={runDisabled}>
               {rerunning || taskIsActive ? '运行中...' : '启用求解'}
-            </button>
-            <button
-              onClick={onCancelRun}
-              disabled={stopDisabled}
-              style={{
-                ...dangerBtnStyle,
-                opacity: stopDisabled ? 0.55 : 1,
-                cursor: stopDisabled ? 'not-allowed' : 'pointer',
-              }}
-            >
+            </Button>
+            <Button variant="destructive" onClick={onCancelRun} disabled={stopDisabled}>
               {cancelling || taskStatus === 'cancelling' || taskStatus === 'canceling' ? '终止中...' : '终止运行'}
-            </button>
+            </Button>
           </div>
         </section>
 
-        <section style={{ ...sectionStyle, marginTop: 16 }}>
-          <h2 style={sectionTitleStyle}>运行进度</h2>
-          <div style={progressHeaderStyle}>
+        {/* Progress */}
+        <section className="mb-4 rounded-2xl border border-border bg-card p-5">
+          <h2 className="mb-3.5 mt-0 text-2xl font-bold text-foreground">运行进度</h2>
+          <div className="mb-3 flex items-center justify-between gap-3 text-foreground">
             <strong>{displayProgress.label}</strong>
             <span>{displayProgress.percent.toFixed(0)}%</span>
           </div>
-          <div style={progressTrackStyle}>
-            <div style={{ ...progressFillStyle, width: `${displayProgress.percent}%` }} />
-          </div>
-          <div style={progressDetailStyle}>
+          <Progress value={displayProgress.percent} className="h-3" />
+          <div className="mt-2.5 flex flex-wrap justify-between gap-3 text-[13px] text-muted-foreground">
             <span>{displayProgress.detail}</span>
             <span>{lastUpdatedAt ? `自动更新：${lastUpdatedAt.toLocaleTimeString('zh-CN')}` : '等待自动更新'}</span>
           </div>
         </section>
 
-        <section style={{ ...sectionStyle, marginTop: 16 }}>
-          <h2 style={sectionTitleStyle}>最近任务</h2>
+        {/* Latest Task Info */}
+        <section className="mb-4 rounded-2xl border border-border bg-card p-5">
+          <h2 className="mb-3.5 mt-0 text-2xl font-bold text-foreground">最近任务</h2>
           {!latestTask ? (
-            <div>暂无任务。</div>
+            <div className="text-muted-foreground">暂无任务。</div>
           ) : (
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: 12 }}>
+            <div className="grid gap-3" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))' }}>
               <Mini label="任务 ID" value={latestTask.task_id} />
               <Mini label="状态" value={latestTask.status ?? '--'} />
               <Mini label="最近任务目标" value={latestTaskTargetOption?.label || latestTaskTargetId || '--'} />
@@ -363,15 +350,24 @@ export default function SolverPage() {
           )}
         </section>
 
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, marginTop: 16 }}>
-          <section style={sectionStyle}>
-            <h2 style={sectionTitleStyle}>stdout 日志</h2>
-            {!activeTaskId ? <div>暂无日志。</div> : <pre style={preStyle}>{stdoutText || 'stdout 为空。'}</pre>}
+        {/* Logs */}
+        <div className="grid gap-4" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(400px, 1fr))' }}>
+          <section className="rounded-2xl border border-border bg-card p-5">
+            <h2 className="mb-3.5 mt-0 text-2xl font-bold text-foreground">stdout 日志</h2>
+            {!activeTaskId ? (
+              <div className="text-muted-foreground">暂无日志。</div>
+            ) : (
+              <pre className="whitespace-pre-wrap break-words rounded-xl border border-border bg-muted/30 p-3 text-sm max-h-[560px] min-h-[420px] overflow-auto overscroll-contain">
+                {stdoutText || 'stdout 为空。'}
+              </pre>
+            )}
           </section>
 
-          <section style={sectionStyle}>
-            <h2 style={sectionTitleStyle}>stderr 日志</h2>
-            <pre style={preStyle}>{stderrText || 'stderr 为空。'}</pre>
+          <section className="rounded-2xl border border-border bg-card p-5">
+            <h2 className="mb-3.5 mt-0 text-2xl font-bold text-foreground">stderr 日志</h2>
+            <pre className="whitespace-pre-wrap break-words rounded-xl border border-border bg-muted/30 p-3 text-sm max-h-[560px] min-h-[420px] overflow-auto overscroll-contain">
+              {stderrText || 'stderr 为空。'}
+            </pre>
           </section>
         </div>
       </div>
@@ -379,12 +375,10 @@ export default function SolverPage() {
   );
 }
 
+// ── utility functions (unchanged) ──
+
 function safeInternalId(value: string): string {
-  const out = value
-    .trim()
-    .split('')
-    .map((ch) => (/[\p{L}\p{N}_-]/u.test(ch) ? ch : '_'))
-    .join('');
+  const out = value.trim().split('').map((ch) => (/[\p{L}\p{N}_-]/u.test(ch) ? ch : '_')).join('');
   return out.replace(/^_+|_+$/g, '') || 'unnamed';
 }
 
@@ -405,47 +399,19 @@ function toRecord(value: unknown): Record<string, unknown> | null {
 
 function estimateSolverProgress(task: SolverTask | null, stdoutText: string, requestedGenerations: number): ProgressInfo {
   if (!task) return { percent: 0, label: '暂无运行任务', detail: '启动求解后将自动显示进度。' };
-
   const parsed = parseStdoutProgress(stdoutText, requestedGenerations);
   const status = String(task.status ?? '').toLowerCase();
   if (status === 'completed') return { percent: 100, label: '求解完成', detail: '结果文件已生成，可进入结果展示页查看。' };
-  if (status === 'failed') {
-    return {
-      percent: Math.max(parsed.percent, 1),
-      label: '求解失败',
-      detail: parsed.detail || '请查看 stderr 日志定位失败原因。',
-    };
-  }
-  if (status === 'cancelled' || status === 'canceled') {
-    return {
-      percent: Math.max(parsed.percent, 1),
-      label: '运行已终止',
-      detail: '用户已终止求解进程。',
-    };
-  }
-  if (status === 'cancelling' || status === 'canceling') {
-    return {
-      percent: Math.max(parsed.percent, 1),
-      label: '正在终止',
-      detail: '已发送终止请求，等待求解器进程退出。',
-    };
-  }
+  if (status === 'failed') return { percent: Math.max(parsed.percent, 1), label: '求解失败', detail: parsed.detail || '请查看 stderr 日志定位失败原因。' };
+  if (status === 'cancelled' || status === 'canceled') return { percent: Math.max(parsed.percent, 1), label: '运行已终止', detail: '用户已终止求解进程。' };
+  if (status === 'cancelling' || status === 'canceling') return { percent: Math.max(parsed.percent, 1), label: '正在终止', detail: '已发送终止请求，等待求解器进程退出。' };
   if (status === 'running') return parsed.percent > 0 ? parsed : { percent: 3, label: '求解器已启动', detail: '正在等待求解器输出进度日志。' };
   return parsed.percent > 0 ? parsed : { percent: 0, label: task.status || '等待运行', detail: task.message || '暂无可解析进度。' };
 }
 
 function parseStdoutProgress(stdoutText: string, requestedGenerations: number): ProgressInfo {
-  // 求解器实际执行阶段与进度权重分配：
-  //   阶段 1 — 初始化（加载数据、构建 OpenDSS oracle）:  0% ~  5%
-  //   阶段 2 — GA 迭代（fast_proxy 代表日评估）:          5% ~ 30%
-  //   阶段 3 — GA 最终种群评估（额外一轮 evaluate）:     30% ~ 35%
-  //   阶段 4 — full_recheck（365 天全年 OpenDSS 潮流）:  35% ~ 90%
-  //   阶段 5 — 结果导出（写 CSV/JSON/图表）:             90% ~100%
-
   if (!stdoutText.trim()) return { percent: 0, label: '等待日志', detail: 'stdout 暂无进度输出。' };
-  if (stdoutText.includes('已导出总体最优方案汇总')) {
-    return { percent: 100, label: '结果汇总已导出', detail: '求解流程已完成。' };
-  }
+  if (stdoutText.includes('已导出总体最优方案汇总')) return { percent: 100, label: '结果汇总已导出', detail: '求解流程已完成。' };
 
   const totalCases = lastNumber(stdoutText, /共加载\s+(\d+)\s+个待优化场景/g);
   const caseMatch = lastMatch(stdoutText, /开始场景优化\s+\[(\d+)\/(\d+)\]/g);
@@ -453,99 +419,51 @@ function parseStdoutProgress(stdoutText: string, requestedGenerations: number): 
   const generationsFromLog = lastNumber(stdoutText, /优化参数：总代数=(\d+)/g);
   const generations = Math.max(generationsFromLog || requestedGenerations || 0, 1);
   const iteration = Math.min(lastNumber(stdoutText, /优化迭代\s+(\d+)/g) || 0, generations);
-
-  // full_recheck 阶段：匹配 "[年度运行] 进度 N/365"
   const annualMatch = lastMatch(stdoutText, /年度运行[^\n]*进度\s+(\d+)\/365/g);
   const annualDay = annualMatch ? Math.min(Number(annualMatch[1]) || 0, 365) : 0;
-
-  // fast_proxy 阶段：匹配 "[年度运行] 代表日 N/M"
   const proxyMatch = lastMatch(stdoutText, /年度运行[^\n]*代表日\s+(\d+)\/(\d+)/g);
   const proxyCurrent = proxyMatch ? (Number(proxyMatch[1]) || 0) : 0;
   const proxyTotal = proxyMatch ? (Number(proxyMatch[2]) || 0) : 0;
-
-  // 检测是否已进入 full_recheck 阶段
   const inFullRecheck = stdoutText.includes('full_recheck') && annualDay > 0;
-  // 检测是否已进入最终重校核
   const inFinalRecheck = /对最终折中解执行全年重校核|调用 OpenDSS oracle 对最终折中解/.test(stdoutText);
-  // 检测结果导出阶段
   const inExport = stdoutText.includes('场景完成：') && completedCases > 0;
 
   const total = caseMatch ? Number(caseMatch[2]) : totalCases;
   const current = caseMatch ? Number(caseMatch[1]) : Math.min(completedCases + 1, total || 1);
 
-  // --- 阶段 5：结果导出 (90-100%) ---
   if (inExport && total && completedCases >= total) {
-    return {
-      percent: 95,
-      label: '正在导出结果',
-      detail: `全部 ${total} 个场景已完成，正在写入结果文件。`,
-    };
+    return { percent: 95, label: '正在导出结果', detail: `全部 ${total} 个场景已完成，正在写入结果文件。` };
   }
-
-  // --- 阶段 4：full_recheck (35-90%) ---
   if (inFinalRecheck && annualDay > 0) {
-    const recheckFraction = annualDay / 365;
-    return {
-      percent: clampProgress(35 + recheckFraction * 55),
-      label: '全年重校核（最耗时阶段）',
-      detail: `OpenDSS 全年逐日潮流重校核 ${annualDay}/365 天。`,
-    };
+    return { percent: clampProgress(35 + (annualDay / 365) * 55), label: '全年重校核（最耗时阶段）', detail: `OpenDSS 全年逐日潮流重校核 ${annualDay}/365 天。` };
   }
-
   if (inFullRecheck && annualDay > 0 && iteration >= generations) {
-    const recheckFraction = annualDay / 365;
-    return {
-      percent: clampProgress(35 + recheckFraction * 55),
-      label: '全年重校核（最耗时阶段）',
-      detail: `全年逐日重校核 ${annualDay}/365 天。`,
-    };
+    return { percent: clampProgress(35 + (annualDay / 365) * 55), label: '全年重校核（最耗时阶段）', detail: `全年逐日重校核 ${annualDay}/365 天。` };
   }
-
-  // --- 阶段 3：GA 最终种群评估 (30-35%) ---
   if (iteration >= generations && !inFullRecheck && !inFinalRecheck) {
     let detail = `GA 迭代已完成 ${generations} 代，正在评估最终种群。`;
     let percent = 32;
-    if (proxyCurrent > 0 && proxyTotal > 0) {
-      const proxyFraction = proxyCurrent / proxyTotal;
-      percent = clampProgress(30 + proxyFraction * 5);
-      detail = `最终种群评估，代表日 ${proxyCurrent}/${proxyTotal}。`;
-    }
+    if (proxyCurrent > 0 && proxyTotal > 0) { percent = clampProgress(30 + (proxyCurrent / proxyTotal) * 5); detail = `最终种群评估，代表日 ${proxyCurrent}/${proxyTotal}。`; }
     return { percent, label: '评估最终种群', detail };
   }
-
-  // --- 阶段 2：GA 迭代 (5-30%) ---
   if (total && current) {
     const iterationFraction = iteration > 0 ? iteration / generations : 0;
     const proxyFraction = (proxyCurrent > 0 && proxyTotal > 0) ? proxyCurrent / proxyTotal : 0;
-    const inIterationFraction = iteration < generations
-      ? iterationFraction + proxyFraction / generations
-      : iterationFraction;
+    const inIterationFraction = iteration < generations ? iterationFraction + proxyFraction / generations : iterationFraction;
     const inCaseFraction = Math.min(inIterationFraction, 1.0);
     const completedFraction = completedCases / total;
     const runningFraction = (Math.max(current - 1, 0) + inCaseFraction) / total;
     const overallFraction = Math.max(completedFraction, runningFraction);
     const percent = clampProgress(5 + overallFraction * 25);
     let detail: string;
-    if (proxyCurrent > 0 && proxyTotal > 0 && iteration > 0) {
-      detail = `第 ${current}/${total} 个场景，迭代 ${iteration}/${generations}，代表日 ${proxyCurrent}/${proxyTotal}。`;
-    } else if (iteration > 0) {
-      detail = `第 ${current}/${total} 个场景，优化迭代 ${iteration}/${generations}。`;
-    } else {
-      detail = `第 ${current}/${total} 个场景正在初始化。`;
-    }
+    if (proxyCurrent > 0 && proxyTotal > 0 && iteration > 0) detail = `第 ${current}/${total} 个场景，迭代 ${iteration}/${generations}，代表日 ${proxyCurrent}/${proxyTotal}。`;
+    else if (iteration > 0) detail = `第 ${current}/${total} 个场景，优化迭代 ${iteration}/${generations}。`;
+    else detail = `第 ${current}/${total} 个场景正在初始化。`;
     return { percent, label: '正在运行 GA 优化', detail };
   }
-
   if (iteration > 0) {
-    const iterationFraction = iteration / generations;
-    return {
-      percent: clampProgress(5 + iterationFraction * 25),
-      label: '正在运行 GA 优化',
-      detail: `优化迭代 ${iteration}/${generations}。`,
-    };
+    return { percent: clampProgress(5 + (iteration / generations) * 25), label: '正在运行 GA 优化', detail: `优化迭代 ${iteration}/${generations}。` };
   }
-
-  // --- 阶段 1：初始化 (0-5%) ---
   return { percent: 5, label: '求解器已启动', detail: '已捕获 stdout 日志，正在解析后续进度。' };
 }
 
@@ -587,35 +505,5 @@ function normalizeProgressHint(value: SolverTask['progress_hint'] | undefined): 
   const label = String(value.label ?? '').trim();
   const detail = String(value.detail ?? '').trim();
   if (!Number.isFinite(percent) || !label) return null;
-  return {
-    percent: Math.max(0, Math.min(percent, 100)),
-    label,
-    detail: detail || '后台已返回运行进度。',
-  };
+  return { percent: Math.max(0, Math.min(percent, 100)), label, detail: detail || '后台已返回运行进度。' };
 }
-
-function Mini(props: { label: string; value: string }) {
-  return (
-    <div style={{ background: '#fff', border: '1px solid #e5e7eb', borderRadius: 12, padding: 14 }}>
-      <div style={{ color: '#6b7280', fontSize: 13, marginBottom: 8 }}>{props.label}</div>
-      <div style={{ fontWeight: 700 }}>{props.value}</div>
-    </div>
-  );
-}
-
-const sectionStyle: React.CSSProperties = { background: '#fff', border: '1px solid #e5e7eb', borderRadius: 16, padding: 20 };
-const sectionTitleStyle: React.CSSProperties = { margin: '0 0 14px 0', fontSize: 24 };
-const fieldStyle: React.CSSProperties = { display: 'grid', gap: 6 };
-const labelStyle: React.CSSProperties = { color: '#4b5563', fontSize: 13, fontWeight: 700 };
-const inputStyle: React.CSSProperties = { height: 40, border: '1px solid #d1d5db', borderRadius: 10, padding: '0 10px', fontSize: 14 };
-const primaryBtnStyle: React.CSSProperties = { padding: '10px 14px', borderRadius: 12, border: '1px solid #111827', background: '#111827', color: '#fff', fontWeight: 700, cursor: 'pointer' };
-const dangerBtnStyle: React.CSSProperties = { padding: '10px 14px', borderRadius: 12, border: '1px solid #dc2626', background: '#dc2626', color: '#fff', fontWeight: 700, cursor: 'pointer' };
-const errorStyle: React.CSSProperties = { background: '#fef2f2', border: '1px solid #fecaca', color: '#b91c1c', borderRadius: 12, padding: 14, marginBottom: 16 };
-const hintStyle: React.CSSProperties = { marginTop: 10, color: '#4b5563', fontSize: 13 };
-const hintWarnStyle: React.CSSProperties = { marginTop: 10, color: '#b45309', fontSize: 13, fontWeight: 600 };
-const targetDetailStyle: React.CSSProperties = { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 10, marginTop: 12 };
-const progressHeaderStyle: React.CSSProperties = { display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'center', color: '#111827' };
-const progressTrackStyle: React.CSSProperties = { height: 12, overflow: 'hidden', borderRadius: 999, background: '#e5e7eb', marginTop: 12 };
-const progressFillStyle: React.CSSProperties = { height: '100%', borderRadius: 999, background: '#2563eb', transition: 'width 300ms ease' };
-const progressDetailStyle: React.CSSProperties = { display: 'flex', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap', marginTop: 10, color: '#6b7280', fontSize: 13 };
-const preStyle: React.CSSProperties = { whiteSpace: 'pre-wrap', wordBreak: 'break-word', background: '#f8fafc', padding: 12, border: '1px solid #e5e7eb', borderRadius: 12, maxHeight: 560, overflow: 'auto', minHeight: 420 };

@@ -1,1 +1,0 @@
-bash: powershell: command not found

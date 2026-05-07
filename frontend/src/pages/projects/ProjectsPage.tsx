@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { deleteProject, listProjects } from '../../services/projects';
+import { Button } from '@/components/ui/button';
 
 type ProjectListItem = {
   project_id: string;
@@ -66,95 +67,94 @@ function ProjectsPage() {
   }
 
   return (
-    <div style={{ padding: 24, background: '#f8fafc', minHeight: '100vh' }}>
-      <div style={{ maxWidth: 1200, margin: '0 auto' }}>
-        <div
-          style={{
-            background: '#ffffff',
-            border: '1px solid #e5e7eb',
-            borderRadius: 16,
-            padding: 20,
-            marginBottom: 20,
-          }}
-        >
-          <div style={{ fontSize: 13, color: '#64748b', marginBottom: 8 }}>项目入口</div>
-          <h1 style={{ margin: 0, fontSize: 32 }}>项目列表</h1>
-          <div style={{ color: '#64748b', marginTop: 8 }}>
+    <div className="min-h-screen bg-background p-6">
+      <div className="mx-auto max-w-[1200px]">
+        {/* Hero */}
+        <div className="mb-5 rounded-2xl border border-border bg-card p-5">
+          <div className="mb-2 text-[13px] text-muted-foreground">项目入口</div>
+          <h1 className="m-0 text-[32px] font-extrabold tracking-tight text-foreground">项目列表</h1>
+          <p className="mt-2 text-sm text-muted-foreground">
             选择已有项目，或创建新的前后端联调项目。
-          </div>
+          </p>
         </div>
 
-        <div style={{ display: 'flex', gap: 12, marginBottom: 20 }}>
-          <Link to="/projects/new" style={primaryLinkStyle}>
-            新建项目
-          </Link>
-          <button onClick={loadProjects} disabled={loading} style={secondaryBtnStyle}>
+        {/* Actions */}
+        <div className="mb-5 flex gap-3">
+          <Button asChild>
+            <Link to="/projects/new">新建项目</Link>
+          </Button>
+          <Button variant="outline" onClick={loadProjects} disabled={loading}>
             {loading ? '刷新中...' : '刷新列表'}
-          </button>
+          </Button>
         </div>
 
+        {/* Error */}
         {error ? (
-          <div
-            style={{
-              background: '#fef2f2',
-              border: '1px solid #fecaca',
-              color: '#b91c1c',
-              borderRadius: 12,
-              padding: 14,
-              marginBottom: 16,
-            }}
-          >
+          <div className="mb-4 rounded-xl border border-red-500/30 bg-red-500/10 p-3.5 text-sm text-red-600">
             加载失败：{error}
           </div>
         ) : null}
 
-        <div
-          style={{
-            background: '#ffffff',
-            border: '1px solid #e5e7eb',
-            borderRadius: 16,
-            padding: 20,
-          }}
-        >
-          <h2 style={{ marginTop: 0, fontSize: 24 }}>全部项目</h2>
+        {/* Project table */}
+        <div className="rounded-2xl border border-border bg-card p-5">
+          <h2 className="mt-0 text-2xl font-bold text-foreground">全部项目</h2>
 
           {!projects.length ? (
-            <div style={{ color: '#64748b' }}>暂无项目。</div>
+            <div className="text-muted-foreground">暂无项目。</div>
           ) : (
-            <div style={{ overflowX: 'auto' }}>
-              <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 720 }}>
+            <div className="overflow-x-auto">
+              <table className="w-full min-w-[720px] border-collapse">
                 <thead>
                   <tr>
-                    <th style={thStyle}>项目名称</th>
-                    <th style={thStyle}>项目编号</th>
-                    <th style={thStyle}>创建时间</th>
-                    <th style={thStyle}>描述</th>
-                    <th style={thStyle}>操作</th>
+                    <th className="border-b border-border bg-muted/50 px-3 py-2.5 text-left text-sm font-semibold text-muted-foreground">
+                      项目名称
+                    </th>
+                    <th className="border-b border-border bg-muted/50 px-3 py-2.5 text-left text-sm font-semibold text-muted-foreground">
+                      项目编号
+                    </th>
+                    <th className="border-b border-border bg-muted/50 px-3 py-2.5 text-left text-sm font-semibold text-muted-foreground">
+                      创建时间
+                    </th>
+                    <th className="border-b border-border bg-muted/50 px-3 py-2.5 text-left text-sm font-semibold text-muted-foreground">
+                      描述
+                    </th>
+                    <th className="border-b border-border bg-muted/50 px-3 py-2.5 text-left text-sm font-semibold text-muted-foreground">
+                      操作
+                    </th>
                   </tr>
                 </thead>
                 <tbody>
                   {projects.map((item) => (
                     <tr key={item.project_id}>
-                      <td style={tdStyle}>{item.project_name}</td>
-                      <td style={tdStyle}>{item.project_id}</td>
-                      <td style={tdStyle}>{formatProjectTime(item.created_at)}</td>
-                      <td style={tdStyle}>{item.description ?? '--'}</td>
-                      <td style={tdStyle}>
-                        <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+                      <td className="border-b border-muted px-3 py-3 align-top text-sm text-foreground">
+                        {item.project_name}
+                      </td>
+                      <td className="border-b border-muted px-3 py-3 align-top text-sm text-muted-foreground">
+                        {item.project_id}
+                      </td>
+                      <td className="border-b border-muted px-3 py-3 align-top text-sm text-muted-foreground">
+                        {formatProjectTime(item.created_at)}
+                      </td>
+                      <td className="border-b border-muted px-3 py-3 align-top text-sm text-muted-foreground">
+                        {item.description ?? '--'}
+                      </td>
+                      <td className="border-b border-muted px-3 py-3 align-top">
+                        <div className="flex items-center gap-2.5 flex-wrap">
                           <Link
                             to={`/projects/${item.project_id}/overview`}
-                            style={{ color: '#2563eb', textDecoration: 'none', fontWeight: 600 }}
+                            className="font-semibold text-primary no-underline hover:underline"
                           >
                             进入项目
                           </Link>
-                          <button
-                            type="button"
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className="text-red-600 hover:bg-red-500/10 hover:text-red-600"
                             onClick={() => handleDeleteProject(item)}
                             disabled={deletingProjectId === item.project_id}
-                            style={dangerBtnStyle}
                           >
                             {deletingProjectId === item.project_id ? '删除中...' : '删除'}
-                          </button>
+                          </Button>
                         </div>
                       </td>
                     </tr>
@@ -168,53 +168,6 @@ function ProjectsPage() {
     </div>
   );
 }
-
-const thStyle: React.CSSProperties = {
-  textAlign: 'left',
-  padding: '10px 12px',
-  borderBottom: '1px solid #e5e7eb',
-  color: '#64748b',
-  fontWeight: 600,
-  background: '#f8fafc',
-};
-
-const tdStyle: React.CSSProperties = {
-  padding: '12px',
-  borderBottom: '1px solid #f1f5f9',
-  verticalAlign: 'top',
-};
-
-const primaryLinkStyle: React.CSSProperties = {
-  display: 'inline-flex',
-  alignItems: 'center',
-  justifyContent: 'center',
-  padding: '10px 14px',
-  background: '#111827',
-  color: '#ffffff',
-  textDecoration: 'none',
-  borderRadius: 12,
-  fontWeight: 700,
-};
-
-const secondaryBtnStyle: React.CSSProperties = {
-  padding: '10px 14px',
-  borderRadius: 12,
-  border: '1px solid #d1d5db',
-  background: '#ffffff',
-  color: '#111827',
-  fontWeight: 600,
-  cursor: 'pointer',
-};
-
-const dangerBtnStyle: React.CSSProperties = {
-  padding: '7px 10px',
-  borderRadius: 10,
-  border: '1px solid #fecaca',
-  background: '#fff1f2',
-  color: '#b91c1c',
-  fontWeight: 700,
-  cursor: 'pointer',
-};
 
 export { ProjectsPage };
 export default ProjectsPage;

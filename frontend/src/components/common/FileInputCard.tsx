@@ -1,4 +1,5 @@
 import { useRef } from "react";
+import { Button } from "@/components/ui/button";
 
 export function FileInputCard(props: {
   title: string;
@@ -10,18 +11,18 @@ export function FileInputCard(props: {
   const inputRef = useRef<HTMLInputElement | null>(null);
 
   return (
-    <div className="rounded-2xl border border-dashed bg-slate-50 p-4">
-      <div className="text-sm font-medium">{props.title}</div>
-      {props.description ? <div className="mt-1 text-xs text-slate-500">{props.description}</div> : null}
+    <div className="rounded-2xl border border-dashed border-border bg-muted/30 p-4">
+      <div className="text-sm font-medium text-foreground">{props.title}</div>
+      {props.description ? <div className="mt-1 text-xs text-muted-foreground">{props.description}</div> : null}
       <div className="mt-3 flex items-center gap-3">
-        <button
+        <Button
           type="button"
-          className="rounded-xl bg-slate-900 px-3 py-2 text-sm text-white"
+          size="sm"
           onClick={() => inputRef.current?.click()}
         >
           选择文件
-        </button>
-        <span className="text-sm text-slate-600">{props.selectedName ?? "未选择文件"}</span>
+        </Button>
+        <span className="text-sm text-muted-foreground">{props.selectedName ?? "未选择文件"}</span>
       </div>
       <input
         ref={inputRef}
