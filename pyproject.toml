@@ -1,0 +1,54 @@
+[build-system]
+requires = ["setuptools>=75"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "storage-web-platform"
+version = "1.0.0"
+description = "工商业储能优化平台"
+requires-python = ">=3.11,<3.12"
+
+dependencies = [
+    "numpy>=2.4,<3.0",
+    "scipy>=1.17,<2.0",
+    "pandas>=3.0,<4.0",
+    "openpyxl>=3.1,<4.0",
+    "pywin32>=311",
+    "joblib>=1.5,<2.0",
+]
+
+[project.optional-dependencies]
+engine = [
+    "cvxpy>=1.8,<2.0",
+    "matplotlib>=3.10,<4.0",
+    "osqp>=1.1",
+    "clarabel>=0.11",
+    "scs>=3.2",
+    "ecos>=2.0",
+    "highspy>=1.13",
+]
+web = [
+    "fastapi>=0.135,<1.0",
+    "uvicorn[standard]>=0.44,<1.0",
+    "pydantic>=2.12,<3.0",
+    "python-multipart>=0.0.20",
+]
+dev = [
+    "pytest>=9.0,<10.0",
+]
+full = [
+    "cvxpy>=1.8,<2.0",
+    "matplotlib>=3.10,<4.0",
+    "osqp>=1.1",
+    "clarabel>=0.11",
+    "scs>=3.2",
+    "ecos>=2.0",
+    "highspy>=1.13",
+    "fastapi>=0.135,<1.0",
+    "uvicorn[standard]>=0.44,<1.0",
+    "pydantic>=2.12,<3.0",
+    "python-multipart>=0.0.20",
+]
+
+[tool.setuptools.packages.find]
+include = ["storage_engine_project*", "backend*"]

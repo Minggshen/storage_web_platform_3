@@ -1,0 +1,36 @@
+! 基础负荷文件
+! 单相平衡等值，1 相 Wye 负荷的 kV 按 L-N 电压填写：10/sqrt(3)=5.7735 kV
+
+New Load.LD01 bus1=n1.1   phases=1 conn=wye kV=5.7735 kW=802  kvar=200.5  Model=1 Status=variable
+New Load.LD02 bus1=n2.1   phases=1 conn=wye kV=5.7735 kW=774  kvar=232.2  Model=1 Status=variable
+New Load.LD03 bus1=n3.1   phases=1 conn=wye kV=5.7735 kW=375  kvar=112.5  Model=1 Status=variable
+New Load.LD04 bus1=n4.1   phases=1 conn=wye kV=5.7735 kW=284  kvar=99.4   Model=1 Status=variable
+New Load.LD05 bus1=n5.1   phases=1 conn=wye kV=5.7735 kW=186  kvar=65.1   Model=1 Status=variable
+New Load.LD06 bus1=n6.1   phases=1 conn=wye kV=5.7735 kW=1022 kvar=255.5  Model=1 Status=variable
+New Load.LD07 bus1=n7.1   phases=1 conn=wye kV=5.7735 kW=858  kvar=214.5  Model=1 Status=variable
+New Load.LD08 bus1=n8.1   phases=1 conn=wye kV=5.7735 kW=1486 kvar=371.5  Model=1 Status=variable
+New Load.LD09 bus1=n9.1   phases=1 conn=wye kV=5.7735 kW=3098 kvar=619.6  Model=1 Status=variable
+New Load.LD10 bus1=n10.1  phases=1 conn=wye kV=5.7735 kW=106  kvar=37.1   Model=1 Status=variable
+New Load.LD11 bus1=n11.1  phases=1 conn=wye kV=5.7735 kW=175  kvar=61.25  Model=1 Status=variable
+New Load.LD12 bus1=n12.1  phases=1 conn=wye kV=5.7735 kW=344  kvar=103.2  Model=1 Status=variable
+New Load.LD13 bus1=n13.1  phases=1 conn=wye kV=5.7735 kW=548  kvar=164.4  Model=1 Status=variable
+New Load.LD14 bus1=n14.1  phases=1 conn=wye kV=5.7735 kW=546  kvar=163.8  Model=1 Status=variable
+New Load.LD15 bus1=n15.1  phases=1 conn=wye kV=5.7735 kW=18   kvar=6.3    Model=1 Status=variable
+New Load.LD16 bus1=n16.1  phases=1 conn=wye kV=5.7735 kW=350  kvar=105.0  Model=1 Status=variable
+New Load.LD17 bus1=n17.1  phases=1 conn=wye kV=5.7735 kW=214  kvar=74.9   Model=1 Status=variable
+New Load.LD18 bus1=n18.1  phases=1 conn=wye kV=5.7735 kW=136  kvar=47.6   Model=1 Status=variable
+New Load.LD19 bus1=n19.1  phases=1 conn=wye kV=5.7735 kW=804  kvar=201.0  Model=1 Status=variable
+New Load.LD20 bus1=n20.1  phases=1 conn=wye kV=5.7735 kW=3112 kvar=622.4  Model=1 Status=variable
+New Load.LD21 bus1=n21.1  phases=1 conn=wye kV=5.7735 kW=1173 kvar=293.25 Model=1 Status=variable
+New Load.LD22 bus1=n22.1  phases=1 conn=wye kV=5.7735 kW=394  kvar=118.2  Model=1 Status=variable
+New Load.LD23 bus1=n23.1  phases=1 conn=wye kV=5.7735 kW=380  kvar=106.4  Model=1 Status=variable
+New Load.LD24 bus1=n24.1  phases=1 conn=wye kV=5.7735 kW=36   kvar=9.0    Model=1 Status=variable
+New Load.LD25 bus1=n25.1  phases=1 conn=wye kV=5.7735 kW=404  kvar=113.12 Model=1 Status=variable
+New Load.LD26 bus1=n26.1  phases=1 conn=wye kV=5.7735 kW=2903 kvar=870.9  Model=1 Status=variable
+New Load.LD27 bus1=n27.1  phases=1 conn=wye kV=5.7735 kW=138  kvar=41.4   Model=1 Status=variable
+New Load.LD28 bus1=n28.1  phases=1 conn=wye kV=5.7735 kW=350  kvar=98.0   Model=1 Status=variable
+New Load.LD29 bus1=n29.1  phases=1 conn=wye kV=5.7735 kW=145  kvar=43.5   Model=1 Status=variable
+New Load.LD30 bus1=n30.1  phases=1 conn=wye kV=5.7735 kW=54   kvar=9.72   Model=1 Status=variable
+New Load.LD31 bus1=n31.1  phases=1 conn=wye kV=5.7735 kW=66   kvar=11.88  Model=1 Status=variable
+New Load.LD32 bus1=n32.1  phases=1 conn=wye kV=5.7735 kW=42   kvar=7.56   Model=1 Status=variable
+New Load.LD33 bus1=n33.1  phases=1 conn=wye kV=5.7735 kW=47   kvar=8.46   Model=1 Status=variable

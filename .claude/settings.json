@@ -1,0 +1,25 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npx tsc *)",
+      "Bash(\".venv/Scripts/python.exe\" -m pip freeze)",
+      "Bash(\"storage_engine_project/.venv/Scripts/python.exe\" -m pip freeze)",
+      "Bash(\"backend/.venv/Scripts/python.exe\" -m pip freeze)",
+      "Bash(C:/Program Files/Python311/python.exe --version)",
+      "Bash(\"d:/storage_web_platform_3/storage_engine_project/.venv/Scripts/python.exe\" -m pip freeze > \"d:/storage_web_platform_3/storage_engine_project/pip-freeze-engine-full.txt\" 2>&1)",
+      "Bash(\"d:/storage_web_platform_3/backend/.venv/Scripts/python.exe\" -m pip freeze > \"d:/storage_web_platform_3/backend/pip-freeze-backend-full.txt\" 2>&1)",
+      "Bash(\"d:/storage_web_platform_3/storage_engine_project/.venv/Scripts/python.exe\" --version)",
+      "Bash(\"d:/storage_web_platform_3/storage_engine_project/.venv/Scripts/python.exe\" -m venv --help)",
+      "Bash(\"d:/storage_web_platform_3/storage_engine_project/.venv/Scripts/python.exe\" --version > \"d:/storage_web_platform_3/_tmp_check.txt\" 2>&1)",
+      "Bash(\"d:/storage_web_platform_3/storage_engine_project/.venv/Scripts/python.exe\" -m venv \"d:/storage_web_platform_3/.venv\" > \"d:/storage_web_platform_3/_tmp_venv_create.txt\" 2>&1)",
+      "Bash(\"d:/storage_web_platform_3/.venv/Scripts/python.exe\" -m pip install --upgrade pip setuptools wheel)",
+      "Bash(cmd /c \"del /f d:\\\\storage_web_platform_3\\\\_tmp_*.txt && echo DONE_TMP\")",
+      "Bash(cmd /c \"del /f d:\\\\storage_web_platform_3\\\\storage_engine_project\\\\pip-freeze-engine-full.txt d:\\\\storage_web_platform_3\\\\backend\\\\pip-freeze-backend-full.txt && echo DONE_FREEZE\")"
+    ],
+    "additionalDirectories": [
+      "d:\\storage_web_platform_3\\storage_engine_project",
+      "d:\\storage_web_platform_3\\backend",
+      "d:\\storage_web_platform_3"
+    ]
+  }
+}

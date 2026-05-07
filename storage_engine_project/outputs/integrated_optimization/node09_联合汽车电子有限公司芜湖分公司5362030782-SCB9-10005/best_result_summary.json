@@ -1,0 +1,40 @@
+{
+  "strategy_id": "阳光电源_ST510CS-4H-CN",
+  "rated_power_kw": 2438.553786738753,
+  "rated_energy_kwh": 10906.496168333222,
+  "duration_h": 4.472526391521278,
+  "is_valid": true,
+  "feasible": true,
+  "used_fast_reject": false,
+  "obj_npv": -15884898.882361034,
+  "obj_payback": 4.491570665867528,
+  "obj_investment": 10191946.743913004,
+  "obj_safety": 310.1111195243247,
+  "duration_violation_h": 0.0,
+  "cycle_violation": 0.0,
+  "transformer_violation_hours": 0.0,
+  "transformer_slack_kw": 0.0,
+  "negative_cashflow_violation": 0.0,
+  "payback_violation_years": 0.0,
+  "max_violation": 0.0,
+  "total_violation": 0.0,
+  "screening_messages": [
+    "通过快速筛选。"
+  ],
+  "notes": [
+    "已基于 fast_proxy 结果触发 full_recheck。",
+    "已完成 full_recheck 年度运行与生命周期财务评价。"
+  ],
+  "npv_yuan": 15884898.882361034,
+  "irr": 0.21818024879445058,
+  "simple_payback_years": 4.491570665867528,
+  "discounted_payback_years": 5.397337408267843,
+  "initial_investment_yuan": 10191946.743913004,
+  "annualized_net_cashflow_yuan": 2281923.215910832,
+  "lc_net_profit_yuan": 35446517.574303634,
+  "annual_net_operating_cashflow_yuan": 2342640.4236575584,
+  "annual_equivalent_full_cycles": 310.1111195243247,
+  "annual_battery_throughput_kwh": 6764451.473699146,
+  "transformer_violation_hours_runtime": 0.0,
+  "max_transformer_slack_kw_runtime": 0.0
+}

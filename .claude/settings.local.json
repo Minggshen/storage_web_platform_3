@@ -1,0 +1,15 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(ls -d D:/storage_web_platform_2/backend/*/)",
+      "Bash(powershell -Command \"Get-ChildItem -Path 'd:\\\\storage_web_platform_3\\\\storage_engine_project\\\\pip-freeze-*.txt', 'd:\\\\storage_web_platform_3\\\\backend\\\\pip-freeze-*.txt' | Select-Object FullName, Length\")",
+      "Bash(powershell -Command \"Get-ChildItem -Path 'd:\\\\storage_web_platform_3\\\\.pytest_cache' -Recurse -File | Measure-Object -Property Length -Sum | Select-Object Count, Sum\")",
+      "Bash(powershell -Command \"Get-ChildItem -Path 'd:\\\\storage_web_platform_3\\\\backend\\\\.pytest_cache' -Recurse -File | Measure-Object -Property Length -Sum | Select-Object Count, Sum\")",
+      "Bash(powershell -Command \"Get-ChildItem -Path 'd:\\\\storage_web_platform_3\\\\backend\\\\pytest-cache-files-84iy2_8g' -Recurse -File | Measure-Object -Property Length -Sum | Select-Object Count, Sum\")",
+      "Bash(powershell -Command \"Get-ChildItem -Path 'd:\\\\storage_web_platform_3\\\\backend\\\\pytest-cache-files-7adg7n8z' -Recurse -File | Measure-Object -Property Length -Sum | Select-Object Count, Sum\")",
+      "Bash(powershell -Command \"Get-ChildItem -Path 'd:\\\\storage_web_platform_3\\\\storage_engine_project' -Recurse -Filter '*.spec' -File | Select-Object FullName, Length\")",
+      "Bash(powershell -Command \"Get-ChildItem -Path 'd:\\\\storage_web_platform_3\\\\backend' -Recurse -Filter '*.spec' -File | Select-Object FullName, Length\")",
+      "Bash(powershell -Command \"Get-ChildItem -Path 'd:\\\\storage_web_platform_3\\\\' -Depth 0 -File | Select-Object Name, Length\")"
+    ]
+  }
+}

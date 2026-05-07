@@ -1,0 +1,33 @@
+Clear
+Set DefaultBaseFrequency=50
+
+! ============================================================
+! 主优化链 OpenDSS 入口
+! ============================================================
+
+New Circuit.WHU_13F_OPT bus1=sourcebus.1 phases=1 basekv=63.5085 pu=1.00 angle=0 frequency=50 MVAsc1=5000
+
+New Transformer.MainSub phases=1 windings=2
+~ buses=(sourcebus.1 n0.1)
+~ conns=(wye wye)
+~ kvs=(63.5085 5.7735)
+~ kvas=(40000 40000)
+~ %Rs=(0.30 0.30)
+~ XHL=8.0
+
+Set VoltageBases=[63.5085, 5.7735]
+CalcVoltageBases
+
+Redirect LineCodes_Custom.dss
+Redirect Lines_Main.dss
+Redirect TieLines.dss
+Redirect Loads_Runtime.dss
+Redirect Storage_Case.dss
+Redirect Topology_Case.dss
+
+Set Mode=Snapshot
+Set ControlMode=OFF
+Set MaxIterations=50
+Set Tolerance=0.00001
+
+Solve

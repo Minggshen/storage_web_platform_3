@@ -1,0 +1,95 @@
+! ============================================================
+! 13馈线多负荷配电网主支路（单相平衡等值）
+! n0      : 10kV总母线
+! n1~n33  : 用户接入母线
+! fxx_j1  : 馈线分支点母线
+! ============================================================
+
+! =========================
+! 馈线1：20-1，11，4
+! =========================
+New Line.F01_0_J1   phases=1 bus1=n0.1      bus2=f01_j1.1 length=0.35 units=km linecode=LC_CABLE  normamps=1400 emergamps=1700
+New Line.F01_J1_20  phases=1 bus1=f01_j1.1  bus2=n20.1    length=0.30 units=km linecode=LC_MAIN   normamps=1200 emergamps=1500
+New Line.F01_20_01  phases=1 bus1=n20.1     bus2=n1.1     length=0.18 units=km linecode=LC_BRANCH normamps=800  emergamps=1000
+New Line.F01_J1_11  phases=1 bus1=f01_j1.1  bus2=n11.1    length=0.22 units=km linecode=LC_LIGHT  normamps=500  emergamps=700
+New Line.F01_J1_04  phases=1 bus1=f01_j1.1  bus2=n4.1     length=0.20 units=km linecode=LC_BRANCH normamps=600  emergamps=800
+
+! =========================
+! 馈线2：13-2-6
+! =========================
+New Line.F02_0_13   phases=1 bus1=n0.1      bus2=n13.1    length=0.40 units=km linecode=LC_CABLE  normamps=1400 emergamps=1700
+New Line.F02_13_02  phases=1 bus1=n13.1     bus2=n2.1     length=0.22 units=km linecode=LC_MAIN   normamps=1200 emergamps=1500
+New Line.F02_02_06  phases=1 bus1=n2.1      bus2=n6.1     length=0.28 units=km linecode=LC_BRANCH normamps=900  emergamps=1100
+
+! =========================
+! 馈线3：3-15
+! =========================
+New Line.F03_0_03   phases=1 bus1=n0.1      bus2=n3.1     length=0.32 units=km linecode=LC_CABLE  normamps=900 emergamps=1100
+New Line.F03_03_15  phases=1 bus1=n3.1      bus2=n15.1    length=0.15 units=km linecode=LC_LIGHT  normamps=300 emergamps=450
+
+! =========================
+! 馈线4：8-32
+! =========================
+New Line.F04_0_08   phases=1 bus1=n0.1      bus2=n8.1     length=0.42 units=km linecode=LC_CABLE  normamps=1200 emergamps=1500
+New Line.F04_08_32  phases=1 bus1=n8.1      bus2=n32.1    length=0.18 units=km linecode=LC_LIGHT  normamps=300  emergamps=450
+
+! =========================
+! 馈线5（专线）：9
+! =========================
+New Line.F05_0_09   phases=1 bus1=n0.1      bus2=n9.1     length=0.55 units=km linecode=LC_CABLE  normamps=1500 emergamps=1800
+
+! =========================
+! 馈线6：10-5
+! =========================
+New Line.F06_0_10   phases=1 bus1=n0.1      bus2=n10.1    length=0.30 units=km linecode=LC_MAIN   normamps=500 emergamps=700
+New Line.F06_10_05  phases=1 bus1=n10.1     bus2=n5.1     length=0.20 units=km linecode=LC_BRANCH normamps=450 emergamps=650
+
+! =========================
+! 馈线7：16-18-17，24-14，22
+! =========================
+New Line.F07_0_J1   phases=1 bus1=n0.1      bus2=f07_j1.1 length=0.38 units=km linecode=LC_CABLE  normamps=1000 emergamps=1300
+New Line.F07_J1_16  phases=1 bus1=f07_j1.1  bus2=n16.1    length=0.20 units=km linecode=LC_MAIN   normamps=700  emergamps=900
+New Line.F07_16_18  phases=1 bus1=n16.1     bus2=n18.1    length=0.15 units=km linecode=LC_BRANCH normamps=500  emergamps=700
+New Line.F07_18_17  phases=1 bus1=n18.1     bus2=n17.1    length=0.18 units=km linecode=LC_BRANCH normamps=450  emergamps=650
+New Line.F07_J1_24  phases=1 bus1=f07_j1.1  bus2=n24.1    length=0.12 units=km linecode=LC_LIGHT  normamps=300  emergamps=450
+New Line.F07_24_14  phases=1 bus1=n24.1     bus2=n14.1    length=0.20 units=km linecode=LC_BRANCH normamps=600  emergamps=800
+New Line.F07_J1_22  phases=1 bus1=f07_j1.1  bus2=n22.1    length=0.16 units=km linecode=LC_BRANCH normamps=500  emergamps=700
+
+! =========================
+! 馈线8：25，21-12
+! =========================
+New Line.F08_0_J1   phases=1 bus1=n0.1      bus2=f08_j1.1 length=0.36 units=km linecode=LC_CABLE  normamps=1000 emergamps=1300
+New Line.F08_J1_25  phases=1 bus1=f08_j1.1  bus2=n25.1    length=0.14 units=km linecode=LC_BRANCH normamps=500  emergamps=700
+New Line.F08_J1_21  phases=1 bus1=f08_j1.1  bus2=n21.1    length=0.18 units=km linecode=LC_MAIN   normamps=900  emergamps=1100
+New Line.F08_21_12  phases=1 bus1=n21.1     bus2=n12.1    length=0.16 units=km linecode=LC_BRANCH normamps=500  emergamps=700
+
+! =========================
+! 馈线9：19
+! =========================
+New Line.F09_0_19   phases=1 bus1=n0.1      bus2=n19.1    length=0.28 units=km linecode=LC_MAIN   normamps=800 emergamps=1000
+
+! =========================
+! 馈线10：7
+! =========================
+New Line.F10_0_07   phases=1 bus1=n0.1      bus2=n7.1     length=0.30 units=km linecode=LC_MAIN   normamps=900 emergamps=1100
+
+! =========================
+! 馈线11：23
+! =========================
+New Line.F11_0_23   phases=1 bus1=n0.1      bus2=n23.1    length=0.25 units=km linecode=LC_MAIN   normamps=600 emergamps=800
+
+! =========================
+! 馈线12：26
+! =========================
+New Line.F12_0_26   phases=1 bus1=n0.1      bus2=n26.1    length=0.42 units=km linecode=LC_CABLE  normamps=1200 emergamps=1500
+
+! =========================
+! 馈线13：27-29-30-31，28，33
+! =========================
+New Line.F13_0_J1   phases=1 bus1=n0.1      bus2=f13_j1.1 length=0.32 units=km linecode=LC_CABLE  normamps=700 emergamps=900
+New Line.F13_J1_27  phases=1 bus1=f13_j1.1  bus2=n27.1    length=0.12 units=km linecode=LC_BRANCH normamps=450 emergamps=650
+New Line.F13_27_29  phases=1 bus1=n27.1     bus2=n29.1    length=0.14 units=km linecode=LC_BRANCH normamps=450 emergamps=650
+New Line.F13_29_30  phases=1 bus1=n29.1     bus2=n30.1    length=0.12 units=km linecode=LC_LIGHT  normamps=300 emergamps=450
+New Line.F13_30_31  phases=1 bus1=n30.1     bus2=n31.1    length=0.12 units=km linecode=LC_LIGHT  normamps=300 emergamps=450
+New Line.F13_J1_28  phases=1 bus1=f13_j1.1  bus2=n28.1    length=0.10 units=km linecode=LC_BRANCH normamps=400 emergamps=600
+New Line.F13_J1_33  phases=1 bus1=f13_j1.1  bus2=n33.1    length=0.10 units=km linecode=LC_LIGHT  normamps=250 emergamps=400

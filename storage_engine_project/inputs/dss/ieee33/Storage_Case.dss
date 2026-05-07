@@ -1,0 +1,6 @@
+New Storage.ES09 phases=1 bus1=n9.1 conn=wye kV=5.7735
+~ kWrated=2000 kWhrated=4000 kVA=2000
+~ kW=0 kvar=0
+~ %stored=50 %reserve=10
+~ state=idling
+~ dispmode=external

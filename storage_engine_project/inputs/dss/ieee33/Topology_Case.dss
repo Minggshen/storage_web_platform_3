@@ -1,0 +1,53 @@
+! ============================================================
+! 固定辐射式 13 馈线拓扑
+! ============================================================
+
+Edit Line.F01_0_J1  enabled=yes
+Edit Line.F01_J1_20 enabled=yes
+Edit Line.F01_20_01 enabled=yes
+Edit Line.F01_J1_11 enabled=yes
+Edit Line.F01_J1_04 enabled=yes
+
+Edit Line.F02_0_13  enabled=yes
+Edit Line.F02_13_02 enabled=yes
+Edit Line.F02_02_06 enabled=yes
+
+Edit Line.F03_0_03  enabled=yes
+Edit Line.F03_03_15 enabled=yes
+
+Edit Line.F04_0_08  enabled=yes
+Edit Line.F04_08_32 enabled=yes
+
+Edit Line.F05_0_09  enabled=yes
+
+Edit Line.F06_0_10  enabled=yes
+Edit Line.F06_10_05 enabled=yes
+
+Edit Line.F07_0_J1  enabled=yes
+Edit Line.F07_J1_16 enabled=yes
+Edit Line.F07_16_18 enabled=yes
+Edit Line.F07_18_17 enabled=yes
+Edit Line.F07_J1_24 enabled=yes
+Edit Line.F07_24_14 enabled=yes
+Edit Line.F07_J1_22 enabled=yes
+
+Edit Line.F08_0_J1  enabled=yes
+Edit Line.F08_J1_25 enabled=yes
+Edit Line.F08_J1_21 enabled=yes
+Edit Line.F08_21_12 enabled=yes
+
+Edit Line.F09_0_19  enabled=yes
+
+Edit Line.F10_0_07  enabled=yes
+
+Edit Line.F11_0_23  enabled=yes
+
+Edit Line.F12_0_26  enabled=yes
+
+Edit Line.F13_0_J1  enabled=yes
+Edit Line.F13_J1_27 enabled=yes
+Edit Line.F13_27_29 enabled=yes
+Edit Line.F13_29_30 enabled=yes
+Edit Line.F13_30_31 enabled=yes
+Edit Line.F13_J1_28 enabled=yes
+Edit Line.F13_J1_33 enabled=yes

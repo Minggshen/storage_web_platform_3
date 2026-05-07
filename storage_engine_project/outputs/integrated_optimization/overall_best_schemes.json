@@ -1,0 +1,26 @@
+[
+  {
+    "internal_model_id": "node09_联合汽车电子有限公司芜湖分公司5362030782-SCB9-10005",
+    "scenario_name": "node09_联合汽车电子有限公司芜湖分公司5362030782-SCB9-10005",
+    "node_id": 9,
+    "strategy_id": "阳光电源_ST510CS-4H-CN",
+    "strategy_name": null,
+    "rated_power_kw": 2438.553786738753,
+    "rated_energy_kwh": 10906.496168333222,
+    "duration_h": 4.472526391521278,
+    "npv_yuan": 15884898.882361034,
+    "simple_payback_years": 4.491570665867528,
+    "irr": 0.21818024879445058,
+    "initial_investment_yuan": 10191946.743913004,
+    "annualized_net_cashflow_yuan": 2281923.215910832,
+    "annual_net_operating_cashflow_yuan": 2342640.4236575584,
+    "annual_equivalent_full_cycles": 310.1111195243247,
+    "transformer_violation_hours": 0.0,
+    "max_transformer_slack_kw": 0.0,
+    "evaluation_mode": "full_recheck",
+    "soc_start": 0.5,
+    "soc_end": 0.11002565905058462,
+    "mean_terminal_soc_error": 0.0010732354631015244,
+    "project_life_years": 20
+  }
+]

@@ -1,0 +1,11 @@
+{
+  "python.defaultInterpreterPath": "D:\\storage_web_platform\\backend\\.venv\\Scripts\\python.exe",
+  "python.terminal.activateEnvironment": true,
+  "editor.formatOnSave": true,
+  "eslint.validate": ["javascript", "javascriptreact", "typescript", "typescriptreact"],
+  "files.exclude": {
+    "**/.venv": false,
+    "**/node_modules": true
+  },
+  "terminal.integrated.defaultProfile.windows": "Command Prompt"
+}
