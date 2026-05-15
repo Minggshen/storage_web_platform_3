@@ -36,7 +36,7 @@ cp .env.example .env                     # 后端
 
 # 5. 启动后端 API（另开终端）
 cd backend
-uvicorn app:app --reload --host 127.0.0.1 --port 8000
+uvicorn storage_fastapi_backend:app --reload --host 127.0.0.1 --port 8000
 
 # 6. 启动前端开发服务器
 cd frontend
@@ -49,12 +49,12 @@ API 文档自动生成于 `http://localhost:8000/docs`。
 
 ```
 ├── backend/                    FastAPI 后端
-│   ├── app.py                  API 入口（Swagger 文档）
+│   ├── storage_fastapi_backend.py  API 入口
 │   └── data/projects/          持久化项目数据
 ├── frontend/                   React + Vite + TypeScript 前端
 │   └── src/
 │       ├── app/                路由 + 布局
-│       ├── pages/workspace/    7 步工作流页面
+│       ├── pages/workspace/    6 步工作流页面
 │       ├── components/         UI 组件 + 通用组件
 │       ├── services/           API 调用封装
 │       └── types/              TypeScript 类型定义
@@ -107,6 +107,17 @@ python main.py --registry inputs/registry/node_registry.xlsx --generations 8 --p
 - OpenDSS 需在 Windows 上单独安装，引擎通过 COM 接口调用。未安装时引擎自动降级为标量约束校验。
 - 前端开发时通过 `VITE_API_BASE_URL` 环境变量指向后端地址。
 - 求解器 `main.py` 使用 `logging` 模块，日志级别通过 `LOG_LEVEL` 环境变量控制，默认 `INFO`。
+- 前端 `pnpm build` 直接输出到 `backend/static/`，FastAPI 自动托管为 SPA。
+
+## 快速部署（无需 Node.js）
+
+在仅需运行（不开发前端）的机器上，使用 `start.bat` 一键启动：
+
+```bash
+start.bat    # 自动检测 Python → 创建 venv → 安装依赖 → 启动服务
+```
+
+该脚本无需预装 Node.js，仅依赖 Python 3.11。
 
 ## 许可证
 
