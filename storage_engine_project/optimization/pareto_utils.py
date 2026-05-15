@@ -47,6 +47,7 @@ def update_archive(
 
 def select_best_compromise(
     archive: list[FitnessEvaluationResult],
+    safety_economy_tradeoff: float = 0.5,
 ) -> FitnessEvaluationResult | None:
     if not archive:
         return None
@@ -95,7 +96,12 @@ def select_best_compromise(
     safety_norm = _normalize_array(safety, reverse=False)
     npv_norm = _normalize_array(-npv, reverse=False)
 
-    scores = 0.50 * dist_norm + 0.20 * payback_norm + 0.15 * safety_norm + 0.15 * npv_norm
+    s = float(safety_economy_tradeoff)
+    dist_w = 0.45 - 0.15 * s
+    payback_w = 0.35 - 0.30 * s
+    safety_w = 0.00 + 0.50 * s
+    npv_w = 0.20 - 0.15 * s
+    scores = dist_w * dist_norm + payback_w * payback_norm + safety_w * safety_norm + npv_w * npv_norm
     best_idx = int(np.argmin(scores))
     return feasible[best_idx]
 

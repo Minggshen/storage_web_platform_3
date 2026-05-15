@@ -1,5 +1,5 @@
-import React, { useEffect, useState } from 'react';
-import { Link, useParams } from 'react-router-dom';
+import { useEffect, useState } from 'react';
+import { useParams } from 'react-router-dom';
 
 import { getProjectDashboard } from '../../services/projects';
 import {
@@ -10,6 +10,8 @@ import {
 } from '../../services/assets';
 import { fetchProjectTopology } from '../../services/topology';
 import { Button } from '@/components/ui/button';
+import { ErrorBanner } from '@/components/common/ErrorBanner';
+import StepBadge from '@/components/common/StepBadge';
 
 type DashboardPayload = {
   project_id: string;
@@ -35,15 +37,6 @@ type LoadNodeOption = {
     modelLibraryFileName?: string;
   };
 };
-
-function Row(props: { label: string; value: React.ReactNode }) {
-  return (
-    <div className="flex items-center justify-between gap-4 border-b border-border py-2">
-      <span className="text-muted-foreground">{props.label}</span>
-      <strong className="min-w-0 text-right break-words">{props.value}</strong>
-    </div>
-  );
-}
 
 function AssetsPage() {
   const { projectId = '' } = useParams();
@@ -210,202 +203,219 @@ function AssetsPage() {
     }
   }
 
+  const boundCount = dashboard?.runtime_bound_load_count ?? 0;
+  const totalLoadNodes = dashboard?.load_node_count ?? 0;
+
   return (
     <div className="min-h-screen bg-background p-6">
-      <div className="mx-auto max-w-[1280px]">
-        <div className="mb-4">
-          <Link to="/projects" className="font-semibold text-primary no-underline hover:underline">
-            &larr; 返回项目列表
-          </Link>
-        </div>
+      <div className="mx-auto">
 
-        {/* Page Header */}
-        <div className="mb-5 rounded-2xl border border-border bg-card p-5">
-          <div className="mb-2 text-[13px] text-muted-foreground">资产绑定</div>
-          <h1 className="m-0 text-[32px] font-extrabold tracking-tight text-foreground">资产与文件绑定</h1>
-          <p className="mt-2 text-sm text-muted-foreground">
-            上传电价表、设备策略库以及 runtime 文件，并查看当前绑定状态。
-          </p>
-          <div className="mt-3 text-sm text-muted-foreground">项目 ID：{projectId}</div>
-        </div>
-
-        {/* Action buttons */}
-        <div className="mb-5 flex gap-3 flex-wrap">
-          <Button variant="outline" size="sm" asChild>
-            <Link to={`/projects/${projectId}/overview`}>返回项目总览</Link>
-          </Button>
-          <Button variant="outline" size="sm" asChild>
-            <Link to={`/projects/${projectId}/build`}>进入构建校验</Link>
-          </Button>
-          <Button size="sm" onClick={loadDashboard} disabled={loading || uploading}>
-            {loading ? '刷新中...' : '刷新状态'}
-          </Button>
-        </div>
-
-        {/* Error / Success messages */}
-        {error ? (
-          <div className="mb-4 rounded-xl border border-red-500/30 bg-red-500/10 p-3.5 text-sm text-red-600">
-            错误：{error}
-          </div>
-        ) : null}
+        {error && <ErrorBanner message={error} />}
         {message ? (
           <div className="mb-4 rounded-xl border border-emerald-500/30 bg-emerald-500/10 p-3.5 text-sm text-emerald-600">
             {message}
           </div>
         ) : null}
 
-        {/* Main grid */}
-        <div className="grid gap-4" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))' }}>
-          {/* Status */}
-          <section className="rounded-2xl border border-border bg-card p-5">
-            <h2 className="mb-4 mt-0 text-[22px] font-bold text-foreground">当前状态</h2>
-            <Row label="电价表" value={dashboard?.has_tariff ? '已配置' : '未配置'} />
-            <Row label="设备库" value={dashboard?.has_device_library ? '已配置' : '未配置'} />
-            <Row
-              label="已绑定 runtime 负荷数"
-              value={`${dashboard?.runtime_bound_load_count ?? 0} / ${dashboard?.load_node_count ?? 0}`}
-            />
-          </section>
-
-          {/* Tariff upload */}
-          <section className="rounded-2xl border border-border bg-card p-5">
-            <h2 className="mb-4 mt-0 text-[22px] font-bold text-foreground">上传电价表</h2>
+        {/* Step 1: Tariff */}
+        <section className="mb-5 rounded-2xl border border-border bg-card p-5">
+          <div className="flex items-center justify-between gap-3 flex-wrap">
+            <StepBadge step={1} label="电价表配置" />
+            <span
+              className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-semibold ${
+                dashboard?.has_tariff
+                  ? 'border border-emerald-500/30 bg-emerald-500/10 text-emerald-600'
+                  : 'border border-amber-500/30 bg-amber-500/10 text-amber-600'
+              }`}
+            >
+              {dashboard?.has_tariff ? '已配置 ✓' : '未配置 ✗'}
+            </span>
+          </div>
+          <div className="flex items-center gap-4 flex-wrap">
+            <span className="text-sm text-muted-foreground">
+              当前：{dashboard?.has_tariff ? '已上传电价表文件' : '尚未上传'}
+            </span>
             <input
+              id="tariff-file-input"
               type="file"
               accept=".xlsx,.xls,.csv"
               className="text-sm text-muted-foreground"
               onChange={(e) => setTariffFile(e.target.files?.[0] ?? null)}
             />
-            <div className="mt-3">
-              <Button size="sm" onClick={onUploadTariff} disabled={!tariffFile || uploading}>
-                上传电价表
-              </Button>
-            </div>
-          </section>
+            <Button size="sm" onClick={onUploadTariff} disabled={!tariffFile || uploading}>
+              上传电价表
+            </Button>
+          </div>
+          <p className="mt-2 text-xs text-muted-foreground">
+            支持 .xlsx .xls .csv 格式。电价表用于全年经济性评估中的电费计算。
+          </p>
+        </section>
 
-          {/* Device library upload */}
-          <section className="rounded-2xl border border-border bg-card p-5">
-            <h2 className="mb-4 mt-0 text-[22px] font-bold text-foreground">上传设备策略库</h2>
+        {/* Step 2: Device Library */}
+        <section className="mb-5 rounded-2xl border border-border bg-card p-5">
+          <div className="flex items-center justify-between gap-3 flex-wrap">
+            <StepBadge step={2} label="设备策略库配置" />
+            <span
+              className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-semibold ${
+                dashboard?.has_device_library
+                  ? 'border border-emerald-500/30 bg-emerald-500/10 text-emerald-600'
+                  : 'border border-amber-500/30 bg-amber-500/10 text-amber-600'
+              }`}
+            >
+              {dashboard?.has_device_library ? '已配置 ✓' : '未配置 ✗'}
+            </span>
+          </div>
+          <div className="flex items-center gap-4 flex-wrap">
+            <span className="text-sm text-muted-foreground">
+              当前：{dashboard?.has_device_library ? '已上传设备策略库文件' : '尚未上传'}
+            </span>
             <input
+              id="device-library-file-input"
               type="file"
               accept=".xlsx,.xls,.csv"
               className="text-sm text-muted-foreground"
               onChange={(e) => setLibraryFile(e.target.files?.[0] ?? null)}
             />
-            <div className="mt-3">
-              <Button size="sm" onClick={onUploadLibrary} disabled={!libraryFile || uploading}>
-                上传设备库
-              </Button>
-            </div>
-          </section>
+            <Button size="sm" onClick={onUploadLibrary} disabled={!libraryFile || uploading}>
+              上传设备库
+            </Button>
+          </div>
+          <p className="mt-2 text-xs text-muted-foreground">
+            包含储能设备型号、功率/容量组合、价格、效率等参数，用于 GA 搜索空间定义。
+          </p>
+        </section>
 
-          {/* Runtime upload */}
-          <section className="rounded-2xl border border-border bg-card p-5">
-            <h2 className="mb-4 mt-0 text-[22px] font-bold text-foreground">上传 runtime 文件</h2>
+        {/* Step 3: Runtime Files */}
+        <section className="mb-5 rounded-2xl border border-border bg-card p-5">
+          <div className="flex items-center justify-between gap-3 flex-wrap">
+            <StepBadge step={3} label="Runtime 文件绑定" />
+            <span
+              className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-semibold ${
+                boundCount > 0
+                  ? 'border border-emerald-500/30 bg-emerald-500/10 text-emerald-600'
+                  : 'border border-amber-500/30 bg-amber-500/10 text-amber-600'
+              }`}
+            >
+              {boundCount}/{totalLoadNodes} 节点已绑定
+            </span>
+          </div>
 
-            <div className="grid gap-4 items-start" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))' }}>
-              {/* Runtime status */}
-              <div className="rounded-xl border border-blue-500/20 bg-blue-500/5 p-3.5">
-                {selectedRuntimeNode ? (
-                  <>
-                    <div className="flex items-start justify-between gap-3">
-                      <div className="min-w-0">
-                        <div className="text-sm font-bold text-foreground">当前节点 runtime 状态</div>
-                        <div className="mt-1 text-xs leading-relaxed text-foreground/70 break-words">
-                          {selectedRuntimeNode.label}
-                        </div>
+          <div className="grid gap-5" style={{ gridTemplateColumns: '1fr 1fr' }}>
+            {/* Left: node selector + binding status */}
+            <div>
+              <label htmlFor="runtime-node-select" className="mb-1.5 block text-sm font-semibold text-muted-foreground">
+                选择负荷节点
+              </label>
+              <select
+                id="runtime-node-select"
+                value={runtimeNodeId}
+                onChange={(e) => setRuntimeNodeId(e.target.value)}
+                className="w-full rounded-xl border border-border bg-card px-3 py-2.5 text-sm"
+              >
+                <option value="">请选择负荷节点</option>
+                {loadNodes.map((node) => (
+                  <option key={node.id} value={node.id}>
+                    {node.label}
+                  </option>
+                ))}
+              </select>
+              {loadNodes.length === 0 ? (
+                <div className="mt-2 text-xs font-semibold text-amber-600">
+                  当前拓扑没有负荷节点，请先在拓扑建模页添加并保存负荷节点。
+                </div>
+              ) : null}
+
+              {/* Binding status */}
+              {selectedRuntimeNode ? (
+                <div className="mt-4 rounded-xl border border-border bg-muted/30 p-3.5">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <div className="text-sm font-bold text-foreground">当前节点绑定状态</div>
+                      <div className="mt-1 text-xs text-muted-foreground break-words">
+                        {selectedRuntimeNode.label}
                       </div>
-                      <span
-                        className={`inline-flex shrink-0 items-center justify-center rounded-full border px-2.5 py-0.5 text-xs font-bold ${
-                          selectedRuntimeBound
-                            ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-600'
-                            : 'border-amber-500/40 bg-amber-500/10 text-amber-600'
-                        }`}
-                      >
-                        {selectedRuntimeBound ? '已完成绑定' : '未完成绑定'}
-                      </span>
                     </div>
-                    <div className="mt-3 grid gap-2.5" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))' }}>
-                      <RuntimeInfo label="绑定 year_map" value={selectedRuntimeNode.runtimeBinding?.yearMapFileName || '未绑定'} />
-                      <RuntimeInfo label="绑定 model_library" value={selectedRuntimeNode.runtimeBinding?.modelLibraryFileName || '未绑定'} />
-                      <RuntimeInfo label="已上传 year_map" value={selectedRuntimeNode.currentRuntimeFiles?.yearMapFileName || '未上传'} />
-                      <RuntimeInfo label="已上传 model_library" value={selectedRuntimeNode.currentRuntimeFiles?.modelLibraryFileName || '未上传'} />
-                    </div>
-                    <div className="mt-2.5 text-xs leading-relaxed text-muted-foreground">
-                      选择不同负荷节点时，这里会同步显示该节点当前已绑定的 runtime 文件。
-                    </div>
-                  </>
-                ) : (
-                  <>
-                    <div className="text-sm font-bold text-foreground">当前节点 runtime 状态</div>
-                    <div className="mt-2 text-[13px] leading-relaxed text-muted-foreground">
-                      请选择一个负荷节点后查看其 runtime 绑定情况。
-                    </div>
-                  </>
-                )}
+                    <span
+                      className={`inline-flex shrink-0 items-center rounded-full border px-2.5 py-0.5 text-xs font-bold ${
+                        selectedRuntimeBound
+                          ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-600'
+                          : 'border-amber-500/40 bg-amber-500/10 text-amber-600'
+                      }`}
+                    >
+                      {selectedRuntimeBound ? '已完成绑定' : '未完成绑定'}
+                    </span>
+                  </div>
+                  <div className="mt-3 grid gap-2.5" style={{ gridTemplateColumns: '1fr 1fr' }}>
+                    <RuntimeInfo label="绑定 year_map" value={selectedRuntimeNode.runtimeBinding?.yearMapFileName || '未绑定'} />
+                    <RuntimeInfo label="绑定 model_library" value={selectedRuntimeNode.runtimeBinding?.modelLibraryFileName || '未绑定'} />
+                    <RuntimeInfo label="已上传 year_map" value={selectedRuntimeNode.currentRuntimeFiles?.yearMapFileName || '未上传'} />
+                    <RuntimeInfo label="已上传 model_library" value={selectedRuntimeNode.currentRuntimeFiles?.modelLibraryFileName || '未上传'} />
+                  </div>
+                </div>
+              ) : (
+                <div className="mt-4 rounded-xl border border-border bg-muted/30 p-3.5">
+                  <div className="text-sm font-bold text-foreground">当前节点绑定状态</div>
+                  <div className="mt-2 text-xs text-muted-foreground">
+                    请选择一个负荷节点后查看其 runtime 绑定情况。
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Right: upload controls */}
+            <div>
+              <div className="mb-4">
+                <label htmlFor="runtime-file-input-1" className="mb-1.5 block text-sm font-semibold text-muted-foreground">
+                  runtime_year_model_map.csv
+                </label>
+                <input
+                  id="runtime-file-input-1"
+                  type="file"
+                  accept=".csv"
+                  className="text-sm text-muted-foreground"
+                  onChange={(e) => setYearMapFile(e.target.files?.[0] ?? null)}
+                />
+                <div className="mt-2.5">
+                  <Button size="sm" onClick={() => onUploadRuntime('year_map')} disabled={!runtimeNodeId || !yearMapFile || uploading}>
+                    上传 year_map
+                  </Button>
+                </div>
               </div>
 
-              {/* Runtime upload controls */}
-              <div className="min-w-0">
-                <div className="mb-2">
-                  <label className="mb-1.5 block text-[13px] text-muted-foreground">负荷节点</label>
-                  <select
-                    value={runtimeNodeId}
-                    onChange={(e) => setRuntimeNodeId(e.target.value)}
-                    className="w-full rounded-xl border border-border bg-card px-3 py-2.5 text-sm box-border"
-                  >
-                    <option value="">请选择负荷节点</option>
-                    {loadNodes.map((node) => (
-                      <option key={node.id} value={node.id}>
-                        {node.label}
-                      </option>
-                    ))}
-                  </select>
-                  {loadNodes.length === 0 ? (
-                    <div className="mt-2 text-[13px] font-semibold text-amber-600">
-                      当前拓扑没有负荷节点，请先在拓扑建模页添加并保存负荷节点。
-                    </div>
-                  ) : null}
-                </div>
-
-                <div className="mt-3.5 grid gap-3.5" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))' }}>
-                  <div className="min-w-0">
-                    <label className="mb-1.5 mt-2 block text-[13px] text-muted-foreground">
-                      runtime_year_model_map.csv
-                    </label>
-                    <input
-                      type="file"
-                      accept=".csv"
-                      className="text-sm text-muted-foreground"
-                      onChange={(e) => setYearMapFile(e.target.files?.[0] ?? null)}
-                    />
-                    <div className="mt-2.5">
-                      <Button size="sm" onClick={() => onUploadRuntime('year_map')} disabled={!runtimeNodeId || !yearMapFile || uploading}>
-                        上传 year_map
-                      </Button>
-                    </div>
-                  </div>
-
-                  <div className="min-w-0">
-                    <label className="mb-1.5 mt-2 block text-[13px] text-muted-foreground">
-                      runtime_model_library.csv
-                    </label>
-                    <input
-                      type="file"
-                      accept=".csv"
-                      className="text-sm text-muted-foreground"
-                      onChange={(e) => setModelLibraryFile(e.target.files?.[0] ?? null)}
-                    />
-                    <div className="mt-2.5">
-                      <Button size="sm" onClick={() => onUploadRuntime('model_library')} disabled={!runtimeNodeId || !modelLibraryFile || uploading}>
-                        上传 model_library
-                      </Button>
-                    </div>
-                  </div>
+              <div>
+                <label htmlFor="runtime-file-input-2" className="mb-1.5 block text-sm font-semibold text-muted-foreground">
+                  runtime_model_library.csv
+                </label>
+                <input
+                  id="runtime-file-input-2"
+                  type="file"
+                  accept=".csv"
+                  className="text-sm text-muted-foreground"
+                  onChange={(e) => setModelLibraryFile(e.target.files?.[0] ?? null)}
+                />
+                <div className="mt-2.5">
+                  <Button size="sm" onClick={() => onUploadRuntime('model_library')} disabled={!runtimeNodeId || !modelLibraryFile || uploading}>
+                    上传 model_library
+                  </Button>
                 </div>
               </div>
             </div>
-          </section>
+          </div>
+
+          <p className="mt-4 text-xs text-muted-foreground">
+            每个负荷节点需要分别绑定 year_map 和 model_library。切换节点后状态自动更新。节点列表来自拓扑建模中的负荷节点。
+          </p>
+        </section>
+
+        {/* Refresh */}
+        <div className="text-center">
+          <button
+            onClick={loadDashboard}
+            disabled={loading || uploading}
+            className="rounded-xl border border-border bg-card px-4 py-2 text-xs font-semibold text-muted-foreground hover:text-foreground transition-colors"
+          >
+            {loading ? '刷新中...' : '刷新状态'}
+          </button>
         </div>
       </div>
     </div>
@@ -415,8 +425,8 @@ function AssetsPage() {
 function RuntimeInfo({ label, value }: { label: string; value: string }) {
   return (
     <div className="rounded-xl border border-border bg-card px-3 py-2.5 min-w-0">
-      <div className="text-xs leading-tight text-muted-foreground">{label}</div>
-      <div className="mt-1 text-[13px] font-semibold leading-relaxed text-foreground break-words">
+      <div className="text-xs text-muted-foreground">{label}</div>
+      <div className="mt-1 text-[13px] font-semibold text-foreground break-words">
         {value}
       </div>
     </div>

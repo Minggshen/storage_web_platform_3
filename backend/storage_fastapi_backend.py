@@ -1,8 +1,12 @@
-
 from __future__ import annotations
+
+import os
+from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 
 from routes.assets import router as assets_router
 from routes.build import router as build_router
@@ -19,33 +23,55 @@ app = FastAPI(
     version="2.6.0",
 )
 
+_cors_origins_raw = os.getenv(
+    "CORS_ALLOW_ORIGINS",
+    "http://localhost:5173,http://127.0.0.1:5173",
+)
+_cors_origins = [o.strip() for o in _cors_origins_raw.split(",") if o.strip()]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=_cors_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-@app.get("/")
-def root() -> dict:
-    return {
-        "success": True,
-        "message": "Storage visual modeling backend is running.",
-        "phase": "workflow-api-enhancement",
-        "version": "2.6.0",
-        "frontend_usage": (
-            "前端应通过 /api/projects、/api/project/:id/dashboard、/api/topology、/api/assets、"
-            "/api/build、/api/solver 接口完成完整工作流。"
-        ),
-    }
+_static_dir = Path(__file__).parent / "static"
+_has_frontend = _static_dir.is_dir()
 
 @app.get("/health")
 def health() -> dict:
     return {"success": True, "status": "ok", "version": "2.6.0"}
+
 
 app.include_router(project_router)
 app.include_router(topology_router)
 app.include_router(assets_router)
 app.include_router(build_router)
 app.include_router(solver_router)
+
+if _has_frontend:
+    # JS/CSS/字体等静态资源
+    app.mount("/assets", StaticFiles(directory=str(_static_dir / "assets")), name="assets")
+
+    # Favicon
+    @app.get("/favicon.svg", include_in_schema=False)
+    async def favicon():
+        return FileResponse(str(_static_dir / "favicon.svg"))
+
+    # SPA fallback: 所有非 API 的 GET 请求返回 index.html（必须在 API 路由之后）
+    @app.get("/{full_path:path}", include_in_schema=False)
+    async def spa_fallback(full_path: str):
+        requested = _static_dir / full_path
+        if requested.is_file():
+            return FileResponse(str(requested))
+        return FileResponse(str(_static_dir / "index.html"))
+else:
+    @app.get("/")
+    def root() -> dict:
+        return {
+            "success": True,
+            "message": "Storage visual modeling backend is running.",
+            "version": "2.6.0",
+        }

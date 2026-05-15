@@ -664,3 +664,30 @@ class SolverTaskLogsResponse(BaseModel):
     task: SolverTaskInfo
     stdout_text: str = ""
     stderr_text: str = ""
+
+
+# ── Topology Template models ──
+
+class TopologyTemplateMeta(BaseModel):
+    template_id: str
+    name: str
+    description: str = ""
+    created_at: str = ""
+    node_count: int = 0
+    edge_count: int = 0
+
+
+class TopologyTemplateListResponse(BaseModel):
+    success: bool
+    templates: list[TopologyTemplateMeta] = []
+
+
+class SaveTemplateRequest(BaseModel):
+    name: str
+    description: str = ""
+    topology: dict[str, Any] = {}
+
+
+class TopologyTemplateDetailResponse(BaseModel):
+    success: bool
+    template: dict[str, Any] = {}

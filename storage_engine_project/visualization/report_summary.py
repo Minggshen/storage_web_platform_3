@@ -7,7 +7,10 @@ import numpy as np
 import matplotlib.pyplot as plt
 import textwrap
 
+from storage_engine_project.logging_config import get_logger
 from storage_engine_project.visualization.mpl_global import setup_matplotlib_chinese
+
+logger = get_logger(__name__)
 
 
 def _sanitize_filename(text: str) -> str:
@@ -51,27 +54,33 @@ def _ordered_fieldnames(summary_rows: Sequence[Mapping[str, Any]]) -> list[str]:
 
 def print_summary_table(summary_rows: Sequence[Mapping[str, Any]]) -> None:
     if not summary_rows:
-        print("\n未生成任何汇总结果。")
+        logger.info("未生成任何汇总结果。")
         return
-    print("\n" + "=" * 180)
-    print("{:^180}".format("分布式储能配置汇总表（常用设备方案 / 高安全设备方案）"))
-    print("=" * 180)
+    logger.info("=" * 180)
+    logger.info("{:^180}".format("分布式储能配置汇总表（常用设备方案 / 高安全设备方案）"))
+    logger.info("=" * 180)
     header = (
         f"{'场景名称':<20} | {'方案':<12} | {'节点':>4} | {'功率(kW)':>12} | {'容量(kWh)':>12} | "
         f"{'时长(h)':>8} | {'NPV(万元)':>11} | {'回收期(年)':>12} | {'IRR(%)':>9} | {'安全分':>8} | {'投资(万元)':>12}"
     )
-    print(header)
-    print("-" * 180)
+    logger.info(header)
+    logger.info("-" * 180)
     for row in summary_rows:
-        print(
-            f"{str(row.get('scenario', '未命名场景')):<20} | {str(row.get('scheme_label', 'standard')):<12} | "
-            f"{int(_safe_float(row.get('node', 0))):>4d} | {_safe_float(row.get('power_kw', 0.0)):>12.2f} | "
-            f"{_safe_float(row.get('energy_kwh', 0.0)):>12.2f} | {_safe_float(row.get('duration_h', 0.0)):>8.2f} | "
-            f"{_safe_float(row.get('npv_wan', 0.0)):>11.2f} | {_safe_float(row.get('payback_years', 0.0)):>12.2f} | "
-            f"{_safe_float(row.get('irr_percent', 0.0)):>9.2f} | {_safe_float(row.get('safety_score', 0.0)):>8.3f} | "
-            f"{_safe_float(row.get('initial_capex_yuan', 0.0)) / 10000.0:>12.2f}"
+        logger.info(
+            "%s | %s | %4d | %12.2f | %12.2f | %8.2f | %11.2f | %12.2f | %9.2f | %8.3f | %12.2f",
+            str(row.get('scenario', '未命名场景'))[:20],
+            str(row.get('scheme_label', 'standard'))[:12],
+            int(_safe_float(row.get('node', 0))),
+            _safe_float(row.get('power_kw', 0.0)),
+            _safe_float(row.get('energy_kwh', 0.0)),
+            _safe_float(row.get('duration_h', 0.0)),
+            _safe_float(row.get('npv_wan', 0.0)),
+            _safe_float(row.get('payback_years', 0.0)),
+            _safe_float(row.get('irr_percent', 0.0)),
+            _safe_float(row.get('safety_score', 0.0)),
+            _safe_float(row.get('initial_capex_yuan', 0.0)) / 10000.0,
         )
-    print("=" * 180)
+    logger.info("=" * 180)
 
 
 def save_summary_csv(summary_rows: Sequence[Mapping[str, Any]], output_dir: str | Path = "outputs/reports", file_name: str = "summary_table.csv") -> str | None:

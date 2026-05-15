@@ -16,11 +16,14 @@ from storage_engine_project.simulation.network_constraint_oracle import (
     SimpleNetworkConstraintOracle,
     SimpleNetworkOracleConfig,
 )
+from storage_engine_project.logging_config import get_logger
 from storage_engine_project.simulation.rolling_dispatch import (
     RollingDispatchController,
     RollingDispatchConfig,
     RollingDispatchResult,
 )
+
+logger = get_logger(__name__)
 
 
 @dataclass(slots=True)
@@ -320,9 +323,9 @@ class AnnualOperationKernel:
             raise ValueError(f"actual_pv_matrix_kw 形状必须为 (365, 24)，当前为 {pv_matrix.shape}")
 
         if cfg.print_mode_header:
-            print(
-                f"[年度运行模式] evaluation_mode={evaluation_mode}, "
-                f"strategy={strategy.strategy_id}, P={rated_power_kw:.2f}, E={rated_energy_kwh:.2f}"
+            logger.info(
+                "年度运行模式 evaluation_mode=%s, strategy=%s, P=%.2f, E=%.2f",
+                evaluation_mode, strategy.strategy_id, rated_power_kw, rated_energy_kwh,
             )
 
         if evaluation_mode == "fast_proxy":
@@ -334,9 +337,9 @@ class AnnualOperationKernel:
             )
             representative_days = [rep_day for rep_day, _ in groups]
             if cfg.print_progress:
-                print(
-                    f"[年度运行模式] representative_day_count={len(representative_days)}, "
-                    f"first_days={representative_days[:10]}"
+                logger.info(
+                    "年度运行模式 representative_day_count=%s, first_days=%s",
+                    len(representative_days), representative_days[:10],
                 )
         else:
             groups = [(day, [day]) for day in range(365)]
@@ -412,9 +415,9 @@ class AnnualOperationKernel:
                     or idx == len(groups)
                     or idx % max(1, int(cfg.fast_proxy_progress_interval_groups)) == 0
                 ):
-                    print(
-                        f"[年度运行] 代表日 {idx}/{len(groups)} | rep_day={rep_day + 1} | "
-                        f"覆盖天数={len(covered_days)} | 当前日初SOC={rep_initial_soc:.4f}"
+                    logger.info(
+                        "年度运行 代表日 %s/%s | rep_day=%s | 覆盖天数=%s | 当前日初SOC=%.4f",
+                        idx, len(groups), rep_day + 1, len(covered_days), rep_initial_soc,
                     )
             else:
                 rep_initial_soc = current_soc
@@ -423,9 +426,9 @@ class AnnualOperationKernel:
                     or idx == len(groups)
                     or idx % max(1, int(cfg.progress_interval_days)) == 0
                 ):
-                    print(
-                        f"[年度运行] 进度 {idx}/365 | 当前日初SOC={rep_initial_soc:.4f} | "
-                        f"策略={strategy.strategy_id}"
+                    logger.info(
+                        "年度运行 进度 %s/365 | 当前日初SOC=%.4f | 策略=%s",
+                        idx, rep_initial_soc, strategy.strategy_id,
                     )
 
             plan = self.scheduler.schedule_day(
@@ -603,10 +606,9 @@ class AnnualOperationKernel:
 
         if cfg.print_completion_summary:
             mean_terminal_error = float(np.mean(np.abs(soc_correction_errors))) if soc_correction_errors else 0.0
-            print(
-                f"[年度运行完成] mode={evaluation_mode} | annual_cashflow={annual_cashflow:.2f} | "
-                f"cycles={annual_eq_cycles:.2f} | transformer_hours={storage_transformer_violation_hours:.0f} | "
-                f"mean_terminal_soc_error={mean_terminal_error:.4f}"
+            logger.info(
+                "年度运行完成 mode=%s | annual_cashflow=%.2f | cycles=%.2f | transformer_hours=%.0f | mean_terminal_soc_error=%.4f",
+                evaluation_mode, annual_cashflow, annual_eq_cycles, storage_transformer_violation_hours, mean_terminal_error,
             )
 
         return AnnualOperationResult(

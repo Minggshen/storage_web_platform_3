@@ -54,7 +54,16 @@ class SolverExecutionService:
     # ---------------------------------------------------------------------
     # 基础路径
     # ---------------------------------------------------------------------
+    @staticmethod
+    def _validate_project_id(project_id: str) -> str:
+        if not project_id or not project_id.strip():
+            raise ValueError("项目 ID 不能为空")
+        if ".." in project_id or "/" in project_id or "\\" in project_id:
+            raise ValueError(f"无效的项目 ID：{project_id}")
+        return project_id.strip()
+
     def _project_dir(self, project_id: str) -> Path:
+        self._validate_project_id(project_id)
         if self.project_service is not None and hasattr(self.project_service, "_project_dir"):
             return Path(self.project_service._project_dir(project_id))
         return self.data_root / project_id
@@ -585,6 +594,10 @@ class SolverExecutionService:
         daily_terminal_soc_tolerance = self._safe_float(request.get("daily_terminal_soc_tolerance"), math.nan)
         if math.isfinite(daily_terminal_soc_tolerance):
             command.extend(["--daily-terminal-soc-tolerance", self._format_float(min(max(daily_terminal_soc_tolerance, 0.0), 0.20))])
+
+        safety_tradeoff = self._safe_float(request.get("safety_economy_tradeoff"), math.nan)
+        if math.isfinite(safety_tradeoff):
+            command.extend(["--safety-economy-tradeoff", self._format_float(min(max(safety_tradeoff, 0.0), 1.0))])
 
         dss_master = task_workspace / "inputs" / "dss" / "visual_model" / "Master.dss"
         voltage_penalty_coeff = self._resolve_registry_target_float(

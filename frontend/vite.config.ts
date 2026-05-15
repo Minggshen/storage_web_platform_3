@@ -17,4 +17,8 @@ export default defineConfig({
     port: 5173,
     strictPort: true,
   },
+  build: {
+    outDir: path.resolve(projectRoot, "../backend/static"),
+    emptyOutDir: true,
+  },
 })

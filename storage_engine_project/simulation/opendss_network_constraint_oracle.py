@@ -7,7 +7,10 @@ from pathlib import Path
 from typing import Any, Optional
 
 from storage_engine_project.data.runtime_loader import load_runtime_bundle
+from storage_engine_project.logging_config import get_logger
 from storage_engine_project.simulation.network_constraint_oracle import HourlyNetworkConstraint, NetworkConstraintOracle
+
+logger = get_logger(__name__)
 
 
 @dataclass(slots=True)
@@ -885,7 +888,7 @@ class OpenDSSConstraintOracle(NetworkConstraintOracle):
             if not self.config.allow_engine_fallback:
                 raise
             if self.config.log_failures:
-                print(f"[OpenDSS] 小时约束评估失败，回退轻量代理：{exc}")
+                logger.warning("OpenDSS 小时约束评估失败，回退轻量代理：%s", exc)
             proxy = self._build_proxy_constraint(ctx, actual_net_load_kw, effective_power_cap_kw)
             proxy.notes.append(f"OpenDSS 小时约束失败：{type(exc).__name__}: {exc}")
             proxy.metadata.update(metadata)

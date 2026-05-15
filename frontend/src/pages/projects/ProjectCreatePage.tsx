@@ -5,12 +5,13 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { Label } from '@/components/ui/label';
+import { ErrorBanner } from '@/components/common/ErrorBanner';
 
 function ProjectCreatePage() {
   const navigate = useNavigate();
 
-  const [name, setName] = useState('前端联调测试项目');
-  const [description, setDescription] = useState('用于测试前端工作流页面');
+  const [name, setName] = useState('');
+  const [description, setDescription] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -56,11 +57,7 @@ function ProjectCreatePage() {
             创建一个新的配电网储能优化前后端联调项目。
           </p>
 
-          {error ? (
-            <div className="mb-4 rounded-xl border border-red-500/30 bg-red-500/10 p-3.5 text-sm text-red-600">
-              创建失败：{error}
-            </div>
-          ) : null}
+          {error && <ErrorBanner message={error} />}
 
           <form onSubmit={onSubmit}>
             <div className="mb-4">

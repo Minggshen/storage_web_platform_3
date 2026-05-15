@@ -819,7 +819,16 @@ class BuildExportService:
             return economic_params.get(key)
         return params.get(key, default)
 
+    @staticmethod
+    def _validate_project_id(project_id: str) -> str:
+        if not project_id or not project_id.strip():
+            raise ValueError("项目 ID 不能为空")
+        if ".." in project_id or "/" in project_id or "\\" in project_id:
+            raise ValueError(f"无效的项目 ID：{project_id}")
+        return project_id.strip()
+
     def _project_dir(self, project_id: str) -> Path:
+        BuildExportService._validate_project_id(project_id)
         return self.data_root / project_id
 
     def _project_file(self, project_id: str) -> Path:

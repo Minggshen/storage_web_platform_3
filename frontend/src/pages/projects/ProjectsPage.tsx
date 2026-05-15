@@ -1,7 +1,8 @@
-import React, { useEffect, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { deleteProject, listProjects } from '../../services/projects';
 import { Button } from '@/components/ui/button';
+import { ErrorBanner } from '@/components/common/ErrorBanner';
 
 type ProjectListItem = {
   project_id: string;
@@ -22,6 +23,8 @@ function ProjectsPage() {
   const [error, setError] = useState<string | null>(null);
   const [projects, setProjects] = useState<ProjectListItem[]>([]);
   const [deletingProjectId, setDeletingProjectId] = useState<string | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<ProjectListItem | null>(null);
+  const [confirmInput, setConfirmInput] = useState('');
 
   async function loadProjects() {
     setLoading(true);
@@ -41,29 +44,32 @@ function ProjectsPage() {
     loadProjects();
   }, []);
 
-  async function handleDeleteProject(item: ProjectListItem) {
-    const projectLabel = `${item.project_name || '未命名项目'}（${item.project_id}）`;
-    const confirmed = window.confirm(
-      `将永久删除项目 ${projectLabel} 下的全部数据，包括拓扑、资产、构建产物和求解结果。\n\n该操作不可恢复。是否继续？`,
-    );
-    if (!confirmed) return;
-
-    const typed = window.prompt(`请输入项目编号确认删除：${item.project_id}`);
-    if (typed !== item.project_id) {
+  async function executeDelete() {
+    if (!deleteTarget) return;
+    if (confirmInput !== deleteTarget.project_id) {
       setError('项目编号确认不匹配，已取消删除。');
+      setDeleteTarget(null);
+      setConfirmInput('');
       return;
     }
-
-    setDeletingProjectId(item.project_id);
+    setDeletingProjectId(deleteTarget.project_id);
     setError(null);
+    setDeleteTarget(null);
+    setConfirmInput('');
     try {
-      await deleteProject(item.project_id);
-      setProjects((prev) => prev.filter((project) => project.project_id !== item.project_id));
+      await deleteProject(deleteTarget.project_id);
+      setProjects((prev) => prev.filter((project) => project.project_id !== deleteTarget.project_id));
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
       setDeletingProjectId(null);
     }
+  }
+
+  function openDeleteConfirm(item: ProjectListItem) {
+    setError(null);
+    setDeleteTarget(item);
+    setConfirmInput('');
   }
 
   return (
@@ -89,11 +95,7 @@ function ProjectsPage() {
         </div>
 
         {/* Error */}
-        {error ? (
-          <div className="mb-4 rounded-xl border border-red-500/30 bg-red-500/10 p-3.5 text-sm text-red-600">
-            加载失败：{error}
-          </div>
-        ) : null}
+        {error && <ErrorBanner message={error} />}
 
         {/* Project table */}
         <div className="rounded-2xl border border-border bg-card p-5">
@@ -103,7 +105,7 @@ function ProjectsPage() {
             <div className="text-muted-foreground">暂无项目。</div>
           ) : (
             <div className="overflow-x-auto">
-              <table className="w-full min-w-[720px] border-collapse">
+              <table className="w-full min-w-[720px] border-collapse" aria-label="项目列表">
                 <thead>
                   <tr>
                     <th className="border-b border-border bg-muted/50 px-3 py-2.5 text-left text-sm font-semibold text-muted-foreground">
@@ -150,7 +152,7 @@ function ProjectsPage() {
                             variant="ghost"
                             size="sm"
                             className="text-red-600 hover:bg-red-500/10 hover:text-red-600"
-                            onClick={() => handleDeleteProject(item)}
+                            onClick={() => openDeleteConfirm(item)}
                             disabled={deletingProjectId === item.project_id}
                           >
                             {deletingProjectId === item.project_id ? '删除中...' : '删除'}
@@ -165,6 +167,53 @@ function ProjectsPage() {
           )}
         </div>
       </div>
+
+      {/* Delete confirmation dialog */}
+      {deleteTarget && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center">
+          <div className="absolute inset-0 bg-black/50" onClick={() => setDeleteTarget(null)} />
+          <div
+            role="alertdialog"
+            aria-modal="true"
+            aria-label="确认删除项目"
+            className="relative z-10 w-full max-w-md rounded-2xl border bg-background p-6 shadow-xl"
+          >
+            <h2 className="mb-2 text-lg font-bold text-foreground">确认删除项目</h2>
+            <p className="mb-2 text-sm text-muted-foreground">
+              将永久删除项目 {deleteTarget.project_name || '未命名项目'}（{deleteTarget.project_id}）下的全部数据，包括拓扑、资产、构建产物和求解结果。
+            </p>
+            <p className="mb-4 text-sm font-semibold text-red-600">该操作不可恢复。</p>
+            <label htmlFor="delete-confirm-input" className="mb-1.5 block text-sm font-medium">
+              请输入项目编号确认：{deleteTarget.project_id}
+            </label>
+            <input
+              id="delete-confirm-input"
+              type="text"
+              value={confirmInput}
+              onChange={(e) => setConfirmInput(e.target.value)}
+              className="mb-5 w-full rounded-xl border bg-background px-3 py-2 text-sm"
+              onKeyDown={(e) => { if (e.key === 'Enter') executeDelete(); }}
+            />
+            <div className="flex justify-end gap-3">
+              <button
+                type="button"
+                onClick={() => setDeleteTarget(null)}
+                className="rounded-xl border bg-background px-4 py-2 text-sm font-medium hover:bg-muted transition-colors"
+              >
+                取消
+              </button>
+              <button
+                type="button"
+                onClick={executeDelete}
+                disabled={confirmInput !== deleteTarget.project_id}
+                className="rounded-xl bg-red-600 px-4 py-2 text-sm font-medium text-white hover:bg-red-700 disabled:opacity-50 transition-colors"
+              >
+                确认删除
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

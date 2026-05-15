@@ -31,6 +31,7 @@ class SolverRunRequest(BaseModel):
     terminal_soc_mode: str | None = None
     fixed_terminal_soc_target: float | None = None
     daily_terminal_soc_tolerance: float | None = None
+    safety_economy_tradeoff: float | None = None
 
 
 @router.post("/project/{project_id}/configure")

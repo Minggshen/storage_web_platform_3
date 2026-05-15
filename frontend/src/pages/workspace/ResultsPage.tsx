@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useParams } from 'react-router-dom';
+import { ErrorBanner } from '@/components/common/ErrorBanner';
 import {
   Bar,
   BarChart,
@@ -23,6 +24,7 @@ import {
 import {
   fetchResultCharts,
   fetchResultFilePreview,
+  fetchLatestSolverTask,
   fetchResultFiles,
   fetchSolverTasks,
   fetchSolverSummary,
@@ -436,6 +438,7 @@ export default function ResultsPage() {
   const [selectedTaskId, setSelectedTaskId] = useState('');
   const [manualTaskSelection, setManualTaskSelection] = useState(false);
   const [lastUpdatedAt, setLastUpdatedAt] = useState<string | null>(null);
+  const [solverRunning, setSolverRunning] = useState(false);
 
   const primary = useMemo<GenericRow | null>(() => {
     if (!summary) return null;
@@ -539,6 +542,15 @@ export default function ResultsPage() {
     const intervalId = window.setInterval(() => {
       loadTaskOptions(true);
       loadSummaryAndFiles(true);
+      // Check if a solver task is currently running.
+      if (projectId) {
+        fetchLatestSolverTask(projectId).then((task) => {
+          if (task) {
+            const s = String(task.status ?? '').toLowerCase();
+            setSolverRunning(s === 'running' || s === 'queued');
+          }
+        }).catch(() => {});
+      }
     }, 8000);
     return () => window.clearInterval(intervalId);
   }, [projectId, selectedTaskId, manualTaskSelection]);
@@ -636,20 +648,12 @@ export default function ResultsPage() {
 
   return (
     <div style={{ padding: 24, background: '#f8fafc', minHeight: '100vh' }}>
-      <div style={{ maxWidth: 1360, margin: '0 auto' }}>
-        <div style={{ marginBottom: 16 }}>
-          <h1 style={{ margin: 0, fontSize: 32 }}>结果展示</h1>
-          <div style={{ marginTop: 8, color: '#6b7280' }}>
-            当前节点：{charts?.selected_case || '--'}；任务：{charts?.latest_task?.task_id || selectedTaskId || '--'}
-            {lastUpdatedAt ? `；自动刷新：${lastUpdatedAt}` : ''}
-          </div>
-        </div>
-
-        <div style={{ marginBottom: 16, display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
-          <label style={{ color: '#475569', fontWeight: 700 }}>
-            查看任务
-          </label>
+      <div style={{ maxWidth: 1360, margin: '0 auto' }} aria-live="polite">
+        {/* Top bar */}
+        <div style={{ marginBottom: 16, display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+          <h1 style={{ margin: 0, fontSize: 24, fontWeight: 800 }}>结果展示</h1>
           <select
+            id="result-task-select"
             value={selectedTaskId}
             onChange={(event) => {
               setManualTaskSelection(event.target.value !== '');
@@ -666,20 +670,53 @@ export default function ResultsPage() {
               </option>
             ))}
           </select>
-          {loading ? <span style={{ color: '#64748b' }}>加载中...</span> : null}
+          {loading ? <span style={{ color: '#64748b', fontSize: 12 }}>加载中...</span> : null}
+          <span style={{ color: '#6b7280', fontSize: 11, marginLeft: 'auto' }}>
+            {lastUpdatedAt ? `自动刷新：${lastUpdatedAt}` : ''}
+          </span>
           <button onClick={handleExportReport} disabled={!summary && !charts} style={btnStyle}>
             导出分析报告
           </button>
         </div>
 
-        {error ? <div style={errorStyle}>加载失败：{error}</div> : null}
+        {solverRunning && (
+          <div style={{
+            marginBottom: 16,
+            padding: '10px 16px',
+            borderRadius: 10,
+            border: '1px solid rgba(245, 158, 11, 0.5)',
+            background: 'rgba(245, 158, 11, 0.1)',
+            color: '#92400e',
+            fontWeight: 600,
+            fontSize: 12,
+            display: 'flex',
+            alignItems: 'center',
+            gap: 8,
+          }}>
+            <span style={{
+              display: 'inline-block',
+              width: 8,
+              height: 8,
+              borderRadius: '50%',
+              background: '#f59e0b',
+              animation: 'pulse 2s infinite',
+            }} />
+            求解任务正在运行中，当前展示的是历史结果。新结果将在任务完成后自动更新。
+          </div>
+        )}
+
+        {error && <ErrorBanner message={error} />}
         {charts?.warnings?.length ? <WarningPanel warnings={charts.warnings} /> : null}
         {networkTopologyCacheDiagnostics ? (
           <DiagnosticsStrip diagnostics={networkTopologyCacheDiagnostics} />
         ) : null}
 
+        {/* Step 1: Summary */}
         <section style={sectionStyle}>
-          <h2 style={sectionTitleStyle}>推荐方案摘要</h2>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 14 }}>
+            <span style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 24, height: 24, borderRadius: '50%', background: '#2563eb', color: '#fff', fontSize: 11, fontWeight: 800, flexShrink: 0 }}>1</span>
+            <span style={{ fontWeight: 700, fontSize: 16 }}>方案摘要</span>
+          </div>
           {!primary ? (
             <div>暂无推荐方案。</div>
           ) : (
@@ -713,8 +750,12 @@ export default function ResultsPage() {
           </section>
         ) : null}
 
+        {/* Step 2: Feasibility */}
         <section style={{ ...sectionStyle, marginTop: 16 }}>
-          <h2 style={sectionTitleStyle}>可行性诊断</h2>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 14 }}>
+            <span style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 24, height: 24, borderRadius: '50%', background: '#2563eb', color: '#fff', fontSize: 11, fontWeight: 800, flexShrink: 0 }}>2</span>
+            <span style={{ fontWeight: 700, fontSize: 16 }}>可行性验证</span>
+          </div>
           {feasibility ? (
             <>
               <FeasibilityBanner summary={feasibilitySummary} />
@@ -745,8 +786,12 @@ export default function ResultsPage() {
           </div>
         ) : null}
 
+        {/* Step 3: Grid Assessment */}
         <section style={{ ...sectionStyle, marginTop: 16 }}>
-          <h2 style={sectionTitleStyle}>配电网拓扑与承载能力</h2>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 14 }}>
+            <span style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 24, height: 24, borderRadius: '50%', background: '#2563eb', color: '#fff', fontSize: 11, fontWeight: 800, flexShrink: 0 }}>3</span>
+            <span style={{ fontWeight: 700, fontSize: 16 }}>配电网评估</span>
+          </div>
           <NetworkTopologyPanel data={(networkTopology ?? null) as NetworkTopologyChart | null} />
         </section>
 
@@ -777,7 +822,7 @@ export default function ResultsPage() {
 
           {filteredAutoServiceLineRows.length ? (
             <div style={{ overflowX: 'auto' }}>
-              <table style={resultTableStyle}>
+              <table style={resultTableStyle} aria-label="自动估算接入线运行结果">
                 <thead>
                   <tr>
                     <th style={resultTableHeadStyle}>线路</th>
@@ -828,7 +873,10 @@ export default function ResultsPage() {
         </section>
 
         <div style={{ marginTop: 18, marginBottom: 12 }}>
-          <h2 style={sectionTitleStyle}>可视化分析</h2>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 14 }}>
+            <span style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 24, height: 24, borderRadius: '50%', background: '#2563eb', color: '#fff', fontSize: 11, fontWeight: 800, flexShrink: 0 }}>4</span>
+            <span style={{ fontWeight: 700, fontSize: 16 }}>详细分析</span>
+          </div>
         </div>
 
         <div style={chartGridStyle}>
@@ -895,7 +943,7 @@ export default function ResultsPage() {
             <div>暂无 summary_rows。</div>
           ) : (
             <div style={{ overflowX: 'auto' }}>
-              <table style={{ borderCollapse: 'collapse', minWidth: 960 }}>
+              <table style={{ borderCollapse: 'collapse', minWidth: 960 }} aria-label="summary_rows 数据表">
                 <thead>
                   <tr>
                     {summaryKeys.map((key) => <th key={key} style={thStyle}>{key}</th>)}
@@ -1011,7 +1059,7 @@ export default function ResultsPage() {
                   <div style={{ color: '#666', fontSize: 12 }}>共 {preview.row_count ?? 0} 行，当前预览前 50 行。</div>
                 </div>
                 <div style={{ overflowX: 'auto', border: '1px solid #ddd' }}>
-                  <table style={{ borderCollapse: 'collapse', minWidth: 900 }}>
+                  <table style={{ borderCollapse: 'collapse', minWidth: 900 }} aria-label="文件预览数据表">
                     <thead>
                       <tr>
                         {(preview.header ?? []).map((cell) => <th key={cell} style={thStyle}>{cell}</th>)}
@@ -2221,7 +2269,7 @@ function FinancialAuditLedgerPanel(props: { rows: GenericRow[] }) {
   }
   return (
     <div style={{ overflowX: 'auto' }}>
-      <table style={resultTableStyle}>
+      <table style={resultTableStyle} aria-label="经济性审计账本">
         <thead>
           <tr>
             <th style={resultTableHeadStyle}>项目</th>
@@ -2311,7 +2359,7 @@ function RiskTable(props: { title: string; rows: GenericRow[]; columns: Array<[s
       {!props.rows.length ? (
         <div style={{ color: '#6b7280' }}>暂无。</div>
       ) : (
-        <table style={resultTableStyle}>
+        <table style={resultTableStyle} aria-label="风险分析数据表">
           <thead>
             <tr>
               {props.columns.map(([, label]) => (
@@ -2588,7 +2636,6 @@ const taskSelectStyle: React.CSSProperties = { minWidth: 320, maxWidth: '100%', 
 const smallBtnStyle: React.CSSProperties = { padding: '7px 10px', borderRadius: 8, border: '1px solid #d1d5db', background: '#fff', fontWeight: 600, cursor: 'pointer', fontSize: 12 };
 const chipBtnStyle: React.CSSProperties = { padding: '7px 10px', borderRadius: 999, border: '1px solid #d1d5db', background: '#fff', fontWeight: 600, cursor: 'pointer', fontSize: 12, color: '#334155' };
 const activeChipBtnStyle: React.CSSProperties = { ...chipBtnStyle, border: '1px solid #93c5fd', background: '#dbeafe', color: '#1d4ed8' };
-const errorStyle: React.CSSProperties = { background: '#fef2f2', border: '1px solid #fecaca', color: '#b91c1c', borderRadius: 8, padding: 14, marginBottom: 16 };
 const warningStyle: React.CSSProperties = { background: '#fffbeb', border: '1px solid #fde68a', color: '#92400e', borderRadius: 8, padding: 14, marginBottom: 16 };
 const diagnosticStripStyle: React.CSSProperties = { background: '#eef6ff', border: '1px solid #bfdbfe', color: '#1e3a8a', borderRadius: 8, padding: 12, marginBottom: 16, fontSize: 13 };
 const thStyle: React.CSSProperties = { textAlign: 'left', padding: 10, borderBottom: '1px solid #d1d5db', background: '#f9fafb' };

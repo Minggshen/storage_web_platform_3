@@ -8,12 +8,15 @@ import cvxpy as cp
 import numpy as np
 
 from storage_engine_project.data.annual_context_builder import AnnualOperationContext
+from storage_engine_project.logging_config import get_logger
 from storage_engine_project.simulation.dispatch_result_models import DayAheadDispatchPlan, DayAheadObjectiveBreakdown
 from storage_engine_project.simulation.service_headroom import (
     DailyServiceProfile,
     build_daily_service_profile,
     service_soc_reserve_ratio_expr,
 )
+
+logger = get_logger(__name__)
 
 
 @dataclass(slots=True)
@@ -46,7 +49,7 @@ class DayAheadScheduler:
         self._solver_priority = {name: idx for idx, name in enumerate(self._solver_name_cache)}
         self._plan_cache: dict[tuple[Any, ...], DayAheadDispatchPlan] = {}
         if self.config.print_solver_order:
-            print(f"[日前调度器] 当前求解器顺序：{self._solver_name_cache}")
+            logger.info("日前调度器 当前求解器顺序：%s", self._solver_name_cache)
 
     def schedule_day(
         self,
@@ -88,10 +91,10 @@ class DayAheadScheduler:
         tariff = np.asarray(ctx.tariff_matrix_yuan_per_kwh[day_index], dtype=float).reshape(24)
 
         if self.config.log_input_signature:
-            print(
-                f"[日前调度输入] day={day_index + 1}, load_sum={float(np.sum(load_kw)):.4f}, "
-                f"pv_sum={float(np.sum(pv_kw)):.4f}, tariff_sum={float(np.sum(tariff)):.4f}, "
-                f"load_min={float(np.min(load_kw)):.4f}, load_max={float(np.max(load_kw)):.4f}"
+            logger.info(
+                "日前调度输入 day=%s, load_sum=%.4f, pv_sum=%.4f, tariff_sum=%.4f, load_min=%.4f, load_max=%.4f",
+                day_index + 1, float(np.sum(load_kw)), float(np.sum(pv_kw)),
+                float(np.sum(tariff)), float(np.min(load_kw)), float(np.max(load_kw)),
             )
 
         svc_profile = build_daily_service_profile(
@@ -114,7 +117,7 @@ class DayAheadScheduler:
         if self.config.enable_plan_cache and cache_key in self._plan_cache:
             cached = self._plan_cache[cache_key]
             if self.config.log_cache_hit:
-                print(f"[日前调度缓存命中] day={day_index + 1}, strategy={strategy.strategy_id}")
+                logger.info("日前调度缓存命中 day=%s, strategy=%s", day_index + 1, strategy.strategy_id)
             return replace(cached, day_index=day_index)
 
         try:
@@ -306,9 +309,9 @@ class DayAheadScheduler:
                     )
                 )
                 if should_print:
-                    print(
-                        f"[日前调度求解] day={day_index + 1}, solver={solver_name}, "
-                        f"status={solver_status}, objective={problem.value}"
+                    logger.info(
+                        "日前调度求解 day=%s, solver=%s, status=%s, objective=%s",
+                        day_index + 1, solver_name, solver_status, problem.value,
                     )
 
                 if problem.status not in {cp.OPTIMAL, cp.OPTIMAL_INACCURATE}:
@@ -343,7 +346,7 @@ class DayAheadScheduler:
             except Exception as exc:
                 last_error = exc
                 if self.config.log_solver_failure:
-                    print(f"[日前调度求解] day={day_index + 1}, solver={solver_name} 求解失败：{exc}")
+                    logger.warning("日前调度求解 day=%s, solver=%s 求解失败：%s", day_index + 1, solver_name, exc)
                 continue
 
         if not candidates:
@@ -374,9 +377,9 @@ class DayAheadScheduler:
         )
         chosen = ranked[0]
         if chosen["solver_status"].upper() == "OPTIMAL_INACCURATE" and self.config.log_solver_inaccurate:
-            print(
-                f"[日前调度求解] day={day_index + 1}, 采用近似最优解，"
-                f"solver={chosen['solver_name']}, objective={chosen['objective']}"
+            logger.info(
+                "日前调度求解 day=%s, 采用近似最优解，solver=%s, objective=%s",
+                day_index + 1, chosen['solver_name'], chosen['objective'],
             )
 
         pch = chosen["pch"]

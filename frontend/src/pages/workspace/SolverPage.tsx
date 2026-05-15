@@ -1,10 +1,12 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import { cancelSolverTask, fetchLatestSolverTask, fetchTaskLogs, rerunSolver } from '../../services/solver';
 import { fetchProjectTopology } from '../../services/topology';
 import type { SolverTask } from '../../types/api';
 import { Button } from '@/components/ui/button';
 import { Progress } from '@/components/ui/progress';
+import { ErrorBanner } from '@/components/common/ErrorBanner';
+import StepBadge from '@/components/common/StepBadge';
 
 type TargetOption = {
   id: string;
@@ -53,6 +55,7 @@ export default function SolverPage() {
   const [generations, setGenerations] = useState('8');
   const [targetId, setTargetId] = useState('');
   const [initialSoc, setInitialSoc] = useState('0.25');
+  const [safetyTradeoff, setSafetyTradeoff] = useState(50);
   const [targetOptions, setTargetOptions] = useState<TargetOption[]>([]);
   const [lastUpdatedAt, setLastUpdatedAt] = useState<Date | null>(null);
   const [displayProgress, setDisplayProgress] = useState<ProgressSnapshot>({
@@ -137,6 +140,7 @@ export default function SolverPage() {
         target_id: targetId.trim() || undefined,
         output_subdir_name: 'integrated_optimization',
         initial_soc: clampInputNumber(initialSoc, 0, 1, 0.25),
+        safety_economy_tradeoff: safetyTradeoff / 100,
       });
       await refreshTask(true);
     } catch (err) {
@@ -187,15 +191,42 @@ export default function SolverPage() {
   const taskStatus = String(latestTask?.status ?? '').toLowerCase();
   const taskIsActive = taskStatus === 'running' || taskStatus === 'cancelling' || taskStatus === 'canceling';
   const stopDisabled = !activeTaskId || !taskIsActive || cancelling;
-  const selectedTargetOption = useMemo(
-    () => targetOptions.find((option) => option.id === targetId) ?? null,
-    [targetOptions, targetId],
-  );
   const latestRunRequest = toRecord(logsTask?.metadata?.run_request ?? latestTask?.metadata?.run_request);
   const latestTaskTargetId = String(latestRunRequest?.target_id ?? '').trim();
   const latestTaskTargetOption = latestTaskTargetId
     ? targetOptions.find((option) => option.id === latestTaskTargetId) ?? null
     : null;
+
+  // When a task is running, display the actual parameters used by that task (not local defaults).
+  const freezeInputs = taskIsActive && latestRunRequest != null;
+  const effectivePopulationSize = freezeInputs
+    ? String(latestRunRequest?.population_size ?? populationSize)
+    : populationSize;
+  const effectiveGenerations = freezeInputs
+    ? String(latestRunRequest?.generations ?? generations)
+    : generations;
+  const effectiveTargetId = freezeInputs
+    ? String(latestRunRequest?.target_id ?? targetId)
+    : targetId;
+  const effectiveInitialSoc = freezeInputs
+    ? String(latestRunRequest?.initial_soc ?? initialSoc)
+    : initialSoc;
+  const effectiveSafetyTradeoff = freezeInputs
+    ? Math.round(Number(latestRunRequest?.safety_economy_tradeoff ?? 0.5) * 100)
+    : safetyTradeoff;
+
+  function tradeoffLabel(value: number): string {
+    if (value <= 10) return '纯经济最优';
+    if (value <= 30) return '偏重经济';
+    if (value <= 70) return '经济安全并重';
+    if (value <= 90) return '偏重安全';
+    return '纯安全最优';
+  }
+
+  const selectedTargetOption = useMemo(
+    () => targetOptions.find((option) => option.id === (freezeInputs ? effectiveTargetId : targetId)) ?? null,
+    [targetOptions, targetId, freezeInputs, effectiveTargetId],
+  );
 
   useEffect(() => {
     const taskId = String(latestTask?.task_id ?? '');
@@ -215,48 +246,46 @@ export default function SolverPage() {
   return (
     <div className="min-h-screen bg-background p-6">
       <div className="mx-auto max-w-[1280px]">
-        {/* Page Header */}
-        <div className="mb-4">
-          <h1 className="m-0 text-[32px] font-extrabold tracking-tight text-foreground">计算运行</h1>
-          <p className="mt-2 text-sm text-muted-foreground">
-            查看最近任务状态、日志文本，并支持重新发起任务。
-          </p>
-        </div>
+        {error && <ErrorBanner message={error} />}
 
-        {error ? (
-          <div className="mb-4 rounded-xl border border-red-500/30 bg-red-500/10 p-3.5 text-sm text-red-600">
-            加载失败：{error}
-          </div>
-        ) : null}
-
-        {/* Run Parameters */}
-        <section className="mb-4 rounded-2xl border border-border bg-card p-5">
-          <h2 className="mb-3.5 mt-0 text-2xl font-bold text-foreground">运行参数</h2>
+        {/* Step 1: Run Parameters */}
+        <section className="mb-5 rounded-2xl border border-border bg-card p-5">
+          <StepBadge step={1} label="运行参数配置" />
+          {freezeInputs && (
+            <div className="mb-3 rounded-lg border border-amber-500/40 bg-amber-500/10 px-3.5 py-2 text-[13px] font-semibold text-amber-700 dark:text-amber-400">
+              任务运行中，参数已锁定为本次运行的实际设置。
+            </div>
+          )}
           <div className="grid gap-3" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))' }}>
-            <label className="grid gap-1.5">
+            <label htmlFor="solver-population-size" className="grid gap-1.5">
               <span className="text-[13px] font-bold text-foreground/70">population_size</span>
               <input
+                id="solver-population-size"
                 type="number" min={1} step={1}
-                value={populationSize}
-                onChange={(e) => setPopulationSize(e.target.value)}
-                className="h-10 rounded-xl border border-border bg-card px-2.5 text-sm"
+                value={effectivePopulationSize}
+                onChange={(e) => { if (!freezeInputs) setPopulationSize(e.target.value); }}
+                readOnly={freezeInputs}
+                className={`h-10 rounded-xl border px-2.5 text-sm ${freezeInputs ? 'border-border bg-muted/50 text-muted-foreground' : 'border-border bg-card'}`}
               />
             </label>
-            <label className="grid gap-1.5">
+            <label htmlFor="solver-generations" className="grid gap-1.5">
               <span className="text-[13px] font-bold text-foreground/70">generations</span>
               <input
+                id="solver-generations"
                 type="number" min={1} step={1}
-                value={generations}
-                onChange={(e) => setGenerations(e.target.value)}
-                className="h-10 rounded-xl border border-border bg-card px-2.5 text-sm"
+                value={effectiveGenerations}
+                onChange={(e) => { if (!freezeInputs) setGenerations(e.target.value); }}
+                readOnly={freezeInputs}
+                className={`h-10 rounded-xl border px-2.5 text-sm ${freezeInputs ? 'border-border bg-muted/50 text-muted-foreground' : 'border-border bg-card'}`}
               />
             </label>
-            <label className="grid gap-1.5">
+            <label htmlFor="solver-target-id" className="grid gap-1.5">
               <span className="text-[13px] font-bold text-foreground/70">配储目标负荷</span>
               <select
-                value={targetId}
-                onChange={(e) => setTargetId(e.target.value)}
-                disabled={hasNoTargetOptions}
+                id="solver-target-id"
+                value={effectiveTargetId}
+                onChange={(e) => { if (!freezeInputs) setTargetId(e.target.value); }}
+                disabled={freezeInputs || hasNoTargetOptions}
                 className="h-10 rounded-xl border border-border bg-card px-2.5 text-sm"
               >
                 <option value="">
@@ -267,15 +296,48 @@ export default function SolverPage() {
                 ))}
               </select>
             </label>
-            <label className="grid gap-1.5">
+            <label htmlFor="solver-initial-soc" className="grid gap-1.5">
               <span className="text-[13px] font-bold text-foreground/70">年度初始 SOC</span>
               <input
+                id="solver-initial-soc"
                 type="number" min={0} max={1} step={0.01}
-                value={initialSoc}
-                onChange={(e) => setInitialSoc(e.target.value)}
-                className="h-10 rounded-xl border border-border bg-card px-2.5 text-sm"
+                value={effectiveInitialSoc}
+                onChange={(e) => { if (!freezeInputs) setInitialSoc(e.target.value); }}
+                readOnly={freezeInputs}
+                className={`h-10 rounded-xl border px-2.5 text-sm ${freezeInputs ? 'border-border bg-muted/50 text-muted-foreground' : 'border-border bg-card'}`}
               />
             </label>
+          </div>
+
+          {/* Safety-Economy Tradeoff Slider */}
+          <div className="mt-4 rounded-xl border border-border bg-card p-4">
+            <div className="mb-2 flex items-center justify-between gap-3">
+              <span className="text-[13px] font-bold text-foreground/70">最终方案选取倾向</span>
+              <span className="rounded-full bg-primary/10 px-3 py-0.5 text-xs font-bold text-primary">
+                {tradeoffLabel(effectiveSafetyTradeoff)}
+              </span>
+            </div>
+            <div className="mb-2 flex items-center justify-center gap-6 text-xs font-bold">
+              <span className="text-red-600 dark:text-red-400">经济性 {100 - effectiveSafetyTradeoff}%</span>
+              <span className="text-emerald-600 dark:text-emerald-400">安全性 {effectiveSafetyTradeoff}%</span>
+            </div>
+            <div className="flex items-center gap-3">
+              <span className="text-xs font-semibold text-red-600 dark:text-red-400 whitespace-nowrap">经济性</span>
+              <input
+                type="range"
+                min={0}
+                max={100}
+                step={1}
+                value={effectiveSafetyTradeoff}
+                onChange={(e) => { if (!freezeInputs) setSafetyTradeoff(Number(e.target.value)); }}
+                disabled={freezeInputs}
+                className="h-2 w-full cursor-pointer appearance-none rounded-full bg-gradient-to-r from-red-400 via-amber-400 to-emerald-400 accent-primary"
+              />
+              <span className="text-xs font-semibold text-emerald-600 dark:text-emerald-400 whitespace-nowrap">安全性</span>
+            </div>
+            <div className="mt-1.5 text-[12px] text-muted-foreground">
+              控制最终储能方案选取时经济指标（NPV、回收期）与安全性指标（变压器越限、电压越限、线路过载）的相对权重。中间位置为经济与安全并重。
+            </div>
           </div>
 
           {hasNoTargetOptions ? (
@@ -307,20 +369,24 @@ export default function SolverPage() {
           <div className="mt-2.5 text-[13px] text-muted-foreground">
             年度初始 SOC 只用于首日开局；进入全年逐日重校核后，次日初始 SOC 会自动继承前一日末 SOC，不再强制要求单日首尾回到固定值。
           </div>
+        </section>
 
-          <div className="mt-4 flex gap-2.5 flex-wrap">
+        {/* Step 2: Run Control */}
+        <section className="mb-5 rounded-2xl border border-border bg-card p-5">
+          <StepBadge step={2} label="运行控制" />
+          <div className="mb-4 flex gap-2.5 flex-wrap items-center">
             <Button onClick={onRerun} disabled={runDisabled}>
-              {rerunning || taskIsActive ? '运行中...' : '启用求解'}
+              {rerunning ? '正在提交...' : taskIsActive ? (
+                <span className="inline-flex items-center gap-1.5">
+                  <span className="inline-block h-2.5 w-2.5 animate-pulse rounded-full bg-current" />
+                  运行中...
+                </span>
+              ) : '启用求解'}
             </Button>
             <Button variant="destructive" onClick={onCancelRun} disabled={stopDisabled}>
               {cancelling || taskStatus === 'cancelling' || taskStatus === 'canceling' ? '终止中...' : '终止运行'}
             </Button>
           </div>
-        </section>
-
-        {/* Progress */}
-        <section className="mb-4 rounded-2xl border border-border bg-card p-5">
-          <h2 className="mb-3.5 mt-0 text-2xl font-bold text-foreground">运行进度</h2>
           <div className="mb-3 flex items-center justify-between gap-3 text-foreground">
             <strong>{displayProgress.label}</strong>
             <span>{displayProgress.percent.toFixed(0)}%</span>
@@ -332,9 +398,9 @@ export default function SolverPage() {
           </div>
         </section>
 
-        {/* Latest Task Info */}
-        <section className="mb-4 rounded-2xl border border-border bg-card p-5">
-          <h2 className="mb-3.5 mt-0 text-2xl font-bold text-foreground">最近任务</h2>
+        {/* Step 3: Latest Task Info */}
+        <section className="mb-5 rounded-2xl border border-border bg-card p-5">
+          <StepBadge step={3} label="任务信息" />
           {!latestTask ? (
             <div className="text-muted-foreground">暂无任务。</div>
           ) : (
@@ -350,10 +416,12 @@ export default function SolverPage() {
           )}
         </section>
 
-        {/* Logs */}
-        <div className="grid gap-4" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(400px, 1fr))' }}>
-          <section className="rounded-2xl border border-border bg-card p-5">
-            <h2 className="mb-3.5 mt-0 text-2xl font-bold text-foreground">stdout 日志</h2>
+        {/* Step 4: Logs */}
+        <section className="rounded-2xl border border-border bg-card p-5">
+          <StepBadge step={4} label="日志输出" />
+        <div className="grid gap-4" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(400px, 1fr))' }} aria-live="polite">
+          <section>
+            <h3 className="mb-2 mt-0 text-sm font-semibold text-muted-foreground">stdout 日志</h3>
             {!activeTaskId ? (
               <div className="text-muted-foreground">暂无日志。</div>
             ) : (
@@ -363,13 +431,14 @@ export default function SolverPage() {
             )}
           </section>
 
-          <section className="rounded-2xl border border-border bg-card p-5">
-            <h2 className="mb-3.5 mt-0 text-2xl font-bold text-foreground">stderr 日志</h2>
+          <section>
+            <h3 className="mb-2 mt-0 text-sm font-semibold text-muted-foreground">stderr 日志</h3>
             <pre className="whitespace-pre-wrap break-words rounded-xl border border-border bg-muted/30 p-3 text-sm max-h-[560px] min-h-[420px] overflow-auto overscroll-contain">
               {stderrText || 'stderr 为空。'}
             </pre>
           </section>
         </div>
+        </section>
       </div>
     </div>
   );

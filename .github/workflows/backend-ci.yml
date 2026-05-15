@@ -1,0 +1,36 @@
+name: 后端 CI
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "storage_engine_project/**"
+      - "backend/**"
+      - "pyproject.toml"
+  pull_request:
+    branches: [main]
+    paths:
+      - "storage_engine_project/**"
+      - "backend/**"
+      - "pyproject.toml"
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install ruff
+      - run: ruff check storage_engine_project/ backend/
+
+  typecheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install mypy
+      - run: mypy storage_engine_project/ --ignore-missing-imports || true

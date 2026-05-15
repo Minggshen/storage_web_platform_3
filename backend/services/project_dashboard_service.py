@@ -153,6 +153,10 @@ class ProjectDashboardService:
             ProjectDashboardStepStatus.COMPLETED if bool(latest_summary) else ProjectDashboardStepStatus.NOT_STARTED
         )
 
+        # When historical results exist and no task is running, all steps show as completed
+        # (the default view reflects the latest historical task's results).
+        show_all_completed = bool(latest_summary) and latest_solver_status not in {"running", "queued"}
+
         steps = [
             WorkflowStepCard(
                 key="overview",
@@ -163,14 +167,14 @@ class ProjectDashboardService:
             WorkflowStepCard(
                 key="topology",
                 label="拓扑建模",
-                status=step_status(topology_done, topology_done),
+                status=ProjectDashboardStepStatus.COMPLETED if show_all_completed else step_status(topology_done, topology_done),
                 route=f"/projects/{project_id}/topology",
                 counts={"nodes": node_count, "edges": edge_count, "load_nodes": len(load_nodes)},
             ),
             WorkflowStepCard(
                 key="assets",
                 label="资产绑定",
-                status=step_status(assets_done, assets_done),
+                status=ProjectDashboardStepStatus.COMPLETED if show_all_completed else step_status(assets_done, assets_done),
                 route=f"/projects/{project_id}/assets",
                 counts={
                     "runtime_bound": len(runtime_bound),
@@ -182,7 +186,7 @@ class ProjectDashboardService:
             WorkflowStepCard(
                 key="build",
                 label="构建校验",
-                status=step_status(build_ready, build_manifest_exists),
+                status=ProjectDashboardStepStatus.COMPLETED if show_all_completed else step_status(build_ready, build_manifest_exists),
                 route=f"/projects/{project_id}/build",
                 counts={"build_ready": build_ready, "build_manifest_exists": build_manifest_exists},
             ),

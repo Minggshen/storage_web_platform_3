@@ -13,8 +13,17 @@ _*.txt
 _*.py
 backend/backend_runtime/
 backend/data/projects/
+backend/static/
 .DS_Store
 *.log
 .env
 
+# 压缩包交付：运行时生成的目录不提交
+data/
+logs/
+python/
+
 patent_outputs/
+
+# IDE config (any depth)
+**/.idea/

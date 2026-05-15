@@ -37,7 +37,8 @@ async def save_upload(file: Optional[UploadFile], target_dir: Path, kind: str) -
             detail=f"{kind} 文件格式不支持：{file.filename}，允许：{allowed}",
         )
 
-    target_path = target_dir / (file.filename or f"{kind}{suffix}")
+    safe_name = Path(file.filename).name if file.filename else f"{kind}{suffix}"
+    target_path = target_dir / safe_name
     with target_path.open("wb") as buffer:
         shutil.copyfileobj(file.file, buffer)
     return target_path

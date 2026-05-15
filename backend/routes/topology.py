@@ -1,6 +1,10 @@
 
 from __future__ import annotations
 
+import json
+import uuid
+from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, Body, HTTPException
@@ -12,7 +16,11 @@ from models.project_model import (
     DeleteNodeResponse,
     LoadProjectResponse,
     ReplaceTopologyResponse,
+    SaveTemplateRequest,
     TopologyCatalogResponse,
+    TopologyTemplateDetailResponse,
+    TopologyTemplateListResponse,
+    TopologyTemplateMeta,
     UpsertEdgeRequest,
     UpsertEdgeResponse,
     UpsertNodeRequest,
@@ -30,6 +38,8 @@ router = APIRouter(prefix="/api/topology", tags=["topology"])
 project_service = ProjectModelService()
 validation_service = ProjectValidationService()
 topology_service = NetworkTopologyService()
+
+TEMPLATES_DIR = Path(__file__).resolve().parent.parent / "data" / "topology_templates"
 
 
 @router.get("/catalog", response_model=TopologyCatalogResponse)
@@ -116,3 +126,73 @@ def validate_topology(project_id: str) -> ValidateProjectResponse:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     report = validation_service.validate(project)
     return ValidateProjectResponse(success=True, report=report)
+
+
+# ── Topology template CRUD ──
+
+def _ensure_templates_dir() -> Path:
+    TEMPLATES_DIR.mkdir(parents=True, exist_ok=True)
+    return TEMPLATES_DIR
+
+
+@router.get("/templates", response_model=TopologyTemplateListResponse)
+def list_templates() -> TopologyTemplateListResponse:
+    _ensure_templates_dir()
+    templates: list[TopologyTemplateMeta] = []
+    for path in sorted(TEMPLATES_DIR.glob("*.json"), key=lambda p: p.stat().st_mtime, reverse=True):
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+            nodes = data.get("topology", {}).get("nodes", [])
+            edges = data.get("topology", {}).get("edges", [])
+            templates.append(TopologyTemplateMeta(
+                template_id=data.get("template_id", path.stem),
+                name=data.get("name", path.stem),
+                description=data.get("description", ""),
+                created_at=data.get("created_at", ""),
+                node_count=len(nodes) if isinstance(nodes, list) else 0,
+                edge_count=len(edges) if isinstance(edges, list) else 0,
+            ))
+        except Exception:
+            continue
+    return TopologyTemplateListResponse(success=True, templates=templates)
+
+
+@router.get("/templates/{template_id}", response_model=TopologyTemplateDetailResponse)
+def get_template(template_id: str) -> TopologyTemplateDetailResponse:
+    _ensure_templates_dir()
+    path = TEMPLATES_DIR / f"{template_id}.json"
+    if not path.exists():
+        raise HTTPException(status_code=404, detail=f"模板 {template_id} 不存在。")
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"读取模板失败：{exc}") from exc
+    return TopologyTemplateDetailResponse(success=True, template=data)
+
+
+@router.post("/templates", response_model=TopologyTemplateDetailResponse)
+def save_template(request: SaveTemplateRequest) -> TopologyTemplateDetailResponse:
+    if not request.name.strip():
+        raise HTTPException(status_code=400, detail="模板名称不能为空。")
+    _ensure_templates_dir()
+    template_id = uuid.uuid4().hex[:12]
+    data: dict[str, Any] = {
+        "template_id": template_id,
+        "name": request.name.strip(),
+        "description": (request.description or "").strip(),
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "topology": request.topology,
+    }
+    path = TEMPLATES_DIR / f"{template_id}.json"
+    path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    return TopologyTemplateDetailResponse(success=True, template=data)
+
+
+@router.delete("/templates/{template_id}")
+def delete_template(template_id: str) -> dict[str, Any]:
+    _ensure_templates_dir()
+    path = TEMPLATES_DIR / f"{template_id}.json"
+    if not path.exists():
+        raise HTTPException(status_code=404, detail=f"模板 {template_id} 不存在。")
+    path.unlink()
+    return {"success": True, "template_id": template_id}

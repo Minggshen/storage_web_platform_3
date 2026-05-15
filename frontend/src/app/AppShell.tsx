@@ -5,6 +5,7 @@ import type { DashboardPayload, StepPayload } from '../types/api';
 import { Progress } from '@/components/ui/progress';
 import { cn } from '@/lib/utils';
 import { ThemeToggle } from '@/components/common/ThemeToggle';
+import { ErrorBanner } from '@/components/common/ErrorBanner';
 
 const navItems = [
   { key: 'overview', label: '项目总览', path: 'overview' },
@@ -19,21 +20,31 @@ export default function AppShell() {
   const location = useLocation();
   const { projectId = '' } = useParams();
   const [dashboard, setDashboard] = useState<DashboardPayload | null>(null);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
     async function loadDashboard() {
       if (!projectId) return;
+      setError(null);
       try {
         const data = await getProjectDashboard(projectId);
         if (!cancelled) setDashboard(data.dashboard);
-      } catch {
-        if (!cancelled) setDashboard(null);
+      } catch (err) {
+        if (!cancelled) {
+          setDashboard(null);
+          setError(err instanceof Error ? err.message : String(err));
+        }
       }
     }
     void loadDashboard();
+    // Poll dashboard every 10s so the sidebar stays in sync with solver status.
+    const timer = window.setInterval(() => {
+      if (!cancelled && projectId) loadDashboard();
+    }, 10000);
     return () => {
       cancelled = true;
+      window.clearInterval(timer);
     };
   }, [projectId, location.pathname]);
 
@@ -121,11 +132,15 @@ export default function AppShell() {
           </nav>
 
           {/* Progress bar */}
-          <div className="mt-5 border-t border-sidebar-border pt-4">
+          <div className="mt-5 border-t border-sidebar-border pt-4" aria-live="polite">
             <div className="mb-2.5 text-xs font-bold text-sidebar-foreground/60">
               完成进度
             </div>
-            <Progress value={progressPct} className="h-2 bg-sidebar-accent/50" />
+            <Progress
+              value={progressPct}
+              className="h-2 bg-sidebar-accent/50"
+              aria-label={`完成进度 ${progressPct}%`}
+            />
             <div className="mt-2 text-right text-xs text-sidebar-foreground/50">
               {completedCount} / {steps.length} 步
             </div>
@@ -134,6 +149,7 @@ export default function AppShell() {
 
         {/* Main content */}
         <main>
+          {error && <ErrorBanner message={error} />}
           <Outlet />
         </main>
       </div>

@@ -14,12 +14,26 @@
       "Bash(\"d:/storage_web_platform_3/storage_engine_project/.venv/Scripts/python.exe\" -m venv \"d:/storage_web_platform_3/.venv\" > \"d:/storage_web_platform_3/_tmp_venv_create.txt\" 2>&1)",
       "Bash(\"d:/storage_web_platform_3/.venv/Scripts/python.exe\" -m pip install --upgrade pip setuptools wheel)",
       "Bash(cmd /c \"del /f d:\\\\storage_web_platform_3\\\\_tmp_*.txt && echo DONE_TMP\")",
-      "Bash(cmd /c \"del /f d:\\\\storage_web_platform_3\\\\storage_engine_project\\\\pip-freeze-engine-full.txt d:\\\\storage_web_platform_3\\\\backend\\\\pip-freeze-backend-full.txt && echo DONE_FREEZE\")"
+      "Bash(cmd /c \"del /f d:\\\\storage_web_platform_3\\\\storage_engine_project\\\\pip-freeze-engine-full.txt d:\\\\storage_web_platform_3\\\\backend\\\\pip-freeze-backend-full.txt && echo DONE_FREEZE\")",
+      "Read(//c/Users/M/.claude/plugins/**)",
+      "Read(//c/Users/M/.claude/**)",
+      "Bash(\"D:/Git/bin/git.exe\" -C /d/storage_web_platform_3 log --oneline -20)",
+      "Bash(bash \"C:/Users/M/.claude/plugins/cache/claude-plugins-official/superpowers/5.1.0/skills/brainstorming/scripts/start-server.sh\" --project-dir \"d:/storage_web_platform_3\")",
+      "Bash(mkdir -p \"d:/storage_web_platform_3/docs/superpowers/specs\")",
+      "Bash(pnpm build *)",
+      "Bash(npx vite *)"
     ],
     "additionalDirectories": [
       "d:\\storage_web_platform_3\\storage_engine_project",
       "d:\\storage_web_platform_3\\backend",
-      "d:\\storage_web_platform_3"
+      "d:\\storage_web_platform_3",
+      "d:\\storage_web_platform_3\\docs\\superpowers",
+      "D:\\storage_web_platform_3"
     ]
+  },
+  "enabledPlugins": {
+    "frontend-design@claude-plugins-official": true,
+    "superpowers@claude-plugins-official": true,
+    "skill-creator@claude-plugins-official": true
   }
 }

@@ -1,4 +1,4 @@
-const API_BASE = import.meta.env.VITE_API_BASE_URL ?? 'http://127.0.0.1:8000';
+const API_BASE = import.meta.env.VITE_API_BASE_URL ?? '';
 const API_TIMEOUT_FROM_ENV = Number(import.meta.env.VITE_API_TIMEOUT_MS ?? 60000);
 const API_TIMEOUT_MS = Number.isFinite(API_TIMEOUT_FROM_ENV) && API_TIMEOUT_FROM_ENV > 0 ? API_TIMEOUT_FROM_ENV : 60000;
 
@@ -23,7 +23,7 @@ export async function http<T>(path: string, init?: RequestInit): Promise<T> {
       throw new Error(`请求超时：${API_BASE}${path} 在 ${Math.round(API_TIMEOUT_MS / 1000)} 秒内没有响应。`);
     }
     if (message.includes('Failed to fetch')) {
-      throw new Error(`无法连接后端服务：${API_BASE}。请确认 backend 已启动且 VITE_API_BASE_URL 指向正确端口。`);
+      throw new Error(API_BASE ? `无法连接后端服务：${API_BASE}` : '无法连接后端服务，请确认服务已启动。');
     }
     throw err;
   } finally {

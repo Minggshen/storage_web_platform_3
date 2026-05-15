@@ -6,7 +6,7 @@ export type ProjectTopology = {
   economic_parameters?: Record<string, unknown>;
 };
 
-const API_BASE = import.meta.env.VITE_API_BASE_URL ?? 'http://127.0.0.1:8000';
+const API_BASE = import.meta.env.VITE_API_BASE_URL ?? '';
 
 function normalizeTopology(data: any): ProjectTopology {
   if (data?.project?.network) {
@@ -82,4 +82,45 @@ export async function saveProjectTopology(
     });
     return normalizeTopology(data);
   }
+}
+
+// ── Topology template APIs ──
+
+export type TemplateMeta = {
+  template_id: string;
+  name: string;
+  description: string;
+  created_at: string;
+  node_count: number;
+  edge_count: number;
+};
+
+export async function fetchTemplates(): Promise<TemplateMeta[]> {
+  const data = await http<{ success: boolean; templates: TemplateMeta[] }>('/api/topology/templates');
+  return data.templates ?? [];
+}
+
+export async function saveTemplate(name: string, description: string, topology: ProjectTopology): Promise<string> {
+  const data = await http<{ success: boolean; template: Record<string, unknown> }>('/api/topology/templates', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name, description, topology }),
+  });
+  return String(data.template?.template_id ?? '');
+}
+
+export async function fetchTemplateDetail(templateId: string): Promise<ProjectTopology> {
+  const data = await http<{ success: boolean; template: Record<string, unknown> }>(`/api/topology/templates/${templateId}`);
+  const topology = (data.template?.topology ?? data.template ?? {}) as Record<string, unknown>;
+  return {
+    nodes: Array.isArray(topology.nodes) ? topology.nodes : [],
+    edges: Array.isArray(topology.edges) ? topology.edges : [],
+    economic_parameters: typeof topology.economic_parameters === 'object' && topology.economic_parameters !== null
+      ? topology.economic_parameters as Record<string, unknown>
+      : {},
+  };
+}
+
+export async function deleteTemplate(templateId: string): Promise<void> {
+  await http<unknown>(`/api/topology/templates/${templateId}`, { method: 'DELETE' });
 }

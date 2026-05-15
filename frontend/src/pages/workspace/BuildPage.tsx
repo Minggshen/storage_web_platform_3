@@ -1,5 +1,6 @@
-import React, { useEffect, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
+import { ErrorBanner } from '@/components/common/ErrorBanner';
 import {
   fetchBuildManifest,
   fetchBuildPreview,
@@ -10,6 +11,7 @@ import {
   type GridHealthResponse,
 } from '../../services/build';
 import { Button } from '@/components/ui/button';
+import StepBadge from '@/components/common/StepBadge';
 
 export default function BuildPage() {
   const { projectId = '' } = useParams();
@@ -21,6 +23,9 @@ export default function BuildPage() {
   const [manifest, setManifest] = useState<BuildManifest | null>(null);
   const [gridHealth, setGridHealth] = useState<GridHealthResponse | null>(null);
   const [serviceLineFilter, setServiceLineFilter] = useState<'all' | 'large' | 'small'>('all');
+  const [filePreviewExpanded, setFilePreviewExpanded] = useState(false);
+  const [showAutoServiceLines, setShowAutoServiceLines] = useState(false);
+  const [showCapacityTable, setShowCapacityTable] = useState(false);
 
   async function loadAll() {
     if (!projectId) return;
@@ -94,63 +99,42 @@ export default function BuildPage() {
   const errors = preview?.summary.errors ?? manifest?.errors ?? [];
   const workspaceWarnings = workspace?.warnings ?? [];
   const workspaceErrors = workspace?.errors ?? [];
+  const overloadedCount = gridHealth?.grid_health.summary.overloaded_transformer_count ?? 0;
 
   return (
     <div className="min-h-screen bg-background p-5">
-      <div className="mx-auto max-w-[1600px]">
-        <div className="mb-4">
-          <Link to="/projects" className="font-semibold text-primary no-underline hover:underline">
-            &larr; 返回项目列表
-          </Link>
-        </div>
+      <div className="mx-auto">
+        <Link to="/projects" className="mb-4 inline-block text-xs text-primary no-underline hover:underline">
+          &larr; 返回项目列表
+        </Link>
 
-        {/* Hero */}
-        <section className="mb-4 rounded-2xl border border-border bg-card p-5">
-          <div className="mb-2 text-xs text-muted-foreground">构建与校验</div>
-          <h1 className="m-0 text-[30px] font-extrabold tracking-tight text-foreground">Build 阶段 Solver Workspace 生成</h1>
-          <p className="mt-2 text-sm text-muted-foreground">
-            将前端可视化拓扑、资产绑定与运行输入编译为求解器可直接调用的工作目录。
-          </p>
-          <div className="mt-2.5 text-sm text-muted-foreground">项目 ID：{projectId}</div>
-        </section>
+        {error && <ErrorBanner message={error} />}
 
-        {/* Action buttons */}
-        <div className="mb-4 flex gap-3 flex-wrap">
-          <Button variant="outline" size="sm" asChild>
-            <Link to={`/projects/${projectId}/topology`}>返回拓扑建模</Link>
-          </Button>
-          <Button variant="outline" size="sm" asChild>
-            <Link to={`/projects/${projectId}/solver`}>进入计算运行</Link>
-          </Button>
-          <Button variant="outline" size="sm" onClick={() => void loadAll()} disabled={loading}>
-            {loading ? '刷新中...' : '刷新'}
-          </Button>
-          <Button variant="outline" size="sm" onClick={() => void onCheckHealth()} disabled={checkingHealth}>
-            {checkingHealth ? '检查中...' : '电网健康检查'}
-          </Button>
-          <Button size="sm" onClick={() => void onBuild()} disabled={building}>
-            {building ? '构建中...' : '生成 Solver Workspace'}
-          </Button>
-        </div>
-
-        {error ? (
-          <div className="mb-3 rounded-xl border border-red-500/30 bg-red-500/10 p-3 text-sm text-red-600">
-            错误：{error}
+        {/* Step 1: Build Workspace */}
+        <section className="mb-5 rounded-2xl border border-border bg-card p-5">
+          <div className="flex items-center justify-between gap-3 flex-wrap">
+            <StepBadge step={1} label="构建 Workspace" />
+            <span className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-semibold ${
+              workspace?.ready_for_solver
+                ? 'border border-emerald-500/30 bg-emerald-500/10 text-emerald-600'
+                : 'border border-amber-500/30 bg-amber-500/10 text-amber-600'
+            }`}>
+              {workspace?.ready_for_solver ? 'ready_for_solver ✓' : '未就绪'}
+            </span>
           </div>
-        ) : null}
-
-        {/* Stat cards */}
-        <div className="mb-4 grid grid-cols-4 gap-4">
-          <StatCard title="ready_for_build" value={String(preview?.summary.ready_for_build ?? manifest?.ready_for_build ?? false)} />
-          <StatCard title="warnings" value={String(warnings.length)} />
-          <StatCard title="errors" value={String(errors.length)} />
-          <StatCard title="ready_for_solver" value={String(workspace?.ready_for_solver ?? false)} />
-        </div>
+          <div className="mb-4 flex gap-2 flex-wrap">
+            <Button size="sm" onClick={() => void onBuild()} disabled={building}>
+              {building ? '构建中...' : '生成 Solver Workspace'}
+            </Button>
+            <Button variant="outline" size="sm" onClick={() => void loadAll()} disabled={loading}>
+              {loading ? '刷新中...' : '刷新'}
+            </Button>
+          </div>
 
         {/* Preview + Workspace */}
-        <div className="mb-4 grid gap-4 items-start" style={{ gridTemplateColumns: '1.2fr 1fr' }}>
+        <div className="mb-4 grid gap-4 items-start" style={{ gridTemplateColumns: '1fr 1.5fr' }}>
           {/* Build Preview */}
-          <section className="rounded-2xl border border-border bg-card p-4">
+          <section className="rounded-2xl border border-border bg-card p-4" style={{ maxHeight: 530, overflowY: 'auto' }}>
             <h2 className="mb-3.5 mt-0 text-xl font-bold text-foreground">构建预览</h2>
             {preview ? (
               <>
@@ -176,7 +160,7 @@ export default function BuildPage() {
           </section>
 
           {/* Solver Workspace */}
-          <section className="rounded-2xl border border-border bg-card p-4">
+          <section className="rounded-2xl border border-border bg-card p-4" style={{ maxHeight: 530, overflowY: 'auto' }}>
             <h2 className="mb-3.5 mt-0 text-xl font-bold text-foreground">求解器工作目录</h2>
             {manifest ? (
               <>
@@ -206,12 +190,15 @@ export default function BuildPage() {
             )}
           </section>
         </div>
+        </section>
 
-        {/* DSS Structure Checks + OpenDSS Probe */}
-        <div className="mb-4 grid grid-cols-2 gap-4">
-          <section className="rounded-2xl border border-border bg-card p-4">
-            <div className="mb-3.5 flex items-center justify-between gap-3">
-              <h2 className="m-0 text-xl font-bold text-foreground">DSS 结构自检</h2>
+        {/* Step 2: Compile Verification */}
+        <section className="mb-5 rounded-2xl border border-border bg-card p-5">
+          <StepBadge step={2} label="编译验证" />
+        <div className="grid grid-cols-2 gap-4">
+          <section className="rounded-xl border border-border bg-muted/30 p-4">
+            <div className="mb-2 flex items-center justify-between gap-3">
+              <h2 className="m-0 text-base font-bold text-foreground">DSS 结构自检</h2>
               <LocalBadge
                 tone={structuralChecks?.passed ? 'good' : 'warn'}
                 text={structuralChecks ? (structuralChecks.passed ? '通过' : '存在问题') : '未生成'}
@@ -249,9 +236,9 @@ export default function BuildPage() {
             )}
           </section>
 
-          <section className="rounded-2xl border border-border bg-card p-4">
-            <div className="mb-3.5 flex items-center justify-between gap-3">
-              <h2 className="m-0 text-xl font-bold text-foreground">OpenDSS 实编译探测</h2>
+          <section className="rounded-xl border border-border bg-muted/30 p-4">
+            <div className="mb-2 flex items-center justify-between gap-3">
+              <h2 className="m-0 text-base font-bold text-foreground">OpenDSS 实编译探测</h2>
               <LocalBadge tone={probeTone(compileProbe?.status)} text={probeLabel(compileProbe?.status)} />
             </div>
             {compileProbe ? (
@@ -276,33 +263,62 @@ export default function BuildPage() {
             )}
           </section>
         </div>
+        </section>
 
-        {/* Grid Health */}
+        {/* Step 3: Grid Diagnostics */}
+        <section className="mb-5 rounded-2xl border border-border bg-card p-5">
+          <div className="flex items-center justify-between gap-3 flex-wrap">
+            <StepBadge step={3} label="电网诊断与线路建议" />
+            <Button variant="outline" size="sm" onClick={() => void onCheckHealth()} disabled={checkingHealth}>
+              {checkingHealth ? '检查中...' : '电网健康检查'}
+            </Button>
+          </div>
         {gridHealth ? (
-          <section className="mb-4 rounded-2xl border border-border bg-card p-4">
-            <div className="mb-3.5 flex items-center justify-between gap-3">
-              <h2 className="m-0 text-xl font-bold text-foreground">电网健康检查</h2>
+          <div className="mt-3 rounded-xl border border-border bg-muted/30 p-4">
+            <div className="mb-2 flex items-center justify-between gap-3">
+              <h2 className="m-0 text-base font-bold text-foreground">电网健康检查</h2>
               <LocalBadge tone={gridHealth.grid_health.passed ? 'good' : 'warn'} text={gridHealth.grid_health.passed ? '通过' : '存在问题'} />
             </div>
-            <div className="mb-3 grid grid-cols-3 gap-3">
-              <MiniMetric label="变压器数" value={String(gridHealth.grid_health.summary.transformer_count)} />
-              <MiniMetric label="过载变压器" value={String(trunc(gridHealth.grid_health.summary.overloaded_transformer_count))} />
-              <MiniMetric label="总负荷 kW" value={String(Math.round(gridHealth.grid_health.summary.total_load_kw))} />
-              <MiniMetric label="总负荷 kvar" value={String(Math.round(gridHealth.grid_health.summary.total_load_kvar))} />
+            <div className="mb-4 flex gap-3 flex-wrap">
+              <div className="flex items-center gap-3 rounded-xl border border-border bg-card px-4 py-2.5">
+                <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-blue-500/10 text-sm font-bold text-blue-600">{gridHealth.grid_health.summary.transformer_count}</span>
+                <span className="text-xs text-muted-foreground">变压器数</span>
+              </div>
+              <div className={`flex items-center gap-3 rounded-xl border px-4 py-2.5 ${overloadedCount > 0 ? 'border-red-500/30 bg-red-500/5' : 'border-emerald-500/30 bg-emerald-500/5'}`}>
+                <span className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-sm font-bold ${overloadedCount > 0 ? 'bg-red-500/10 text-red-600' : 'bg-emerald-500/10 text-emerald-600'}`}>{overloadedCount}</span>
+                <span className="text-xs text-muted-foreground">过载变压器</span>
+              </div>
+              <div className="flex items-center gap-3 rounded-xl border border-border bg-card px-4 py-2.5">
+                <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-amber-500/10 text-sm font-bold text-amber-600">{Math.round(gridHealth.grid_health.summary.total_load_kw).toLocaleString()}</span>
+                <span className="text-xs text-muted-foreground">总负荷 kW</span>
+              </div>
+              <div className="flex items-center gap-3 rounded-xl border border-border bg-card px-4 py-2.5">
+                <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-purple-500/10 text-sm font-bold text-purple-600">{Math.round(gridHealth.grid_health.summary.total_load_kvar).toLocaleString()}</span>
+                <span className="text-xs text-muted-foreground">总负荷 kvar</span>
+              </div>
             </div>
-            {gridHealth.grid_health.checks.length ? (
-              <div className="mt-4"><MiniTitle>检查项</MiniTitle>
-                <div className="flex flex-col gap-2.5">
-                  {gridHealth.grid_health.checks.map((item, i) => (
-                    <div key={`${item.name}_${i}`} className="grid gap-2.5 items-start rounded-xl border border-border bg-muted/30 p-3" style={{ gridTemplateColumns: 'auto 1fr' }}>
-                      <LocalBadge tone={item.status === 'pass' ? 'good' : 'warn'} text={item.status === 'pass' ? 'PASS' : 'FAIL'} />
-                      <div className="min-w-0">
-                        <div className="font-bold text-foreground">{item.name}</div>
-                        <div className="mt-0.5 text-sm text-muted-foreground break-words">{item.detail}</div>
-                      </div>
-                    </div>
-                  ))}
+            {gridHealth.grid_health.summary.transformer_count > 0 ? (
+              <div className="mb-3">
+                <div className="mb-1.5 flex items-center justify-between text-xs">
+                  <span className="text-muted-foreground">变压器过载占比</span>
+                  <span className={overloadedCount > 0 ? 'text-red-600 font-semibold' : 'text-emerald-600 font-semibold'}>
+                    {overloadedCount} / {gridHealth.grid_health.summary.transformer_count} 台
+                  </span>
                 </div>
+                <PctBar value={overloadedCount} max={gridHealth.grid_health.summary.transformer_count} tone={overloadedCount > 0 ? 'red' : 'green'} />
+              </div>
+            ) : null}
+            {gridHealth.grid_health.checks.length ? (
+              <div className="flex flex-col gap-2">
+                {gridHealth.grid_health.checks.map((item, i) => (
+                  <div key={`${item.name}_${i}`} className="grid gap-2.5 items-start rounded-xl border bg-muted/20 p-3" style={{ gridTemplateColumns: 'auto 1fr', borderLeft: `3px solid ${item.status === 'pass' ? '#10b981' : '#ef4444'}` }}>
+                    <span className={`inline-flex items-center justify-center rounded-full px-2 py-0.5 text-[11px] font-bold ${item.status === 'pass' ? 'bg-emerald-500/10 text-emerald-600' : 'bg-red-500/10 text-red-600'}`}>{item.status === 'pass' ? 'PASS' : 'FAIL'}</span>
+                    <div className="min-w-0">
+                      <div className="font-bold text-foreground text-sm">{item.name}</div>
+                      <div className="mt-0.5 text-xs text-muted-foreground break-words">{item.detail}</div>
+                    </div>
+                  </div>
+                ))}
               </div>
             ) : null}
             {gridHealth.grid_health.warnings.length ? <div className="mt-4"><MiniTitle>Warnings</MiniTitle><ul className="m-0 pl-4.5 text-foreground/80 leading-relaxed">{gridHealth.grid_health.warnings.map((item, i) => <li key={i}>{item}</li>)}</ul></div> : null}
@@ -318,8 +334,15 @@ export default function BuildPage() {
                       </div>
                       <div className="leading-relaxed text-amber-900/80">{rec.message}</div>
                       {rec.rated_kva !== undefined && rec.load_kva !== undefined && rec.loading_pct !== undefined ? (
-                        <div className="mt-2 text-xs text-amber-900/70">
-                          额定: {Math.round(rec.rated_kva)} kVA | 实际: {Math.round(rec.load_kva)} kVA | 负载率: {rec.loading_pct.toFixed(1)}%
+                        <div className="mt-2">
+                          <div className="mb-1 flex items-center justify-between text-xs">
+                            <span className="text-amber-900/70">负载率</span>
+                            <span className={`font-semibold ${rec.loading_pct > 100 ? 'text-red-600' : rec.loading_pct > 80 ? 'text-amber-600' : 'text-emerald-600'}`}>{rec.loading_pct.toFixed(1)}%</span>
+                          </div>
+                          <PctBar value={rec.loading_pct} max={100} tone={rec.loading_pct > 100 ? 'red' : rec.loading_pct > 80 ? 'amber' : 'green'} />
+                          <div className="mt-1.5 text-xs text-amber-900/70">
+                            额定: {Math.round(rec.rated_kva)} kVA | 实际: {Math.round(rec.load_kva)} kVA
+                          </div>
                         </div>
                       ) : null}
                       {rec.current_tap !== undefined && rec.recommended_tap !== undefined ? (
@@ -337,20 +360,28 @@ export default function BuildPage() {
                 </div>
               </div>
             ) : null}
-          </section>
+          </div>
         ) : null}
 
         {/* Auto Service Lines */}
         <section className="mb-4 rounded-2xl border border-border bg-card p-4">
-          <div className="mb-3.5 flex items-center justify-between gap-3">
-            <h2 className="m-0 text-xl font-bold text-foreground">自动估算接入线</h2>
-            <LocalBadge tone={autoServiceLines.length ? 'good' : 'neutral'} text={autoServiceLines.length ? `${autoServiceLines.length} 条` : '暂无'} />
+          <div
+            className="flex items-center justify-between gap-3 cursor-pointer select-none"
+            onClick={() => setShowAutoServiceLines(!showAutoServiceLines)}
+          >
+            <div className="flex items-center gap-3">
+              <h2 className="m-0 text-lg font-bold text-foreground">自动估算接入线</h2>
+              <LocalBadge tone={autoServiceLines.length ? 'good' : 'neutral'} text={autoServiceLines.length ? `${autoServiceLines.length} 条` : '暂无'} />
+            </div>
+            <span className="text-xs text-muted-foreground shrink-0">{showAutoServiceLines ? '▼ 收起' : '▶ 展开'}</span>
           </div>
-          <div className="mb-3 text-sm text-muted-foreground leading-relaxed">
-            这里列出"用户配变低压侧到负荷/资源接入点"的自动估算结果。系统会综合参考用户配变容量和接入规模，给出额定电流与应急电流。
+          {showAutoServiceLines && (
+          <>
+          <div className="mt-3 text-sm text-muted-foreground leading-relaxed">
+            低压侧到负荷/资源接入点的自动估算，综合配变容量与接入规模给出额定/应急电流。
           </div>
           {autoServiceLines.length ? (
-            <div className="mb-3 flex gap-2 items-center flex-wrap">
+            <div className="mt-3 flex gap-2 items-center flex-wrap">
               <button type="button" onClick={() => setServiceLineFilter('all')} className={serviceLineFilter === 'all' ? 'inline-flex items-center justify-center rounded-full border border-blue-500/30 bg-blue-500/10 px-3 py-2 text-xs font-semibold text-blue-600' : 'inline-flex items-center justify-center rounded-full border border-border bg-card px-3 py-2 text-xs font-semibold text-foreground/80 cursor-pointer'}>全部</button>
               <button type="button" onClick={() => setServiceLineFilter('large')} className={serviceLineFilter === 'large' ? 'inline-flex items-center justify-center rounded-full border border-blue-500/30 bg-blue-500/10 px-3 py-2 text-xs font-semibold text-blue-600' : 'inline-flex items-center justify-center rounded-full border border-border bg-card px-3 py-2 text-xs font-semibold text-foreground/80 cursor-pointer'}>仅看偏大</button>
               <button type="button" onClick={() => setServiceLineFilter('small')} className={serviceLineFilter === 'small' ? 'inline-flex items-center justify-center rounded-full border border-blue-500/30 bg-blue-500/10 px-3 py-2 text-xs font-semibold text-blue-600' : 'inline-flex items-center justify-center rounded-full border border-border bg-card px-3 py-2 text-xs font-semibold text-foreground/80 cursor-pointer'}>仅看偏小</button>
@@ -358,8 +389,8 @@ export default function BuildPage() {
             </div>
           ) : null}
           {filteredAutoServiceLines.length ? (
-            <div className="overflow-x-auto">
-              <table className="w-full min-w-[860px] border-collapse">
+            <div className="mt-3 overflow-x-auto">
+              <table className="w-full min-w-[860px] border-collapse" aria-label="构建预览自动估算接入线">
                 <thead>
                   <tr>
                     {['线路','相对分组','起止母线','线路/等值方式','额定电流','应急电流','等值阻抗','估算依据'].map((h) => (
@@ -388,20 +419,30 @@ export default function BuildPage() {
               {autoServiceLines.length ? '当前筛选条件下没有匹配的自动接入线。' : '当前 build 摘要里没有识别到自动估算的低压接入线。'}
             </div>
           )}
+          </>
+          )}
         </section>
 
         {/* Capacity Recommendations */}
         <section className="mb-4 rounded-2xl border border-border bg-card p-4">
-          <div className="mb-3.5 flex items-center justify-between gap-3">
-            <h2 className="m-0 text-xl font-bold text-foreground">线路承载能力建议</h2>
-            <LocalBadge tone={capacityProblemLines.length ? 'warn' : 'good'} text={capacityProblemLines.length ? `${capacityProblemLines.length} 条需关注` : '未发现超额定'} />
+          <div
+            className="flex items-center justify-between gap-3 cursor-pointer select-none"
+            onClick={() => setShowCapacityTable(!showCapacityTable)}
+          >
+            <div className="flex items-center gap-3">
+              <h2 className="m-0 text-lg font-bold text-foreground">线路承载能力建议</h2>
+              <LocalBadge tone={capacityProblemLines.length ? 'warn' : 'good'} text={capacityProblemLines.length ? `${capacityProblemLines.length} 条需关注` : '未发现超额定'} />
+            </div>
+            <span className="text-xs text-muted-foreground shrink-0">{showCapacityTable ? '▼ 收起' : '▶ 展开'}</span>
           </div>
-          <div className="mb-3 text-sm text-muted-foreground leading-relaxed">
-            该表按拓扑方向汇总下游配变/负荷容量，估算线路额定电流是否够用；实际最终是否过载仍以 OpenDSS 潮流结果为准。
+          {showCapacityTable && (
+          <>
+          <div className="mt-3 text-sm text-muted-foreground leading-relaxed">
+            按拓扑方向汇总下游容量，估算线路额定电流是否够用；最终以 OpenDSS 潮流结果为准。
           </div>
           {capacityProblemLines.length ? (
             <div className="overflow-x-auto">
-              <table className="w-full min-w-[860px] border-collapse">
+              <table className="w-full min-w-[860px] border-collapse" aria-label="线路承载能力建议">
                 <thead>
                   <tr>
                     {['线路','起止母线','电压等级','当前额定','估算需求','建议'].map((h) => (
@@ -424,19 +465,33 @@ export default function BuildPage() {
               </table>
             </div>
           ) : <div className="text-muted-foreground">当前 build 摘要未发现额定电流低于下游容量估算值的线路。</div>}
+          </>
+          )}
+        </section>
         </section>
 
-        {/* Textarea previews */}
-        <div className="grid grid-cols-2 gap-4">
-          <section className="rounded-2xl border border-border bg-card p-4">
-            <h2 className="mb-3.5 mt-0 text-xl font-bold text-foreground">Master.dss 预览</h2>
+        {/* Step 4: Output File Preview */}
+        <section className="rounded-2xl border border-border bg-card p-5">
+          <div
+            className="cursor-pointer"
+            onClick={() => setFilePreviewExpanded(!filePreviewExpanded)}
+          >
+            <StepBadge step={4} label="输出文件预览" />
+            <span className="ml-9 text-xs text-muted-foreground">{filePreviewExpanded ? '▼ 点击收起' : '▶ 点击展开'}</span>
+          </div>
+          {filePreviewExpanded && (
+        <div className="mt-3 grid grid-cols-2 gap-4">
+          <section className="rounded-xl border border-border bg-muted/30 p-4">
+            <h3 className="mb-2 mt-0 text-sm font-semibold text-muted-foreground">Master.dss 预览</h3>
             <textarea value={manifest?.dss_master_preview ?? ''} readOnly spellCheck={false} className="w-full min-h-[360px] rounded-xl border border-border bg-muted/30 p-3 font-mono text-xs leading-relaxed resize-y box-border overscroll-contain" />
           </section>
-          <section className="rounded-2xl border border-border bg-card p-4">
-            <h2 className="mb-3.5 mt-0 text-xl font-bold text-foreground">dss_compile_summary.json</h2>
+          <section className="rounded-xl border border-border bg-muted/30 p-4">
+            <h3 className="mb-2 mt-0 text-sm font-semibold text-muted-foreground">dss_compile_summary.json</h3>
             <textarea value={manifest ? JSON.stringify(manifest.dss_compile_summary ?? {}, null, 2) : ''} readOnly spellCheck={false} className="w-full min-h-[360px] rounded-xl border border-border bg-muted/30 p-3 font-mono text-xs leading-relaxed resize-y box-border overscroll-contain" />
           </section>
         </div>
+          )}
+        </section>
       </div>
     </div>
   );
@@ -450,15 +505,6 @@ function Cell({ children }: { children: React.ReactNode }) {
 
 function MiniTitle({ children }: { children: React.ReactNode }) {
   return <h3 className="mb-2 mt-0 text-[15px] font-semibold text-foreground">{children}</h3>;
-}
-
-function StatCard(props: { title: string; value: string }) {
-  return (
-    <div className="rounded-2xl border border-border bg-card p-4">
-      <div className="mb-2.5 text-[13px] text-muted-foreground">{props.title}</div>
-      <div className="text-xl font-extrabold text-foreground">{props.value}</div>
-    </div>
-  );
 }
 
 function SummaryRow(props: { label: string; value: string }) {
@@ -475,6 +521,19 @@ function MiniMetric(props: { label: string; value: string }) {
     <div className="rounded-xl border border-border bg-muted/30 p-3">
       <div className="text-xs text-muted-foreground">{props.label}</div>
       <div className="mt-1.5 text-lg font-extrabold text-foreground">{props.value}</div>
+    </div>
+  );
+}
+
+function PctBar({ value, max, tone }: { value: number; max: number; tone?: 'red' | 'amber' | 'green' }) {
+  const pct = max > 0 ? Math.min(100, Math.round((value / max) * 100)) : 0;
+  const color = tone === 'red' ? '#ef4444' : tone === 'amber' ? '#f59e0b' : '#10b981';
+  return (
+    <div className="flex items-center gap-2">
+      <div className="h-2 flex-1 rounded-full bg-muted overflow-hidden">
+        <div className="h-full rounded-full" style={{ width: `${pct}%`, backgroundColor: color, transition: 'width 0.3s ease' }} />
+      </div>
+      <span className="text-xs text-muted-foreground w-10 text-right tabular-nums">{pct}%</span>
     </div>
   );
 }
@@ -559,4 +618,3 @@ function serviceLineSizeLabel(level: 'large' | 'small' | 'normal') {
   return '项目内常规';
 }
 
-function trunc(v: number) { return String(v); }

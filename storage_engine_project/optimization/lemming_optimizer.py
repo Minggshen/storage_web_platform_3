@@ -6,10 +6,13 @@ from typing import Any
 import numpy as np
 
 from storage_engine_project.data.annual_context_builder import AnnualOperationContext
+from storage_engine_project.logging_config import get_logger
 from storage_engine_project.optimization.optimizer_bridge import OptimizerBridge
 from storage_engine_project.optimization.optimization_models import FitnessEvaluationResult
 from storage_engine_project.optimization.pareto_utils import select_best_compromise, update_archive
 from storage_engine_project.simulation.network_constraint_oracle import NetworkConstraintOracle
+
+logger = get_logger(__name__)
 
 
 @dataclass(slots=True)
@@ -49,9 +52,11 @@ class LemmingOptimizer:
         self,
         bridge: OptimizerBridge,
         config: LemmingOptimizerConfig | None = None,
+        safety_economy_tradeoff: float = 0.5,
     ) -> None:
         self.bridge = bridge
         self.config = config or LemmingOptimizerConfig()
+        self.safety_economy_tradeoff = float(safety_economy_tradeoff)
         self.rng = np.random.default_rng(self.config.random_seed)
 
     def run(
@@ -79,7 +84,7 @@ class LemmingOptimizer:
             all_eval_count += len(results)
 
             archive = update_archive(archive, results)
-            best_compromise = select_best_compromise(archive)
+            best_compromise = select_best_compromise(archive, safety_economy_tradeoff=self.safety_economy_tradeoff)
 
             gen_record = self._build_generation_record(
                 generation=gen + 1,
@@ -95,7 +100,7 @@ class LemmingOptimizer:
             target_pop_size = self._adaptive_population_size(gen, history) if cfg.enable_adaptive_population else cfg.population_size
             population = self._next_population(results, target_size=target_pop_size)
 
-        final_best = select_best_compromise(archive)
+        final_best = select_best_compromise(archive, safety_economy_tradeoff=self.safety_economy_tradeoff)
         final_results = self.bridge.evaluate_population(
             ctx=ctx,
             population=population,
@@ -105,7 +110,7 @@ class LemmingOptimizer:
         )
         all_eval_count += len(final_results)
         archive = update_archive(archive, final_results)
-        final_best = select_best_compromise(archive)
+        final_best = select_best_compromise(archive, safety_economy_tradeoff=self.safety_economy_tradeoff)
 
         return LemmingOptimizationRunResult(
             archive_results=archive,
@@ -318,16 +323,18 @@ class LemmingOptimizer:
 
     @staticmethod
     def _print_generation_record(record: dict[str, Any]) -> None:
-        print("-" * 72)
-        print(
-            f"优化迭代 {record['generation']} | "
-            f"种群={record['population_size']} | "
-            f"可行解={record['feasible_count']} | "
-            f"Archive={record['archive_size']}"
+        logger.info("-" * 72)
+        logger.info(
+            "优化迭代 %s | 种群=%s | 可行解=%s | Archive=%s",
+            record['generation'],
+            record['population_size'],
+            record['feasible_count'],
+            record['archive_size'],
         )
-        print(
-            f"  最优NPV={record['best_npv_yuan']:.2f} | "
-            f"平均NPV={record['avg_npv_yuan']:.2f} | "
-            f"最优回收期={record['best_payback_years']:.2f} | "
-            f"平均投资={record['avg_investment_yuan']:.2f}"
+        logger.info(
+            "  最优NPV=%.2f | 平均NPV=%.2f | 最优回收期=%.2f | 平均投资=%.2f",
+            record['best_npv_yuan'],
+            record['avg_npv_yuan'],
+            record['best_payback_years'],
+            record['avg_investment_yuan'],
         )

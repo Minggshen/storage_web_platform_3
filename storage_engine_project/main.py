@@ -8,6 +8,10 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from storage_engine_project.logging_config import get_logger
+
+logger = get_logger(__name__)
+
 if __name__ == "__main__":
     _parent = Path(__file__).resolve().parent.parent
     if str(_parent) not in sys.path:
@@ -84,6 +88,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--population-size", type=int, default=16, help="种群规模")
     parser.add_argument("--generations", type=int, default=8, help="优化代数")
     parser.add_argument("--disable-plots", action="store_true", help="不生成绘图文件")
+    parser.add_argument("--safety-economy-tradeoff", type=float, default=0.5, help="安全-经济权衡系数：0=纯经济最优，1=纯安全最优（默认 0.5 并重）")
     parser.add_argument("--initial-soc", type=float, default=_env_float("STORAGE_INITIAL_SOC", 0.50), help="年度仿真的首日初始 SOC")
     parser.add_argument("--terminal-soc-mode", type=str, default=_env_str("STORAGE_TERMINAL_SOC_MODE", "weekly_anchor"), help="日末 SOC 目标模式：free/carry/fixed/strategy_mid/weekly_anchor")
     parser.add_argument("--fixed-terminal-soc-target", type=float, default=_env_float("STORAGE_FIXED_TERMINAL_SOC_TARGET", 0.50), help="fixed 模式下每日末端 SOC 目标")
@@ -109,18 +114,18 @@ def build_global_configs(args: argparse.Namespace | None = None) -> tuple[Operat
     allowed_terminal_modes = {"free", "carry", "fixed", "strategy_mid", "weekly_anchor", "monthly_anchor", "blended_anchor"}
     terminal_soc_mode = str(getattr(args, "terminal_soc_mode", "weekly_anchor")).strip().lower() or "weekly_anchor"
     if terminal_soc_mode not in allowed_terminal_modes:
-        print(f"[警告] 无效的terminal_soc_mode '{terminal_soc_mode}'，使用默认值 'weekly_anchor'")
+        logger.warning("无效的terminal_soc_mode '%s'，使用默认值 'weekly_anchor'", terminal_soc_mode)
         terminal_soc_mode = "weekly_anchor"
     
     initial_soc = _clamp_float(getattr(args, "initial_soc", 0.50), 0.50, 0.0, 1.0)
     if initial_soc < 0.1 or initial_soc > 0.9:
-        print(f"[警告] initial_soc={initial_soc:.3f} 超出推荐范围[0.1, 0.9]")
+        logger.warning("initial_soc=%.3f 超出推荐范围[0.1, 0.9]", initial_soc)
     
     fixed_terminal_soc_target = _clamp_float(getattr(args, "fixed_terminal_soc_target", 0.50), 0.50, 0.0, 1.0)
     daily_terminal_soc_tolerance = _clamp_float(getattr(args, "daily_terminal_soc_tolerance", 0.02), 0.02, 0.0, 0.20)
     
     if daily_terminal_soc_tolerance > 0.10:
-        print(f"[警告] daily_terminal_soc_tolerance={daily_terminal_soc_tolerance:.3f} 过大，可能影响优化质量")
+        logger.warning("daily_terminal_soc_tolerance=%.3f 过大，可能影响优化质量", daily_terminal_soc_tolerance)
     
     enforce_daily_terminal_soc = terminal_soc_mode != "free"
     enable_terminal_soc_correction = terminal_soc_mode != "free"
@@ -151,9 +156,9 @@ def build_global_configs(args: argparse.Namespace | None = None) -> tuple[Operat
     
     # 改进#10: 配置一致性检查
     if not operation_config.use_rolling_dispatch:
-        print("[警告] use_rolling_dispatch=False 可能导致实时约束无法正确处理")
+        logger.warning("use_rolling_dispatch=False 可能导致实时约束无法正确处理")
     if not operation_config.enable_transformer_limit:
-        print("[警告] enable_transformer_limit=False 将忽略变压器容量约束")
+        logger.warning("enable_transformer_limit=False 将忽略变压器容量约束")
 
     safety_config = SafetyConfig(
         global_soc_margin=0.01,
@@ -209,7 +214,7 @@ def _build_network_oracle(args: argparse.Namespace):
     )
     try:
         oracle = OpenDSSConstraintOracle(config=cfg)
-        print(f"[OpenDSS] 已启用 OpenDSS oracle，Master={args.dss_master_path}")
+        logger.info("已启用 OpenDSS oracle，Master=%s", args.dss_master_path)
         return oracle
     except Exception as exc:
         raise RuntimeError(
@@ -395,17 +400,20 @@ def _ensure_best_full_recheck(
     if network_oracle is None:
         if rechecked_already:
             return
-        print("  对最终折中解执行全年重校核...")
+        logger.info("对最终折中解执行全年重校核...")
     else:
         if rechecked_already and _has_opendss_export_values(trace_stats):
-            print(
+            logger.info(
                 "  最终折中解已包含 OpenDSS 网络计算值："
-                f"trace={trace_stats['opendss_trace_count']}，"
-                f"母线电压记录={trace_stats['bus_voltage_rows']}，"
-                f"线路电流记录={trace_stats['line_current_rows']}。"
+                "trace=%d，"
+                "母线电压记录=%d，"
+                "线路电流记录=%d。",
+                trace_stats['opendss_trace_count'],
+                trace_stats['bus_voltage_rows'],
+                trace_stats['line_current_rows'],
             )
             return
-        print("  调用 OpenDSS oracle 对最终折中解执行全年重校核...")
+        logger.info("调用 OpenDSS oracle 对最终折中解执行全年重校核...")
 
     rechecked = evaluator.evaluate_decision(
         ctx=opt_case.context,
@@ -418,12 +426,16 @@ def _ensure_best_full_recheck(
     if isinstance(getattr(rechecked, "metadata", None), dict):
         rechecked.metadata["opendss_trace_stats"] = rechecked_stats
     if network_oracle is not None:
-        print(
+        logger.info(
             "  OpenDSS 重校核返回："
-            f"trace={rechecked_stats['opendss_trace_count']}，"
-            f"母线电压记录={rechecked_stats['bus_voltage_rows']}，"
-            f"线路电流记录={rechecked_stats['line_current_rows']}，"
-            f"网损记录={rechecked_stats['loss_trace_count']}。"
+            "trace=%d，"
+            "母线电压记录=%d，"
+            "线路电流记录=%d，"
+            "网损记录=%d。",
+            rechecked_stats['opendss_trace_count'],
+            rechecked_stats['bus_voltage_rows'],
+            rechecked_stats['line_current_rows'],
+            rechecked_stats['loss_trace_count'],
         )
         if not _has_opendss_export_values(rechecked_stats):
             raise RuntimeError(
@@ -547,6 +559,7 @@ def run_one_case(
     network_oracle=None,
     opendss_only_for_full_recheck: bool = False,
     solver_args: argparse.Namespace | None = None,
+    safety_economy_tradeoff: float = 0.5,
 ) -> tuple[LemmingOptimizationRunResult, dict[str, Any] | None]:
     evaluator_args = argparse.Namespace(**vars(solver_args)) if solver_args is not None else argparse.Namespace()
     evaluator_args.prefer_opendss_in_full_recheck = not opendss_only_for_full_recheck
@@ -572,17 +585,18 @@ def run_one_case(
             tournament_size=3,
             verbose=True,
         ),
+        safety_economy_tradeoff=safety_economy_tradeoff,
     )
 
-    print("=" * 88)
-    print(f"开始场景优化：{opt_case.internal_model_id}")
-    print(f"候选策略：{opt_case.strategy_candidates}")
-    print("=" * 88)
+    logger.info("=" * 88)
+    logger.info("开始场景优化：%s", opt_case.internal_model_id)
+    logger.info("候选策略：%s", opt_case.strategy_candidates)
+    logger.info("=" * 88)
 
     optimizer_oracle = None if opendss_only_for_full_recheck else network_oracle
     if network_oracle is not None:
         scope = "仅最终 full_recheck" if optimizer_oracle is None else "fast_proxy 与 full_recheck"
-        print(f"OpenDSS 参与范围：{scope}；每次小时约束均加载 runtime manifest 中的全部启用负荷。")
+        logger.info("OpenDSS 参与范围：%s；每次小时约束均加载 runtime manifest 中的全部启用负荷。", scope)
 
     run_result = optimizer.run(ctx=opt_case.context, network_oracle=optimizer_oracle)
     _ensure_best_full_recheck(
@@ -606,21 +620,27 @@ def run_one_case(
         with open(scenario_out_dir / "engine_diagnostics.json", "w", encoding="utf-8") as f:
             json.dump(diagnostics, f, ensure_ascii=False, indent=2, default=str)
     except Exception as exc:  # pragma: no cover
-        print(f"[警告] 写入 engine_diagnostics.json 失败：{exc}")
+        logger.warning("写入 engine_diagnostics.json 失败：%s", exc)
 
-    print(f"场景完成：{opt_case.internal_model_id}")
+    logger.info("场景完成：%s", opt_case.internal_model_id)
     for k, v in export_paths.items():
-        print(f"  {k}: {v}")
+        logger.info("  %s: %s", k, v)
 
     if run_result.best_result is not None:
         best = run_result.best_result.summary_dict()
-        print(
-            f"  最优折中解 | strategy={best['strategy_id']} | "
-            f"P={best['rated_power_kw']:.2f} kW | "
-            f"E={best['rated_energy_kwh']:.2f} kWh | "
-            f"NPV={best.get('npv_yuan', float('nan')):.2f} | "
-            f"Payback={best.get('simple_payback_years', float('nan'))} | "
-            f"Mode={getattr(run_result.best_result.annual_operation_result, 'evaluation_mode', '')}"
+        logger.info(
+            "  最优折中解 | strategy=%s | "
+            "P=%.2f kW | "
+            "E=%.2f kWh | "
+            "NPV=%.2f | "
+            "Payback=%s | "
+            "Mode=%s",
+            best['strategy_id'],
+            best['rated_power_kw'],
+            best['rated_energy_kwh'],
+            best.get('npv_yuan', float('nan')),
+            best.get('simple_payback_years', float('nan')),
+            getattr(run_result.best_result.annual_operation_result, 'evaluation_mode', ''),
         )
 
     return run_result, _best_summary_row(opt_case, run_result)
@@ -645,7 +665,7 @@ def _collect_diagnostics_into_root(output_root: Path) -> None:
         with open(output_root / "engine_diagnostics.json", "w", encoding="utf-8") as f:
             json.dump(payload, f, ensure_ascii=False, indent=2, default=str)
     except Exception as exc:  # pragma: no cover
-        print(f"[警告] 写入合并 engine_diagnostics.json 失败：{exc}")
+        logger.warning("写入合并 engine_diagnostics.json 失败：%s", exc)
 
 
 def main() -> None:
@@ -659,24 +679,29 @@ def main() -> None:
     operation_config, safety_config, service_config = build_global_configs(args)
     network_oracle = _build_network_oracle(args)
 
-    print("=" * 88)
-    print("工商业配储优化主程序启动")
-    print(f"注册表：{registry_path}")
-    print(f"策略库：{strategy_library_path}")
-    print(f"输出目录：{output_root}")
-    print(f"优化参数：总代数={args.generations}，每代种群={args.population_size}")
-    print(
+    logger.info("=" * 88)
+    logger.info("工商业配储优化主程序启动")
+    logger.info("注册表：%s", registry_path)
+    logger.info("策略库：%s", strategy_library_path)
+    logger.info("输出目录：%s", output_root)
+    logger.info("优化参数：总代数=%d，每代种群=%d", args.generations, args.population_size)
+    logger.info(
         "SOC 参数："
-        f"年度初始SOC={_clamp_float(args.initial_soc, 0.50, 0.0, 1.0):.3f}，"
-        f"日末模式={operation_config.terminal_soc_mode}，"
-        f"固定日末目标={operation_config.fixed_terminal_soc_target:.3f}，"
-        f"日末容差=±{operation_config.daily_terminal_soc_tolerance:.3f}"
+        "年度初始SOC=%.3f，"
+        "日末模式=%s，"
+        "固定日末目标=%.3f，"
+        "日末容差=±%.3f",
+        _clamp_float(args.initial_soc, 0.50, 0.0, 1.0),
+        operation_config.terminal_soc_mode,
+        operation_config.fixed_terminal_soc_target,
+        operation_config.daily_terminal_soc_tolerance,
     )
-    print(f"OpenDSS oracle：{'启用' if network_oracle is not None else '未启用'}")
+    logger.info("OpenDSS oracle：%s", '启用' if network_oracle is not None else '未启用')
+    logger.info("安全-经济权衡系数：%.2f（0=纯经济，1=纯安全）", args.safety_economy_tradeoff)
     if network_oracle is not None:
         opendss_scope = "仅最终 full_recheck" if bool(args.opendss_only_for_full_recheck) else "优化阶段 fast_proxy + full_recheck 全流程"
-        print(f"OpenDSS 调用范围：{opendss_scope}")
-    print("=" * 88)
+        logger.info("OpenDSS 调用范围：%s", opendss_scope)
+    logger.info("=" * 88)
 
     cases = load_optimization_cases(
         registry_path=registry_path,
@@ -694,16 +719,18 @@ def main() -> None:
     if not cases:
         raise RuntimeError("没有找到可运行的场景。请检查注册表 enabled / optimize / target-id 设置。")
 
-    print(f"共加载 {len(cases)} 个待优化场景。")
+    logger.info("共加载 %d 个待优化场景。", len(cases))
 
     overall_rows: list[dict[str, Any]] = []
     for idx, case in enumerate(cases, start=1):
-        print("=" * 88)
-        print(
-            f"开始场景优化 [{idx}/{len(cases)}]：{case.internal_model_id} | "
-            f"总代数={args.generations} | 每代种群={args.population_size}"
+        logger.info("=" * 88)
+        logger.info(
+            "开始场景优化 [%d/%d]：%s | "
+            "总代数=%d | 每代种群=%d",
+            idx, len(cases), case.internal_model_id,
+            args.generations, args.population_size,
         )
-        print("=" * 88)
+        logger.info("=" * 88)
         _, row = run_one_case(
             opt_case=case,
             output_root=output_root,
@@ -713,6 +740,7 @@ def main() -> None:
             network_oracle=network_oracle,
             opendss_only_for_full_recheck=bool(args.opendss_only_for_full_recheck),
             solver_args=args,
+            safety_economy_tradeoff=args.safety_economy_tradeoff,
         )
         if row is not None:
             overall_rows.append(row)
@@ -721,7 +749,7 @@ def main() -> None:
         overall_path = output_root / "overall_best_schemes.json"
         with open(overall_path, "w", encoding="utf-8") as f:
             json.dump(overall_rows, f, ensure_ascii=False, indent=2)
-        print(f"已导出总体最优方案汇总：{overall_path}")
+        logger.info("已导出总体最优方案汇总：%s", overall_path)
 
     _collect_diagnostics_into_root(output_root)
 

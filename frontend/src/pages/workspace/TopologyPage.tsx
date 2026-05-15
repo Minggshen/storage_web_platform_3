@@ -1,7 +1,10 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { fetchSearchSpaceInference, type SearchSpaceInferenceExplainItem, type SearchSpaceInferenceRow } from '../../services/build';
-import { fetchProjectTopology, saveProjectTopology } from '../../services/topology';
+import { fetchProjectTopology, saveProjectTopology, fetchTemplates, saveTemplate, fetchTemplateDetail } from '../../services/topology';
+import type { TemplateMeta } from '../../services/topology';
+import { ErrorBanner } from '@/components/common/ErrorBanner';
+import { ConfirmDialog } from '@/components/common/ConfirmDialog';
 
 type NodeKind =
   | 'grid'
@@ -1907,12 +1910,22 @@ function buildIeee33Template(): TopologyData {
 export default function TopologyPage() {
   const { projectId = '' } = useParams();
 
-  const [loading, setLoading] = useState(false);
-  const [saving, setSaving] = useState(false);
+  const [savingEconomic, setSavingEconomic] = useState(false);
+  const [savingTopology, setSavingTopology] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
+  const [templateConfirmOpen, setTemplateConfirmOpen] = useState(false);
+  const [templates, setTemplates] = useState<TemplateMeta[]>([]);
+  const [selectedTemplateId, setSelectedTemplateId] = useState('');
+  const [saveTemplateOpen, setSaveTemplateOpen] = useState(false);
+  const [saveTemplateName, setSaveTemplateName] = useState('');
+  const [saveTemplateDesc, setSaveTemplateDesc] = useState('');
+  const [saveTemplateSaving, setSaveTemplateSaving] = useState(false);
   const [lastSavedEconomicSnapshot, setLastSavedEconomicSnapshot] = useState('');
   const [lastSavedEconomicAt, setLastSavedEconomicAt] = useState<Date | null>(null);
+  const [lastSavedTopologySnapshot, setLastSavedTopologySnapshot] = useState('');
+  const [lastSavedTopologyAt, setLastSavedTopologyAt] = useState<Date | null>(null);
+  const [modelPreviewExpanded, setModelPreviewExpanded] = useState(false);
 
   const [topology, setTopology] = useState<TopologyData>({
     nodes: [],
@@ -1962,7 +1975,6 @@ export default function TopologyPage() {
 
   async function loadTopology() {
     if (!projectId) return;
-    setLoading(true);
     setError(null);
     setMessage(null);
     try {
@@ -1971,7 +1983,9 @@ export default function TopologyPage() {
       setTopology(normalized);
       setEditorText(stringifyTopology(normalized));
       setLastSavedEconomicSnapshot(stringifyEconomicParams(normalized.economic_parameters));
+      setLastSavedTopologySnapshot(JSON.stringify({ nodes: normalized.nodes, edges: normalized.edges }));
       setLastSavedEconomicAt(null);
+      setLastSavedTopologyAt(null);
       if (!selection && normalized.nodes.length > 0) {
         setSelection({ kind: 'node', id: normalized.nodes[0].id });
       }
@@ -1981,13 +1995,12 @@ export default function TopologyPage() {
       setTopology({ nodes: [], edges: [], economic_parameters: { ...ECONOMIC_DEFAULT_PARAMS } });
       setEditorText(EMPTY_TOPOLOGY_TEXT);
       setInferenceRowsByNodeId({});
-    } finally {
-      setLoading(false);
     }
   }
 
   useEffect(() => {
     void loadTopology();
+    void refreshTemplates();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [projectId]);
 
@@ -2022,7 +2035,7 @@ export default function TopologyPage() {
   const economicParams = topology.economic_parameters;
   const economicSnapshot = useMemo(() => stringifyEconomicParams(economicParams), [economicParams]);
   const economicSaveStatus = useMemo(() => {
-    if (saving) return { saved: false, text: '保存中...' };
+    if (savingEconomic) return { saved: false, text: '保存中...' };
     if (!lastSavedEconomicSnapshot) return { saved: false, text: '等待保存' };
     if (lastSavedEconomicSnapshot === economicSnapshot) {
       return {
@@ -2033,7 +2046,25 @@ export default function TopologyPage() {
       };
     }
     return { saved: false, text: '有未保存修改' };
-  }, [economicSnapshot, lastSavedEconomicAt, lastSavedEconomicSnapshot, saving]);
+  }, [economicSnapshot, lastSavedEconomicAt, lastSavedEconomicSnapshot, savingEconomic]);
+
+  const topologySnapshot = useMemo(
+    () => JSON.stringify({ nodes: topology.nodes, edges: topology.edges }),
+    [topology.nodes, topology.edges],
+  );
+  const topologySaveStatus = useMemo(() => {
+    if (savingTopology) return { saved: false, text: '保存中...' };
+    if (!lastSavedTopologySnapshot) return { saved: false, text: '等待保存' };
+    if (lastSavedTopologySnapshot === topologySnapshot) {
+      return {
+        saved: true,
+        text: lastSavedTopologyAt
+          ? `已保存 ${lastSavedTopologyAt.toLocaleTimeString('zh-CN')}`
+          : '已从项目读取',
+      };
+    }
+    return { saved: false, text: '有未保存修改' };
+  }, [topologySnapshot, lastSavedTopologyAt, lastSavedTopologySnapshot, savingTopology]);
 
   const selectedLoadVoltageMissing =
     selectedNode?.type === 'load' &&
@@ -2530,38 +2561,116 @@ function createEdge(fromId: string, toId: string) {
     });
   }
 
-  function loadIeee33Template() {
-    if (topology.nodes.length || topology.edges.length) {
-      const confirmed = window.confirm('载入配电网模板工程会替换当前画布中的拓扑，尚未保存的修改将被覆盖。是否继续？');
-      if (!confirmed) return;
-    }
-    const next = buildIeee33Template();
-    updateTopology(next);
-    setSelection({ kind: 'node', id: 'tx_main' });
-    setError(null);
-    setMessage('已载入配电网模板工程：上级电网、主变、10kV馈线、用户配变和低压负荷已放入画布。请保存拓扑后继续进行构建校验。');
+  async function refreshTemplates() {
+    try {
+      const list = await fetchTemplates();
+      setTemplates(list);
+    } catch { /* ignore */ }
   }
 
-  async function onSave() {
-    if (!projectId) return;
-    setSaving(true);
+  async function handleLoadTemplateById(templateId: string) {
+    if (!templateId) return;
     setError(null);
     setMessage(null);
     try {
+      const templateTopo = await fetchTemplateDetail(templateId);
+      if (topology.nodes.length || topology.edges.length) {
+        setSelectedTemplateId(templateId);
+        setTemplateConfirmOpen(true);
+        return;
+      }
+      updateTopology(templateTopo as unknown as TopologyDraft);
+      setMessage('已载入模板配电网模型。请保存拓扑后继续进行构建校验。');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  }
+
+  async function handleConfirmLoadTemplate() {
+    setTemplateConfirmOpen(false);
+    const templateId = selectedTemplateId;
+    setSelectedTemplateId('');
+    if (!templateId) {
+      const next = buildIeee33Template();
+      updateTopology(next);
+      setSelection({ kind: 'node', id: 'tx_main' });
+      setError(null);
+      setMessage('已载入配电网模板工程：上级电网、主变、10kV馈线、用户配变和低压负荷已放入画布。请保存拓扑后继续进行构建校验。');
+      return;
+    }
+    try {
+      const templateTopo = await fetchTemplateDetail(templateId);
+      updateTopology(templateTopo as unknown as TopologyDraft);
+      setMessage('已载入模板配电网模型。请保存拓扑后继续进行构建校验。');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  }
+
+  async function handleSaveAsTemplate() {
+    if (!saveTemplateName.trim()) return;
+    setSaveTemplateSaving(true);
+    setError(null);
+    try {
       const parsed = normalizeTopology(JSON.parse(editorText));
-      const saved = await saveProjectTopology(projectId, parsed);
+      await saveTemplate(saveTemplateName.trim(), saveTemplateDesc.trim(), parsed);
+      setSaveTemplateOpen(false);
+      setSaveTemplateName('');
+      setSaveTemplateDesc('');
+      setMessage('已保存为配电网模板。');
+      await refreshTemplates();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setSaveTemplateSaving(false);
+    }
+  }
+
+  async function onSaveEconomic() {
+    if (!projectId) return;
+    setSavingEconomic(true);
+    setError(null);
+    setMessage(null);
+    try {
+      const saved = await saveProjectTopology(projectId, topology);
       const normalized = normalizeTopology(saved);
       const savedEconomicSnapshot = stringifyEconomicParams(normalized.economic_parameters);
       setTopology(normalized);
       setEditorText(stringifyTopology(normalized));
       setLastSavedEconomicSnapshot(savedEconomicSnapshot);
       setLastSavedEconomicAt(new Date());
+      setLastSavedTopologySnapshot(JSON.stringify({ nodes: normalized.nodes, edges: normalized.edges }));
+      if (!lastSavedTopologyAt) setLastSavedTopologyAt(new Date());
       void refreshInferenceRows();
-      setMessage('拓扑和全局经济参数已保存成功。');
+      setMessage('全局经济参数已保存成功。');
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
-      setSaving(false);
+      setSavingEconomic(false);
+    }
+  }
+
+  async function onSaveTopology() {
+    if (!projectId) return;
+    setSavingTopology(true);
+    setError(null);
+    setMessage(null);
+    try {
+      const saved = await saveProjectTopology(projectId, topology);
+      const normalized = normalizeTopology(saved);
+      const savedEconomicSnapshot = stringifyEconomicParams(normalized.economic_parameters);
+      setTopology(normalized);
+      setEditorText(stringifyTopology(normalized));
+      setLastSavedTopologySnapshot(JSON.stringify({ nodes: normalized.nodes, edges: normalized.edges }));
+      setLastSavedTopologyAt(new Date());
+      setLastSavedEconomicSnapshot(savedEconomicSnapshot);
+      if (!lastSavedEconomicAt) setLastSavedEconomicAt(new Date());
+      void refreshInferenceRows();
+      setMessage('配电网拓扑已保存成功。');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setSavingTopology(false);
     }
   }
 
@@ -2766,70 +2875,136 @@ function createEdge(fromId: string, toId: string) {
   return (
     <div style={{ padding: 20, background: '#f8fafc', minHeight: '100vh' }}>
       <div style={{ maxWidth: 1820, margin: '0 auto' }}>
-        <div style={{ marginBottom: 16 }}>
-          <Link
-            to="/projects"
-            style={{ color: '#2563eb', textDecoration: 'none', fontWeight: 600 }}
-          >
-            ← 返回项目列表
-          </Link>
-        </div>
-
-        <section style={heroStyle}>
-          <div style={{ fontSize: 12, color: '#6b7280', marginBottom: 8 }}>拓扑建模</div>
-          <h1 style={{ margin: 0, fontSize: 32 }}>项目拓扑编辑</h1>
-          <div style={{ color: '#6b7280', marginTop: 8 }}>
-            当前页面支持可视化画布编辑和高级文本编辑，优先保证拓扑数据保存与读取稳定可用。
+        {/* Step 1: Template Selection */}
+        <section style={{ ...cardStyle, marginBottom: 12, padding: '12px 18px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8, flexWrap: 'wrap' }}>
+            <span style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 24, height: 24, borderRadius: '50%', background: '#2563eb', color: '#fff', fontSize: 11, fontWeight: 800, flexShrink: 0 }}>1</span>
+            <span style={{ fontWeight: 700, fontSize: 14 }}>选择模板</span>
+            <select
+              value={selectedTemplateId}
+              onChange={(e) => setSelectedTemplateId(e.target.value)}
+              style={{
+                padding: '8px 10px', borderRadius: 10, border: '1px solid #d1d5db',
+                fontSize: 12, cursor: 'pointer', background: '#fff', minWidth: 160,
+              }}
+            >
+              <option value="">内置 IEEE 33</option>
+              {templates.map((t) => (
+                <option key={t.template_id} value={t.template_id}>
+                  {t.name} ({t.node_count}节点)
+                </option>
+              ))}
+            </select>
+            <button
+              type="button"
+              style={secondaryBtnStyle}
+              onClick={() => {
+                if (topology.nodes.length || topology.edges.length) {
+                  setSelectedTemplateId(selectedTemplateId || '');
+                  setTemplateConfirmOpen(true);
+                } else if (selectedTemplateId) {
+                  handleLoadTemplateById(selectedTemplateId);
+                } else {
+                  const next = buildIeee33Template();
+                  updateTopology(next);
+                  setSelection({ kind: 'node', id: 'tx_main' });
+                  setError(null);
+                  setMessage('已载入配电网模板工程：上级电网、主变、10kV馈线、用户配变和低压负荷已放入画布。请保存拓扑后继续进行构建校验。');
+                }
+              }}
+              title="载入选中的配电网模板"
+            >
+              载入模板
+            </button>
+            <Link
+              to="/projects"
+              style={{ color: '#2563eb', textDecoration: 'none', fontWeight: 600, fontSize: 12, marginLeft: 'auto' }}
+            >
+              ← 返回项目列表
+            </Link>
           </div>
-          <div style={{ color: '#6b7280', marginTop: 10 }}>项目编号：{projectId}</div>
+          <div style={{ fontSize: 10, color: '#64748b' }}>
+            当前：{topology.nodes.length ? `${topology.nodes.length}节点 · ${topology.edges.length}线路` : '空白画布'} · 项目：{projectId}
+          </div>
         </section>
 
-        <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginBottom: 16 }}>
-          <Link to={`/projects/${projectId}/overview`} style={secondaryBtnStyle}>
-            返回项目总览
-          </Link>
-          <Link to={`/projects/${projectId}/assets`} style={secondaryBtnStyle}>
-            进入资产绑定
-          </Link>
-          <Link to={`/projects/${projectId}/build`} style={secondaryBtnStyle}>
-            进入构建校验
-          </Link>
-          <button
-            type="button"
-            style={secondaryBtnStyle}
-            onClick={loadIeee33Template}
-          >
-            载入配电网模板工程
-          </button>
-          <button
-            type="button"
-            style={primaryBtnStyle}
-            disabled={loading}
-            onClick={() => void loadTopology()}
-          >
-            {loading ? '刷新中...' : '刷新拓扑'}
-          </button>
-          <button
-            type="button"
-            style={primaryBtnStyle}
-            disabled={saving}
-            onClick={() => void onSave()}
-          >
-            {saving ? '保存中...' : '保存拓扑与经济参数'}
-          </button>
-        </div>
-
-        {error ? <div style={errorStyle}>错误：{error}</div> : null}
+        {error && <ErrorBanner message={error} />}
         {message ? <div style={successStyle}>{message}</div> : null}
 
-        <section style={{ ...cardStyle, marginBottom: 16 }}>
-          <div style={economicHeaderStyle}>
-            <h2 style={{ ...sectionTitleStyle, marginBottom: 0 }}>全局经济参数</h2>
-            <span style={economicSaveStatus.saved ? savedBadgeStyle : unsavedBadgeStyle}>
+        <ConfirmDialog
+          open={templateConfirmOpen}
+          onOpenChange={setTemplateConfirmOpen}
+          title="载入配电网模板工程"
+          description="会替换当前画布中的拓扑，尚未保存的修改将被覆盖。是否继续？"
+          onConfirm={handleConfirmLoadTemplate}
+        />
+
+        {/* Save-as-template dialog */}
+        {saveTemplateOpen && (
+          <div style={{
+            position: 'fixed', inset: 0, zIndex: 100,
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            background: 'rgba(0,0,0,0.4)',
+          }} onClick={() => setSaveTemplateOpen(false)}>
+            <div style={{
+              background: '#fff', borderRadius: 16, padding: 24, maxWidth: 440, width: '100%',
+              boxShadow: '0 20px 60px rgba(0,0,0,0.2)',
+            }} onClick={(e) => e.stopPropagation()}>
+              <h3 style={{ margin: '0 0 16px', fontSize: 20, fontWeight: 700 }}>保存为配电网模板</h3>
+              <div style={{ marginBottom: 12 }}>
+                <label style={{ display: 'block', marginBottom: 4, fontSize: 13, fontWeight: 600, color: '#475569' }}>模板名称</label>
+                <input
+                  type="text"
+                  value={saveTemplateName}
+                  onChange={(e) => setSaveTemplateName(e.target.value)}
+                  placeholder="请输入模板名称"
+                  style={{
+                    width: '100%', padding: '8px 12px', borderRadius: 8, border: '1px solid #d1d5db',
+                    fontSize: 14, boxSizing: 'border-box',
+                  }}
+                  autoFocus
+                />
+              </div>
+              <div style={{ marginBottom: 16 }}>
+                <label style={{ display: 'block', marginBottom: 4, fontSize: 13, fontWeight: 600, color: '#475569' }}>模板简介</label>
+                <textarea
+                  value={saveTemplateDesc}
+                  onChange={(e) => setSaveTemplateDesc(e.target.value)}
+                  placeholder="请输入模板简介（可选）"
+                  rows={3}
+                  style={{
+                    width: '100%', padding: '8px 12px', borderRadius: 8, border: '1px solid #d1d5db',
+                    fontSize: 14, boxSizing: 'border-box', resize: 'vertical',
+                  }}
+                />
+              </div>
+              <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+                <button type="button" style={secondaryBtnStyle} onClick={() => setSaveTemplateOpen(false)}>
+                  取消
+                </button>
+                <button type="button" style={primaryBtnStyle}
+                  disabled={saveTemplateSaving || !saveTemplateName.trim()}
+                  onClick={() => void handleSaveAsTemplate()}
+                >
+                  {saveTemplateSaving ? '保存中...' : '保存模板'}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        <section style={{ ...cardStyle, marginBottom: 12, padding: '12px 18px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginBottom: 10 }}>
+            <span style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 24, height: 24, borderRadius: '50%', background: '#2563eb', color: '#fff', fontSize: 11, fontWeight: 800, flexShrink: 0 }}>2</span>
+            <span style={{ fontWeight: 700, fontSize: 14 }}>全局经济参数</span>
+            <span style={{ fontSize: 10, color: economicSaveStatus.saved ? '#16a34a' : '#d97706', fontWeight: 600 }}>
               {economicSaveStatus.text}
             </span>
+            <button type="button" style={{ ...primaryBtnStyle, marginLeft: 'auto' }} disabled={savingEconomic} onClick={() => void onSaveEconomic()}>
+              {savingEconomic ? '保存中...' : '保存经济参数'}
+            </button>
           </div>
-          <div style={{ color: '#64748b', fontSize: 12, lineHeight: 1.5 }}>
+          <div style={{ color: '#64748b', fontSize: 12, lineHeight: 1.5, marginBottom: 4 }}>
             这些参数按项目统一生效，构建时会写入所有候选配储目标的 registry 行。
           </div>
           <div style={economicGridStyle}>
@@ -2923,6 +3098,29 @@ function createEdge(fromId: string, toId: string) {
               <EconomicNumberInput label="年运维增长率" name="annual_om_growth_rate" fallback={0.02} step="0.01" min={0} reference="参考 0.02" params={economicParams} onChange={applyEconomicParam} />
               <EconomicNumberInput label="电压罚金系数 元" name="voltage_penalty_coeff_yuan" fallback={0} step="1" min={0} reference="基准 0，约束惩罚情景再设置" params={economicParams} onChange={applyEconomicParam} />
             </EconomicParamGroup>
+          </div>
+        </section>
+
+        {/* Step 3: Edit Topology */}
+        <section style={{ ...cardStyle, marginBottom: 12, padding: '10px 16px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+            <span style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 24, height: 24, borderRadius: '50%', background: '#2563eb', color: '#fff', fontSize: 11, fontWeight: 800, flexShrink: 0 }}>3</span>
+            <span style={{ fontWeight: 700, fontSize: 14 }}>配电网拓扑建模</span>
+            <span style={{ fontSize: 10, color: topologySaveStatus.saved ? '#16a34a' : '#d97706', fontWeight: 600 }}>
+              {topologySaveStatus.text}
+            </span>
+            <div style={{ marginLeft: 'auto', display: 'flex', gap: 6, alignItems: 'center' }}>
+              <button type="button" style={secondaryBtnStyle} onClick={() => {
+                setSaveTemplateName('');
+                setSaveTemplateDesc('');
+                setSaveTemplateOpen(true);
+              }}>
+                保存为模板
+              </button>
+              <button type="button" style={primaryBtnStyle} disabled={savingTopology} onClick={() => void onSaveTopology()}>
+                {savingTopology ? '保存中...' : '保存拓扑'}
+              </button>
+            </div>
           </div>
         </section>
 
@@ -4235,28 +4433,69 @@ function createEdge(fromId: string, toId: string) {
           </div>
         </div>
 
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, marginTop: 16 }}>
-          <section style={cardStyle}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
-              <h2 style={{ ...sectionTitleStyle, marginBottom: 0 }}>高级文本编辑</h2>
-              <button
-                type="button"
-                onClick={() => setJsonCollapsed((v) => !v)}
-                style={secondaryBtnStyle}
-              >
-                {jsonCollapsed ? '展开' : '收起'}
-              </button>
-            </div>
 
-            {!jsonCollapsed ? (
-              <>
+        {/* Step 4: Model Preview */}
+        <section style={{ ...cardStyle, marginTop: 12, padding: '12px 18px' }}>
+          <div
+            style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}
+            onClick={() => setModelPreviewExpanded(!modelPreviewExpanded)}
+          >
+            <span style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 24, height: 24, borderRadius: '50%', background: '#2563eb', color: '#fff', fontSize: 11, fontWeight: 800, flexShrink: 0 }}>4</span>
+            <span style={{ fontWeight: 700, fontSize: 14 }}>潮流模型预览</span>
+            <span style={{ fontSize: 10, color: '#94a3b8' }}>{modelPreviewExpanded ? '▼ 点击收起' : '▶ 点击展开'}</span>
+          </div>
+          {modelPreviewExpanded && (
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, marginTop: 10 }}>
+              <section style={cardStyle}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+                  <h2 style={{ ...sectionTitleStyle, marginBottom: 0 }}>高级文本编辑</h2>
+                  <button
+                    type="button"
+                    onClick={() => setJsonCollapsed((v) => !v)}
+                    style={secondaryBtnStyle}
+                  >
+                    {jsonCollapsed ? '展开' : '收起'}
+                  </button>
+                </div>
+                {!jsonCollapsed ? (
+                  <>
+                    <textarea
+                      value={editorText}
+                      onChange={(e) => setEditorText(e.target.value)}
+                      spellCheck={false}
+                      style={{
+                        width: '100%',
+                        minHeight: 320,
+                        boxSizing: 'border-box',
+                        border: '1px solid #d1d5db',
+                        borderRadius: 12,
+                        padding: 12,
+                        fontFamily: 'Consolas, Menlo, Monaco, monospace',
+                        fontSize: 12,
+                        lineHeight: 1.5,
+                        resize: 'vertical',
+                      }}
+                    />
+                    <div style={{ marginTop: 12 }}>
+                      <button type="button" style={primaryBtnStyle} onClick={applyJsonEditor}>
+                        应用文本
+                      </button>
+                    </div>
+                  </>
+                ) : (
+                  <div style={{ color: '#6b7280' }}>高级文本编辑已收起。</div>
+                )}
+              </section>
+
+              <section style={cardStyle}>
+                <h2 style={sectionTitleStyle}>潮流模型文件预览</h2>
                 <textarea
-                  value={editorText}
-                  onChange={(e) => setEditorText(e.target.value)}
+                  value={dssPreview}
+                  readOnly
                   spellCheck={false}
                   style={{
                     width: '100%',
-                    minHeight: 320,
+                    minHeight: 380,
                     boxSizing: 'border-box',
                     border: '1px solid #d1d5db',
                     borderRadius: 12,
@@ -4265,41 +4504,14 @@ function createEdge(fromId: string, toId: string) {
                     fontSize: 12,
                     lineHeight: 1.5,
                     resize: 'vertical',
+                    background: '#f8fafc',
                   }}
                 />
-                <div style={{ marginTop: 12 }}>
-                  <button type="button" style={primaryBtnStyle} onClick={applyJsonEditor}>
-                    应用文本
-                  </button>
-                </div>
-              </>
-            ) : (
-              <div style={{ color: '#6b7280' }}>高级文本编辑已收起。</div>
-            )}
-          </section>
+              </section>
+            </div>
+          )}
+        </section>
 
-          <section style={cardStyle}>
-            <h2 style={sectionTitleStyle}>潮流模型文件预览</h2>
-            <textarea
-              value={dssPreview}
-              readOnly
-              spellCheck={false}
-              style={{
-                width: '100%',
-                minHeight: 380,
-                boxSizing: 'border-box',
-                border: '1px solid #d1d5db',
-                borderRadius: 12,
-                padding: 12,
-                fontFamily: 'Consolas, Menlo, Monaco, monospace',
-                fontSize: 12,
-                lineHeight: 1.5,
-                resize: 'vertical',
-                background: '#f8fafc',
-              }}
-            />
-          </section>
-        </div>
       </div>
     </div>
   );
@@ -4601,7 +4813,7 @@ function EconomicNumberInput(props: {
   required?: boolean;
 }) {
   return (
-    <>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 4, minWidth: 0 }}>
       <FieldLabel marker={props.required ? '必填' : undefined}>{props.label}</FieldLabel>
       <input
         type="number"
@@ -4616,17 +4828,9 @@ function EconomicNumberInput(props: {
       <div style={props.disabled ? disabledReferenceHintStyle : referenceHintStyle}>
         {props.disabled ? '启用开关后可填写' : props.reference}
       </div>
-    </>
+    </div>
   );
 }
-
-const heroStyle: React.CSSProperties = {
-  background: '#ffffff',
-  border: '1px solid #e5e7eb',
-  borderRadius: 16,
-  padding: 20,
-  marginBottom: 16,
-};
 
 const cardStyle: React.CSSProperties = {
   background: '#ffffff',
@@ -4693,25 +4897,25 @@ const backgroundLoadBadgeStyle: React.CSSProperties = {
 
 const economicGridStyle: React.CSSProperties = {
   display: 'grid',
-  gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))',
-  gap: '18px 22px',
-  marginTop: 12,
+  gridTemplateColumns: '1fr',
+  gap: '10px 0',
+  marginTop: 8,
   alignItems: 'start',
 };
 
 const economicGroupStyle: React.CSSProperties = {
   display: 'grid',
-  gap: 10,
+  gap: 8,
   alignSelf: 'start',
-  paddingLeft: 14,
+  paddingLeft: 12,
   borderLeft: '3px solid #dbeafe',
 };
 
 const economicGroupHeaderStyle: React.CSSProperties = {
   display: 'flex',
-  justifyContent: 'space-between',
+  justifyContent: 'flex-start',
   alignItems: 'center',
-  gap: 12,
+  gap: 8,
   minHeight: 32,
 };
 
@@ -4729,6 +4933,9 @@ const economicGroupControlStyle: React.CSSProperties = {
 
 const economicGroupFieldsStyle: React.CSSProperties = {
   display: 'grid',
+  gridTemplateColumns: 'repeat(4, 1fr)',
+  gap: '6px 14px',
+  alignItems: 'start',
 };
 
 const disabledEconomicGroupFieldsStyle: React.CSSProperties = {
@@ -4736,21 +4943,14 @@ const disabledEconomicGroupFieldsStyle: React.CSSProperties = {
   opacity: 0.66,
 };
 
-const economicHeaderStyle: React.CSSProperties = {
-  display: 'flex',
-  justifyContent: 'space-between',
-  alignItems: 'center',
-  gap: 12,
-  flexWrap: 'wrap',
-  marginBottom: 12,
-};
-
 const referenceHintStyle: React.CSSProperties = {
   marginTop: 4,
-  marginBottom: 8,
   color: '#64748b',
   fontSize: 11,
   lineHeight: 1.4,
+  whiteSpace: 'nowrap',
+  overflow: 'hidden',
+  textOverflow: 'ellipsis',
 };
 
 const disabledReferenceHintStyle: React.CSSProperties = {
@@ -4787,26 +4987,6 @@ const inferenceExplainRowStyle: React.CSSProperties = {
   borderRadius: 6,
   background: '#ffffff',
   border: '1px solid #bfdbfe',
-};
-
-const savedBadgeStyle: React.CSSProperties = {
-  display: 'inline-flex',
-  alignItems: 'center',
-  minHeight: 24,
-  padding: '0 10px',
-  borderRadius: 999,
-  border: '1px solid #bbf7d0',
-  background: '#f0fdf4',
-  color: '#15803d',
-  fontSize: 12,
-  fontWeight: 700,
-};
-
-const unsavedBadgeStyle: React.CSSProperties = {
-  ...savedBadgeStyle,
-  border: '1px solid #fed7aa',
-  background: '#fff7ed',
-  color: '#c2410c',
 };
 
 const propertyPanelStyle: React.CSSProperties = {
@@ -5104,15 +5284,6 @@ const textareaStyle: React.CSSProperties = {
   fontFamily: 'Consolas, Menlo, Monaco, monospace',
   resize: 'vertical',
   overscrollBehavior: 'contain',
-};
-
-const errorStyle: React.CSSProperties = {
-  background: '#fef2f2',
-  border: '1px solid #fecaca',
-  color: '#b91c1c',
-  borderRadius: 12,
-  padding: 12,
-  marginBottom: 12,
 };
 
 const successStyle: React.CSSProperties = {

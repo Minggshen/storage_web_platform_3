@@ -11,6 +11,7 @@ from storage_engine_project.economics.lifecycle_financial_evaluator import (
     LifecycleFinancialConfig,
     LifecycleFinancialEvaluator,
 )
+from storage_engine_project.logging_config import get_logger
 from storage_engine_project.optimization.candidate_screening import (
     CandidateScreeningConfig,
     CandidateScreeningEngine,
@@ -27,6 +28,8 @@ from storage_engine_project.simulation.annual_operation_kernel import (
     AnnualOperationKernelConfig,
 )
 from storage_engine_project.simulation.network_constraint_oracle import NetworkConstraintOracle
+
+logger = get_logger(__name__)
 
 
 @dataclass(slots=True)
@@ -121,16 +124,16 @@ class StorageFitnessEvaluator:
 
         if self.config.print_candidate_logs:
             mode_label = "full_recheck" if force_full_recheck else ("fast_proxy" if self.config.enable_dual_stage_evaluation else "full_year")
-            print(
-                f"[候选评估 #{eval_no}] 开始 | 场景={local_ctx.internal_model_id} | "
-                f"策略={decision.strategy_id} | P={decision.rated_power_kw:.2f} kW | "
-                f"E={decision.rated_energy_kwh:.2f} kWh | 时长={decision.duration_h():.2f} h | mode={mode_label}"
+            logger.info(
+                "候选评估 #%s 开始 | 场景=%s | 策略=%s | P=%.2f kW | E=%.2f kWh | 时长=%.2f h | mode=%s",
+                eval_no, local_ctx.internal_model_id, decision.strategy_id,
+                decision.rated_power_kw, decision.rated_energy_kwh, decision.duration_h(), mode_label,
             )
 
         screening = self.screening_engine.screen(local_ctx, decision)
         if not screening.is_feasible:
             if self.config.print_screening_fail_logs:
-                print(f"[候选评估 #{eval_no}] 快速筛选未通过：{screening.reason_text}")
+                logger.debug("候选评估 #%s 快速筛选未通过：%s", eval_no, screening.reason_text)
             return self._build_fast_reject_result(decision, screening)
 
         if force_full_recheck:
@@ -162,7 +165,7 @@ class StorageFitnessEvaluator:
 
             if self._should_run_full_recheck(fast_result):
                 if self.config.print_recheck_trigger_logs:
-                    print(f"[候选评估 #{eval_no}] 快评结果达到重校核条件，开始 full_recheck。")
+                    logger.info("候选评估 #%s 快评结果达到重校核条件，开始 full_recheck。", eval_no)
                 full_result = self._run_single_stage(
                     eval_no=eval_no,
                     ctx=local_ctx,
@@ -215,7 +218,7 @@ class StorageFitnessEvaluator:
         if self.config.enable_result_cache and cache_key in self._cache:
             self._cache_hits += 1
             if self.config.cache_hit_log:
-                print(f"[缓存命中] eval_no={eval_no}, key={cache_key[:3]}")
+                logger.debug("缓存命中 eval_no=%s, key=%s", eval_no, cache_key[:3])
             self._cache.move_to_end(cache_key)
             return self._clone_result(self._cache[cache_key])
         
@@ -270,10 +273,10 @@ class StorageFitnessEvaluator:
         self._dedupe_notes(result)
 
         if self.config.print_candidate_finish_logs:
-            print(
-                f"[候选评估 #{eval_no}] 完成 | NPV={financial_result.npv_yuan:.2f} | "
-                f"Payback={financial_result.simple_payback_years} | "
-                f"Cycles={annual_result.annual_equivalent_full_cycles:.2f} | mode={annual_mode}"
+            logger.info(
+                "候选评估 #%s 完成 | NPV=%.2f | Payback=%s | Cycles=%.2f | mode=%s",
+                eval_no, financial_result.npv_yuan, financial_result.simple_payback_years,
+                annual_result.annual_equivalent_full_cycles, annual_mode,
             )
 
         return result
