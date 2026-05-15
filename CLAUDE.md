@@ -75,6 +75,8 @@ Safety-economy slider: a range input (0–100) on SolverPage controls `safety_ec
 
 TopologyPage details: save functionality is split — step ② has a "保存经济参数" button (saves only `economic_parameters`), step ③ has "保存拓扑" + "保存为模板" buttons (saves nodes/edges). Both track save status reactively (显示"有未保存修改"/"已保存 HH:MM:SS"). Economic parameters are always expanded with fields in a 4-column grid (`repeat(4, 1fr)`), reference hints single-line with ellipsis. TopologyPage uses inline styles; other pages use Tailwind CSS.
 
+BuildPage details: step ① has a two-column grid (`1fr 1.5fr`) — build preview (narrower) and solver workspace (wider, both capped at `maxHeight: 530px` with `overflow-y: auto` for equal heights). Step ③ auto service lines and capacity tables are default-collapsed with click-to-expand headers. Grid health check results use `PctBar` (a horizontal percentage bar) for transformer overload ratio and per-recommendation loading_pct, color-coded green/amber/red.
+
 ### Tier 2: FastAPI Backend (`backend/`)
 
 Entry: `storage_fastapi_backend.py`. CORS configured via `CORS_ALLOW_ORIGINS` env var (not wildcard `*`). Health check at `GET /health`.
