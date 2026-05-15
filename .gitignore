@@ -25,5 +25,10 @@ python/
 
 patent_outputs/
 
+# External test fixtures / brainstorming cache — not our source
+OpenDSS/
+.superpowers/
+.deps_installed
+
 # IDE config (any depth)
 **/.idea/

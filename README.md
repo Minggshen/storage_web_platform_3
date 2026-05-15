@@ -64,7 +64,6 @@ API 文档自动生成于 `http://localhost:8000/docs`。
 │   ├── economics/              生命周期财务建模
 │   ├── config/                 配置模型
 │   └── main.py                 CLI 入口
-├── OpenDSS/                    IEEE 测试馈线模型（34/123/8500 节点）
 ├── pyproject.toml              Python 依赖声明
 └── .github/workflows/          CI/CD 流水线
 ```
