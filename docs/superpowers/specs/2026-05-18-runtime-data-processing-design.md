@@ -150,6 +150,38 @@ def process_node(node_id: str, category: str, project_dir: Path) -> ProcessResul
 
     # 1. 根据 category 选择建模脚本
     if category == "residential":
+        model_dir = run_residential_modeling(raw_dir)
+        build_runtime(model_dir, runtime_dir)
+    else:
+        model_dir = run_industrial_modeling(raw_dir)
+        build_runtime(model_dir, runtime_dir)
+
+    # 2. 注册 runtime CSV 到 project.assets（模拟 UploadFile 流程）
+    register_runtime_asset(project, node_id, runtime_dir / "runtime_year_model_map.csv", "year_map")
+    register_runtime_asset(project, node_id, runtime_dir / "runtime_model_library.csv", "model_library")
+    bind_runtime_assets(project, node_id, year_map_asset, model_library_asset)
+    save_project(project)
+```
+
+**与现有上传流程的兼容**：
+
+当前 `save_asset_upload()` 仅接受 FastAPI `UploadFile` 对象。处理脚本生成的是磁盘文件，需要在 `ProjectModelService` 新增 `register_asset_file()` 方法：
+
+```python
+def register_asset_file(
+    self,
+    project_id: str,
+    file_path: Path,         # 已存在的文件路径
+    category: str,
+    subfolder: str | None = None,
+    metadata: dict | None = None,
+) -> tuple[AssetRef, ProjectModel, Path]:
+```
+
+该方法直接注册已有文件到 `project.assets`，跳过文件复制步骤。其余 metadata 结构（`category`, `subfolder`, `runtime_kind`, `node_id`, `is_current`）与手动上传完全一致，确保 `dashboard_service` 的 `runtime_uploaded` 计数和侧边栏对勾逻辑无需额外适配。
+
+    # 1. 根据 category 选择建模脚本
+    if category == "residential":
         model_dir = run_residential_modeling(raw_dir)   # 原始 Excel → 中间 Excel + 图表
         build_runtime(model_dir, runtime_dir)            # 中间 Excel → runtime CSV
     else:
@@ -193,7 +225,27 @@ scikit-learn>=1.7,<2.0
 - **构建校验**：不需要额外改动，runtime CSV 作为 `project.assets` 的一部分，构建流程可直接读取
 - **资产删除**：删除项目时 `project_dir` 整体删除，`raw_load_data/` 同时清除
 
-## 9. 导入路径
+## 9. 启动文件修改
+
+`start.bat` 需更新两处：
+
+**（a）依赖安装**（第 113 行 fallback 命令）：
+```batch
+:: Before
+"!PYTHON_EXE!" -m pip install fastapi uvicorn "pydantic>=2" python-multipart numpy scipy pandas openpyxl pywin32 joblib --quiet 2>&1
+:: After
+"!PYTHON_EXE!" -m pip install fastapi uvicorn "pydantic>=2" python-multipart numpy scipy pandas openpyxl pywin32 joblib scikit-learn --quiet 2>&1
+```
+
+**（b）预检模块**（第 143 行）：
+```batch
+:: Before
+"!PYTHON_EXE!" -c "import fastapi, uvicorn, numpy, pandas; print('  Core modules OK')" 2>&1
+:: After
+"!PYTHON_EXE!" -c "import fastapi, uvicorn, numpy, pandas, sklearn; print('  Core modules OK')" 2>&1
+```
+
+`scikit-learn` 同时也加入 `pyproject.toml` 的 `[dependencies]`（供 `pip install -e ".[full]"` 路径自动安装），并在 `[full]` optional-dependencies 中也显式列出（供开发环境 `pip install -e ".[full]"`）。
 
 `scripts/` 和 `backend/` 是同级目录。在 `backend/services/load_data_processing_service.py` 中 import 脚本模块时，需确保 Python 能找到 `scripts/` 包。
 
