@@ -235,7 +235,7 @@ function AssetsPage() {
             <span className="text-sm text-muted-foreground">
               当前：{dashboard?.has_tariff ? '已上传电价表文件' : '尚未上传'}
             </span>
-            <label className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-muted/50 px-3 py-2 text-sm font-medium cursor-pointer hover:bg-muted transition-colors">
+            <label className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-muted/50 h-7 px-3 text-sm font-medium cursor-pointer hover:bg-muted transition-colors">
               <span className="text-base">📁</span> 选择文件
               <input
                 id="tariff-file-input"
@@ -273,7 +273,7 @@ function AssetsPage() {
             <span className="text-sm text-muted-foreground">
               当前：{dashboard?.has_device_library ? '已上传设备策略库文件' : '尚未上传'}
             </span>
-            <label className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-muted/50 px-3 py-2 text-sm font-medium cursor-pointer hover:bg-muted transition-colors">
+            <label className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-muted/50 h-7 px-3 text-sm font-medium cursor-pointer hover:bg-muted transition-colors">
               <span className="text-base">📁</span> 选择文件
               <input
                 id="device-library-file-input"
@@ -376,7 +376,7 @@ function AssetsPage() {
                 <label htmlFor="runtime-file-input-1" className="mb-1.5 block text-sm font-semibold text-muted-foreground">
                   runtime_year_model_map.csv
                 </label>
-                <label className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-muted/50 px-3 py-2 text-sm font-medium cursor-pointer hover:bg-muted transition-colors">
+                <label className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-muted/50 h-7 px-3 text-sm font-medium cursor-pointer hover:bg-muted transition-colors">
                   <span className="text-base">📁</span> 选择文件
                   <input
                     id="runtime-file-input-1"
@@ -398,7 +398,7 @@ function AssetsPage() {
                 <label htmlFor="runtime-file-input-2" className="mb-1.5 block text-sm font-semibold text-muted-foreground">
                   runtime_model_library.csv
                 </label>
-                <label className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-muted/50 px-3 py-2 text-sm font-medium cursor-pointer hover:bg-muted transition-colors">
+                <label className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-muted/50 h-7 px-3 text-sm font-medium cursor-pointer hover:bg-muted transition-colors">
                   <span className="text-base">📁</span> 选择文件
                   <input
                     id="runtime-file-input-2"
