@@ -250,6 +250,46 @@ class ProjectModelService:
             raise FileNotFoundError(f"资产不存在：{file_id}")
         return asset
 
+    def register_asset_file(
+        self,
+        project_id: str,
+        file_path: Path,
+        category: str,
+        subfolder: str | None = None,
+        metadata: dict | None = None,
+    ) -> tuple[AssetRef, ProjectModel, Path]:
+        """注册已有文件到 project.assets（无需 UploadFile 对象）"""
+        project = self.load_project(project_id)
+        asset_id = self.generate_asset_id()
+        safe_name = file_path.name
+        asset_dir = self._assets_dir(project_id) / category
+        if subfolder:
+            asset_dir = asset_dir / subfolder
+        asset_dir.mkdir(parents=True, exist_ok=True)
+
+        target_file = asset_dir / f"{asset_id}_{safe_name}"
+        shutil.copy2(str(file_path), str(target_file))
+
+        asset = AssetRef(
+            file_id=asset_id,
+            file_name=safe_name,
+            source_type="generated",
+            metadata={
+                "category": category,
+                "subfolder": subfolder,
+                "stored_path": str(target_file.resolve()),
+                **(metadata or {}),
+            },
+        )
+        project.assets[asset_id] = asset
+        self._mark_current_asset(
+            project, category, asset_id,
+            subfolder=subfolder,
+            runtime_kind=metadata.get("runtime_kind") if metadata else None,
+        )
+        _, project_file = self.save_project(project)
+        return asset, project, project_file
+
     def _mark_current_asset(self, project: ProjectModel, category: str, current_file_id: str, *, subfolder: str | None = None, runtime_kind: str | None = None) -> None:
         for asset in project.assets.values():
             if asset.metadata.get("category") != category:
