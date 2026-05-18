@@ -149,15 +149,15 @@ echo.
 echo [5/5] Starting server ...
 echo.
 echo   ========================================
-echo     Platform  : http://localhost:8000
-echo     API Docs  : http://localhost:8000/docs
+echo     Platform  : http://127.0.0.1:8000
+echo     API Docs  : http://127.0.0.1:8000/docs
 echo   ========================================
 echo     Press Ctrl+C to stop the server.
 echo   ========================================
 echo.
 
 timeout /t 2 /nobreak >nul
-start "" http://localhost:8000
+start "" http://127.0.0.1:8000
 
 set "LOG_DIR=%~dp0logs"
 cd /d "%~dp0backend"
