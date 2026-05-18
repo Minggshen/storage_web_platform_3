@@ -235,13 +235,17 @@ function AssetsPage() {
             <span className="text-sm text-muted-foreground">
               当前：{dashboard?.has_tariff ? '已上传电价表文件' : '尚未上传'}
             </span>
-            <input
-              id="tariff-file-input"
-              type="file"
-              accept=".xlsx,.xls,.csv"
-              className="text-sm text-muted-foreground"
-              onChange={(e) => setTariffFile(e.target.files?.[0] ?? null)}
-            />
+            <label className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-muted/50 px-3 py-2 text-sm font-medium cursor-pointer hover:bg-muted transition-colors">
+              <span className="text-base">📁</span> 选择文件
+              <input
+                id="tariff-file-input"
+                type="file"
+                accept=".xlsx,.xls,.csv"
+                className="hidden"
+                onChange={(e) => setTariffFile(e.target.files?.[0] ?? null)}
+              />
+            </label>
+            {tariffFile && <span className="text-xs text-muted-foreground truncate max-w-[160px]">{tariffFile.name}</span>}
             <Button size="sm" onClick={onUploadTariff} disabled={!tariffFile || uploading}>
               上传电价表
             </Button>
@@ -269,13 +273,17 @@ function AssetsPage() {
             <span className="text-sm text-muted-foreground">
               当前：{dashboard?.has_device_library ? '已上传设备策略库文件' : '尚未上传'}
             </span>
-            <input
-              id="device-library-file-input"
-              type="file"
-              accept=".xlsx,.xls,.csv"
-              className="text-sm text-muted-foreground"
-              onChange={(e) => setLibraryFile(e.target.files?.[0] ?? null)}
-            />
+            <label className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-muted/50 px-3 py-2 text-sm font-medium cursor-pointer hover:bg-muted transition-colors">
+              <span className="text-base">📁</span> 选择文件
+              <input
+                id="device-library-file-input"
+                type="file"
+                accept=".xlsx,.xls,.csv"
+                className="hidden"
+                onChange={(e) => setLibraryFile(e.target.files?.[0] ?? null)}
+              />
+            </label>
+            {libraryFile && <span className="text-xs text-muted-foreground truncate max-w-[160px]">{libraryFile.name}</span>}
             <Button size="sm" onClick={onUploadLibrary} disabled={!libraryFile || uploading}>
               上传设备库
             </Button>
@@ -368,13 +376,17 @@ function AssetsPage() {
                 <label htmlFor="runtime-file-input-1" className="mb-1.5 block text-sm font-semibold text-muted-foreground">
                   runtime_year_model_map.csv
                 </label>
-                <input
-                  id="runtime-file-input-1"
-                  type="file"
-                  accept=".csv"
-                  className="text-sm text-muted-foreground"
-                  onChange={(e) => setYearMapFile(e.target.files?.[0] ?? null)}
-                />
+                <label className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-muted/50 px-3 py-2 text-sm font-medium cursor-pointer hover:bg-muted transition-colors">
+                  <span className="text-base">📁</span> 选择文件
+                  <input
+                    id="runtime-file-input-1"
+                    type="file"
+                    accept=".csv"
+                    className="hidden"
+                    onChange={(e) => setYearMapFile(e.target.files?.[0] ?? null)}
+                  />
+                </label>
+                {yearMapFile && <span className="ml-2 text-xs text-muted-foreground truncate max-w-[160px]">{yearMapFile.name}</span>}
                 <div className="mt-2.5">
                   <Button size="sm" onClick={() => onUploadRuntime('year_map')} disabled={!runtimeNodeId || !yearMapFile || uploading}>
                     上传 year_map
@@ -386,13 +398,17 @@ function AssetsPage() {
                 <label htmlFor="runtime-file-input-2" className="mb-1.5 block text-sm font-semibold text-muted-foreground">
                   runtime_model_library.csv
                 </label>
-                <input
-                  id="runtime-file-input-2"
-                  type="file"
-                  accept=".csv"
-                  className="text-sm text-muted-foreground"
-                  onChange={(e) => setModelLibraryFile(e.target.files?.[0] ?? null)}
-                />
+                <label className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-muted/50 px-3 py-2 text-sm font-medium cursor-pointer hover:bg-muted transition-colors">
+                  <span className="text-base">📁</span> 选择文件
+                  <input
+                    id="runtime-file-input-2"
+                    type="file"
+                    accept=".csv"
+                    className="hidden"
+                    onChange={(e) => setModelLibraryFile(e.target.files?.[0] ?? null)}
+                  />
+                </label>
+                {modelLibraryFile && <span className="ml-2 text-xs text-muted-foreground truncate max-w-[160px]">{modelLibraryFile.name}</span>}
                 <div className="mt-2.5">
                   <Button size="sm" onClick={() => onUploadRuntime('model_library')} disabled={!runtimeNodeId || !modelLibraryFile || uploading}>
                     上传 model_library
