@@ -1,9 +1,19 @@
 from __future__ import annotations
 
+import csv
+import io
+
 from typing import Any
 
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
+from fastapi.responses import StreamingResponse, Response
 
+from models.load_data_models import (
+    RawLoadDataUploadResponse,
+    ProcessRuntimeRequest,
+    PreviewFileInfo,
+    PreviewNodeResponse,
+)
 from models.project_model import (
     DeleteDeviceRecordRequest,
     DeleteDeviceRecordResponse,
@@ -19,6 +29,7 @@ from models.project_model import (
     UpsertDeviceRecordResponse,
 )
 from services.asset_binding_service import AssetBindingService
+from services.load_data_processing_service import LoadDataProcessingService
 from services.project_model_service import ProjectModelService
 
 
@@ -26,6 +37,7 @@ router = APIRouter(prefix="/api/assets", tags=["assets-binding"])
 
 project_service = ProjectModelService()
 asset_service = AssetBindingService(project_service=project_service)
+processing_service = LoadDataProcessingService(project_service=project_service)
 
 
 @router.get("/project/{project_id}", response_model=ProjectAssetsResponse)
@@ -282,3 +294,102 @@ def delete_device_record(request: DeleteDeviceRecordRequest) -> DeleteDeviceReco
         deleted_model=request.model,
         project_file_path=str(project_file.resolve()),
     )
+
+
+@router.post("/raw-load-data/upload", response_model=RawLoadDataUploadResponse)
+def upload_raw_load_data(
+    project_id: str = Form(...),
+    node_id: str = Form(...),
+    file: UploadFile = File(...),
+) -> RawLoadDataUploadResponse:
+    """上传单个负荷节点的原始用电数据 Excel"""
+    try:
+        project_service.ensure_load_node(project_id, node_id)
+        stored_path, file_name = processing_service.save_raw_load_data(
+            project_id=project_id,
+            node_id=node_id,
+            file_content=file.file.read(),
+            file_name=file.filename or "raw_load_data.xlsx",
+        )
+    except (FileNotFoundError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    return RawLoadDataUploadResponse(
+        success=True,
+        node_id=node_id,
+        file_name=file_name,
+        stored_path=stored_path,
+    )
+
+
+@router.get("/raw-load-data/uploaded/{project_id}")
+def list_uploaded_nodes(project_id: str) -> dict:
+    """返回已上传原始数据的节点列表和已处理节点列表"""
+    try:
+        uploaded = processing_service.get_uploaded_nodes(project_id)
+        processed = processing_service.get_processed_nodes(project_id)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return {
+        "success": True,
+        "project_id": project_id,
+        "uploaded_nodes": uploaded,
+        "processed_nodes": processed,
+    }
+
+
+@router.post("/process-runtime")
+async def process_runtime(request: ProcessRuntimeRequest):
+    """一键批量处理——SSE 流式返回日志"""
+    return StreamingResponse(
+        processing_service.process_all_nodes(request.project_id, request.node_ids),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
+@router.get("/preview/{project_id}/{node_id}")
+def preview_node_files(project_id: str, node_id: str) -> PreviewNodeResponse:
+    """列出某节点下所有可预览文件"""
+    try:
+        srv = LoadDataProcessingService(project_service=project_service)
+        files = srv.list_preview_files(project_id, node_id)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    preview_files = [
+        PreviewFileInfo(
+            name=f["name"],
+            type=f["type"],
+            url=f"/api/assets/preview/{project_id}/{node_id}/{f['name']}",
+        )
+        for f in files
+    ]
+    return PreviewNodeResponse(node_id=node_id, files=preview_files)
+
+
+@router.get("/preview/{project_id}/{node_id}/{file_name:path}")
+def preview_file_content(project_id: str, node_id: str, file_name: str):
+    """返回预览文件内容：图片 binary，CSV JSON 数组"""
+    srv = LoadDataProcessingService(project_service=project_service)
+    file_path = srv.get_preview_file_path(project_id, node_id, file_name)
+    if file_path is None:
+        raise HTTPException(status_code=404, detail=f"文件不存在：{file_name}")
+
+    suffix = file_path.suffix.lower()
+    if suffix == ".png":
+        return Response(content=file_path.read_bytes(), media_type="image/png")
+    elif suffix == ".csv":
+        content = file_path.read_text(encoding="utf-8-sig")
+        reader = csv.DictReader(io.StringIO(content))
+        rows = list(reader)
+        return {"file_name": file_name, "columns": reader.fieldnames or [], "rows": rows, "total_rows": len(rows)}
+    elif suffix == ".txt":
+        content = file_path.read_text(encoding="utf-8")
+        return {"file_name": file_name, "content": content}
+    else:
+        raise HTTPException(status_code=400, detail=f"不支持预览的文件类型：{suffix}")
