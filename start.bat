@@ -110,7 +110,7 @@ if not exist "%~dp0.deps_installed" (
     "!PYTHON_EXE!" -m pip install -e ".[full]" --quiet 2>&1
     if errorlevel 1 (
         echo   [WARN] Full install failed, trying base install ...
-        "!PYTHON_EXE!" -m pip install fastapi uvicorn "pydantic>=2" python-multipart numpy scipy pandas openpyxl pywin32 joblib --quiet 2>&1
+        "!PYTHON_EXE!" -m pip install fastapi uvicorn "pydantic>=2" python-multipart numpy scipy pandas openpyxl pywin32 joblib scikit-learn --quiet 2>&1
     )
     if errorlevel 1 (
         echo   [ERROR] Dependency installation failed.
@@ -140,7 +140,7 @@ if not exist "%~dp0.env" (
 echo.
 echo [4/5] Pre-flight check ...
 
-"!PYTHON_EXE!" -c "import fastapi, uvicorn, numpy, pandas; print('  Core modules OK')" 2>&1
+"!PYTHON_EXE!" -c "import fastapi, uvicorn, numpy, pandas, sklearn; print('  Core modules OK')" 2>&1
 if errorlevel 1 (
     echo   [WARN] Some core modules may be missing
 )
