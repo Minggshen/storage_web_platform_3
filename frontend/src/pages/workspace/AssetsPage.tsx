@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useParams } from 'react-router-dom';
 
 import { getProjectDashboard } from '../../services/projects';
@@ -6,7 +6,11 @@ import {
   listProjectAssets,
   uploadTariffFile,
   uploadDeviceLibraryFile,
-  uploadRuntimeFile,
+  uploadRawLoadData,
+  listUploadedNodes,
+  processRuntime,
+  listPreviewFiles,
+  fetchPreviewContent,
 } from '../../services/assets';
 import { fetchProjectTopology } from '../../services/topology';
 import { Button } from '@/components/ui/button';
@@ -48,14 +52,32 @@ function AssetsPage() {
   const [loadNodes, setLoadNodes] = useState<LoadNodeOption[]>([]);
   const [tariffFile, setTariffFile] = useState<File | null>(null);
   const [libraryFile, setLibraryFile] = useState<File | null>(null);
-  const [runtimeNodeId, setRuntimeNodeId] = useState('');
-  const [yearMapFile, setYearMapFile] = useState<File | null>(null);
-  const [modelLibraryFile, setModelLibraryFile] = useState<File | null>(null);
-  const selectedRuntimeNode = loadNodes.find((node) => node.id === runtimeNodeId) ?? null;
-  const selectedRuntimeBound = Boolean(
-    selectedRuntimeNode?.runtimeBinding?.yearMapFileName &&
-      selectedRuntimeNode?.runtimeBinding?.modelLibraryFileName,
-  );
+  // Step 3 - 原始数据上传
+  const [rawNodeId, setRawNodeId] = useState('');
+  const [rawFile, setRawFile] = useState<File | null>(null);
+  const [rawUploading, setRawUploading] = useState(false);
+  const [uploadedNodeIds, setUploadedNodeIds] = useState<string[]>([]);
+  const [processedNodeIds, setProcessedNodeIds] = useState<string[]>([]);
+
+  // Step 3 - 处理日志
+  const [processing, setProcessing] = useState(false);
+  const [logLines, setLogLines] = useState<Array<{ id: number; node: string; message: string; type: 'progress' | 'done' | 'error' }>>([]);
+  const [processProgress, setProcessProgress] = useState({ current: 0, total: 0 });
+  const [processAbort, setProcessAbort] = useState<AbortController | null>(null);
+
+  // Step 3 - 文件预览
+  const [previewNodeId, setPreviewNodeId] = useState('');
+  const [previewFile, setPreviewFile] = useState<{ name: string; type: string } | null>(null);
+  const [previewFiles, setPreviewFiles] = useState<Array<{ name: string; type: string; url: string }>>([]);
+  const [previewLoading, setPreviewLoading] = useState(false);
+  const [previewContent, setPreviewContent] = useState<{
+    kind: 'image' | 'csv' | 'text';
+    imageUrl?: string;
+    columns?: string[];
+    rows?: Array<Record<string, string>>;
+    textContent?: string;
+  } | null>(null);
+  const logIdRef = useRef(0);
 
   async function loadDashboard() {
     if (!projectId) return;
@@ -125,10 +147,6 @@ function AssetsPage() {
         })
         .filter((node) => node.id);
       setLoadNodes(options);
-      setRuntimeNodeId((current) => {
-        if (current && options.some((node) => node.id === current)) return current;
-        return options[0]?.id ?? '';
-      });
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
       setDashboard(null);
@@ -141,6 +159,10 @@ function AssetsPage() {
   useEffect(() => {
     loadDashboard();
   }, [projectId]);
+
+  useEffect(() => {
+    if (projectId) refreshUploadedNodes();
+  }, [projectId, loadNodes]);
 
   async function onUploadTariff() {
     if (!projectId || !tariffFile) return;
@@ -176,34 +198,108 @@ function AssetsPage() {
     }
   }
 
-  async function onUploadRuntime(kind: 'year_map' | 'model_library') {
+  async function refreshUploadedNodes() {
     if (!projectId) return;
-    const file = kind === 'year_map' ? yearMapFile : modelLibraryFile;
-    if (!file) return;
-    setUploading(true);
-    setError(null);
-    setMessage(null);
     try {
-      await uploadRuntimeFile(projectId, runtimeNodeId, kind, file);
-      setMessage(
-        kind === 'year_map'
-          ? 'runtime_year_model_map 上传成功。'
-          : 'runtime_model_library 上传成功。',
-      );
-      if (kind === 'year_map') {
-        setYearMapFile(null);
-      } else {
-        setModelLibraryFile(null);
-      }
-      await loadDashboard();
+      const data = await listUploadedNodes(projectId);
+      setUploadedNodeIds(data.uploaded_nodes);
+      setProcessedNodeIds(data.processed_nodes);
+    } catch {}
+  }
+
+  async function onUploadRawData() {
+    if (!projectId || !rawNodeId || !rawFile) return;
+    setRawUploading(true);
+    setError(null);
+    try {
+      await uploadRawLoadData(projectId, rawNodeId, rawFile);
+      setRawFile(null);
+      await refreshUploadedNodes();
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
-      setUploading(false);
+      setRawUploading(false);
     }
   }
 
-  const boundCount = dashboard?.runtime_bound_load_count ?? 0;
+  function onStartProcessing() {
+    if (!projectId || processing) return;
+    const nodeIds = uploadedNodeIds.filter((id) => !processedNodeIds.includes(id));
+    if (nodeIds.length === 0) return;
+    setProcessing(true);
+    setLogLines([]);
+    setProcessProgress({ current: 0, total: nodeIds.length });
+
+    const ctrl = processRuntime(
+      projectId,
+      nodeIds,
+      (event) => {
+        const line = {
+          id: ++logIdRef.current,
+          node: String(event.node || ''),
+          message: String(event.message || ''),
+          type: (event.type as 'progress' | 'done' | 'error') || 'progress',
+        };
+        setLogLines((prev) => [...prev.slice(-49), line]);
+        if (event.type === 'done' || event.type === 'error') {
+          setProcessProgress((p) => ({ ...p, current: (event.current as number) || p.current }));
+        }
+      },
+      async () => {
+        setProcessing(false);
+        setProcessAbort(null);
+        await refreshUploadedNodes();
+        await loadDashboard();
+      },
+      (err) => {
+        setError(err.message);
+        setProcessing(false);
+        setProcessAbort(null);
+      },
+    );
+    setProcessAbort(ctrl);
+  }
+
+  async function onSelectPreviewNode(nodeId: string) {
+    setPreviewNodeId(nodeId);
+    setPreviewFile(null);
+    setPreviewContent(null);
+    if (!nodeId || !projectId) return;
+    setPreviewLoading(true);
+    try {
+      const data = await listPreviewFiles(projectId, nodeId);
+      setPreviewFiles(data.files);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setPreviewLoading(false);
+    }
+  }
+
+  async function onSelectPreviewFile(file: { name: string; type: string }) {
+    setPreviewFile(file);
+    if (!projectId || !previewNodeId) return;
+    setPreviewLoading(true);
+    try {
+      const result = await fetchPreviewContent(projectId, previewNodeId, file.name);
+      if (result instanceof Blob) {
+        setPreviewContent({ kind: 'image', imageUrl: URL.createObjectURL(result) });
+      } else if ('content' in result && result.content) {
+        setPreviewContent({ kind: 'text', textContent: result.content });
+      } else if ('rows' in result && result.rows) {
+        setPreviewContent({
+          kind: 'csv',
+          columns: result.columns,
+          rows: result.rows,
+        });
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setPreviewLoading(false);
+    }
+  }
+
   const totalLoadNodes = dashboard?.load_node_count ?? 0;
 
   return (
@@ -299,127 +395,168 @@ function AssetsPage() {
             <StepBadge step={3} label="Runtime 文件绑定" />
             <span
               className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-semibold ${
-                boundCount > 0
+                uploadedNodeIds.length > 0
                   ? 'border border-emerald-500/30 bg-emerald-500/10 text-emerald-600'
                   : 'border border-amber-500/30 bg-amber-500/10 text-amber-600'
               }`}
             >
-              {boundCount}/{totalLoadNodes} 节点已绑定
+              已上传 {uploadedNodeIds.length}/{totalLoadNodes} · 已处理 {processedNodeIds.length}/{totalLoadNodes}
             </span>
           </div>
 
-          <div className="grid gap-5" style={{ gridTemplateColumns: '1fr 1fr' }}>
-            {/* Left: node selector + binding status */}
-            <div>
-              <label htmlFor="runtime-node-select" className="mb-1.5 block text-sm font-semibold text-muted-foreground">
-                选择负荷节点
-              </label>
+          {/* ── ① 上传原始数据 ── */}
+          <div className="mt-4 rounded-xl border border-border bg-muted/20 p-4">
+            <div className="mb-2 text-sm font-semibold text-foreground">① 上传原始数据</div>
+            <div className="flex items-center gap-3 flex-wrap">
               <select
-                id="runtime-node-select"
-                value={runtimeNodeId}
-                onChange={(e) => setRuntimeNodeId(e.target.value)}
-                className="w-full rounded-xl border border-border bg-card px-3 py-2.5 text-sm"
+                value={rawNodeId}
+                onChange={(e) => setRawNodeId(e.target.value)}
+                className="rounded-xl border border-border bg-card px-3 py-2 text-sm"
               >
-                <option value="">请选择负荷节点</option>
-                {loadNodes.map((node) => (
-                  <option key={node.id} value={node.id}>
-                    {node.label}
-                  </option>
-                ))}
+                <option value="">选择负荷节点</option>
+                {loadNodes
+                  .filter((n) => !uploadedNodeIds.includes(n.id))
+                  .map((n) => (
+                    <option key={n.id} value={n.id}>{n.label}</option>
+                  ))}
               </select>
-              {loadNodes.length === 0 ? (
-                <div className="mt-2 text-xs font-semibold text-amber-600">
-                  当前拓扑没有负荷节点，请先在拓扑建模页添加并保存负荷节点。
-                </div>
-              ) : null}
+              <label className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-muted/50 h-7 px-3 text-sm font-medium cursor-pointer hover:bg-muted transition-colors">
+                <span className="text-base">📁</span> 选择文件
+                <input
+                  type="file"
+                  accept=".xlsx,.xls"
+                  className="hidden"
+                  onChange={(e) => setRawFile(e.target.files?.[0] ?? null)}
+                />
+              </label>
+              {rawFile && <span className="text-xs text-muted-foreground truncate max-w-[160px]">{rawFile.name}</span>}
+              <Button size="sm" onClick={onUploadRawData} disabled={!rawNodeId || !rawFile || rawUploading}>
+                上传
+              </Button>
+            </div>
+            {uploadedNodeIds.length > 0 && (
+              <div className="mt-3 flex items-center gap-3 flex-wrap">
+                <span className="text-xs text-muted-foreground">
+                  已上传：{uploadedNodeIds.map((id) => (
+                    <span key={id} className="mr-1.5 mb-0.5 inline-flex items-center rounded-full border border-emerald-500/30 bg-emerald-500/10 px-2 py-0.5 text-[10px] font-semibold text-emerald-600">{id} ✓</span>
+                  ))}
+                </span>
+                <Button size="sm" onClick={onStartProcessing} disabled={processing || uploadedNodeIds.length === 0}>
+                  {processing ? '处理中...' : '一键处理 →'}
+                </Button>
+                {processing && processAbort && (
+                  <Button size="sm" variant="outline" onClick={() => { processAbort.abort(); setProcessing(false); }}>
+                    取消
+                  </Button>
+                )}
+              </div>
+            )}
+            {uploadedNodeIds.length > 0 && (
+              <div className="mt-3 text-xs text-muted-foreground">
+                待处理：{uploadedNodeIds.filter((id) => !processedNodeIds.includes(id)).join(', ') || '无'}
+              </div>
+            )}
+          </div>
 
-              {/* Binding status */}
-              {selectedRuntimeNode ? (
-                <div className="mt-4 rounded-xl border border-border bg-muted/30 p-3.5">
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="min-w-0">
-                      <div className="text-sm font-bold text-foreground">当前节点绑定状态</div>
-                      <div className="mt-1 text-xs text-muted-foreground break-words">
-                        {selectedRuntimeNode.label}
-                      </div>
-                    </div>
-                    <span
-                      className={`inline-flex shrink-0 items-center rounded-full border px-2.5 py-0.5 text-xs font-bold ${
-                        selectedRuntimeBound
-                          ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-600'
-                          : 'border-amber-500/40 bg-amber-500/10 text-amber-600'
-                      }`}
-                    >
-                      {selectedRuntimeBound ? '已完成绑定' : '未完成绑定'}
-                    </span>
-                  </div>
-                  <div className="mt-3 grid gap-2.5" style={{ gridTemplateColumns: '1fr 1fr' }}>
-                    <RuntimeInfo label="绑定 year_map" value={selectedRuntimeNode.runtimeBinding?.yearMapFileName || '未绑定'} />
-                    <RuntimeInfo label="绑定 model_library" value={selectedRuntimeNode.runtimeBinding?.modelLibraryFileName || '未绑定'} />
-                    <RuntimeInfo label="已上传 year_map" value={selectedRuntimeNode.currentRuntimeFiles?.yearMapFileName || '未上传'} />
-                    <RuntimeInfo label="已上传 model_library" value={selectedRuntimeNode.currentRuntimeFiles?.modelLibraryFileName || '未上传'} />
-                  </div>
-                </div>
-              ) : (
-                <div className="mt-4 rounded-xl border border-border bg-muted/30 p-3.5">
-                  <div className="text-sm font-bold text-foreground">当前节点绑定状态</div>
-                  <div className="mt-2 text-xs text-muted-foreground">
-                    请选择一个负荷节点后查看其 runtime 绑定情况。
-                  </div>
+          {/* ── ② 处理日志 ── */}
+          {logLines.length > 0 && (
+            <div className="mt-4 rounded-xl border border-border bg-muted/20 p-4">
+              <div className="mb-2 text-sm font-semibold text-foreground">② 处理日志</div>
+              {processProgress.total > 0 && (
+                <div className="mb-3 h-2 w-full rounded-full bg-muted overflow-hidden">
+                  <div
+                    className="h-full rounded-full bg-primary transition-all duration-300"
+                    style={{ width: `${Math.round((processProgress.current / processProgress.total) * 100)}%` }}
+                  />
                 </div>
               )}
-            </div>
-
-            {/* Right: upload controls */}
-            <div>
-              <div className="mb-4">
-                <label htmlFor="runtime-file-input-1" className="mb-1.5 block text-sm font-semibold text-muted-foreground">
-                  runtime_year_model_map.csv
-                </label>
-                <label className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-muted/50 h-7 px-3 text-sm font-medium cursor-pointer hover:bg-muted transition-colors">
-                  <span className="text-base">📁</span> 选择文件
-                  <input
-                    id="runtime-file-input-1"
-                    type="file"
-                    accept=".csv"
-                    className="hidden"
-                    onChange={(e) => setYearMapFile(e.target.files?.[0] ?? null)}
-                  />
-                </label>
-                {yearMapFile && <span className="ml-2 text-xs text-muted-foreground truncate max-w-[160px]">{yearMapFile.name}</span>}
-                <div className="mt-2.5">
-                  <Button size="sm" onClick={() => onUploadRuntime('year_map')} disabled={!runtimeNodeId || !yearMapFile || uploading}>
-                    上传 year_map
-                  </Button>
-                </div>
-              </div>
-
-              <div>
-                <label htmlFor="runtime-file-input-2" className="mb-1.5 block text-sm font-semibold text-muted-foreground">
-                  runtime_model_library.csv
-                </label>
-                <label className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-muted/50 h-7 px-3 text-sm font-medium cursor-pointer hover:bg-muted transition-colors">
-                  <span className="text-base">📁</span> 选择文件
-                  <input
-                    id="runtime-file-input-2"
-                    type="file"
-                    accept=".csv"
-                    className="hidden"
-                    onChange={(e) => setModelLibraryFile(e.target.files?.[0] ?? null)}
-                  />
-                </label>
-                {modelLibraryFile && <span className="ml-2 text-xs text-muted-foreground truncate max-w-[160px]">{modelLibraryFile.name}</span>}
-                <div className="mt-2.5">
-                  <Button size="sm" onClick={() => onUploadRuntime('model_library')} disabled={!runtimeNodeId || !modelLibraryFile || uploading}>
-                    上传 model_library
-                  </Button>
-                </div>
+              <div className="max-h-48 overflow-y-auto space-y-0.5 text-xs font-mono">
+                {logLines.map((line) => (
+                  <div
+                    key={line.id}
+                    className={
+                      line.type === 'error' ? 'text-red-600' :
+                      line.type === 'done' ? 'text-emerald-600' :
+                      'text-muted-foreground'
+                    }
+                  >
+                    [{line.type === 'error' ? '✗' : line.type === 'done' ? '✓' : '·'}] {line.node}: {line.message}
+                  </div>
+                ))}
               </div>
             </div>
+          )}
+
+          {/* ── ③ 文件预览 ── */}
+          <div className="mt-4 rounded-xl border border-border bg-muted/20 p-4">
+            <div className="mb-2 text-sm font-semibold text-foreground">③ 文件预览</div>
+            <div className="flex items-center gap-3 flex-wrap mb-3">
+              <select
+                value={previewNodeId}
+                onChange={(e) => onSelectPreviewNode(e.target.value)}
+                className="rounded-xl border border-border bg-card px-3 py-2 text-sm"
+              >
+                <option value="">选择节点</option>
+                {processedNodeIds.map((id) => (
+                  <option key={id} value={id}>{id}</option>
+                ))}
+              </select>
+              <select
+                value={previewFile?.name || ''}
+                onChange={(e) => {
+                  const f = previewFiles.find((pf) => pf.name === e.target.value);
+                  if (f) onSelectPreviewFile(f);
+                }}
+                className="rounded-xl border border-border bg-card px-3 py-2 text-sm"
+                disabled={!previewNodeId || previewFiles.length === 0}
+              >
+                <option value="">选择文件</option>
+                {previewFiles.map((f) => (
+                  <option key={f.name} value={f.name}>{f.name} ({f.type})</option>
+                ))}
+              </select>
+            </div>
+            {previewLoading ? (
+              <div className="text-xs text-muted-foreground">加载中...</div>
+            ) : previewContent ? (
+              previewContent.kind === 'image' ? (
+                <img src={previewContent.imageUrl} alt="预览" className="max-w-full max-h-96 rounded-xl border" />
+              ) : previewContent.kind === 'csv' ? (
+                <div className="max-h-80 overflow-auto rounded-xl border">
+                  <table className="w-full text-xs">
+                    <thead className="bg-muted/50 sticky top-0">
+                      <tr>
+                        {previewContent.columns?.map((col) => (
+                          <th key={col} className="px-2 py-1.5 text-left font-semibold whitespace-nowrap">{col}</th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {previewContent.rows?.slice(0, 100).map((row, i) => (
+                        <tr key={i} className="border-t border-border/50">
+                          {previewContent.columns?.map((col) => (
+                            <td key={col} className="px-2 py-1 whitespace-nowrap">{row[col]}</td>
+                          ))}
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                  {previewContent.rows && previewContent.rows.length > 100 && (
+                    <div className="px-2 py-1 text-xs text-muted-foreground">
+                      显示前 100 行，共 {previewContent.rows.length} 行
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <pre className="max-h-80 overflow-auto rounded-xl border bg-muted/30 p-3 text-xs">{previewContent.textContent}</pre>
+              )
+            ) : (
+              <div className="text-xs text-muted-foreground">选择已处理的节点和文件后预览</div>
+            )}
           </div>
 
           <p className="mt-4 text-xs text-muted-foreground">
-            每个负荷节点需要分别绑定 year_map 和 model_library。切换节点后状态自动更新。节点列表来自拓扑建模中的负荷节点。
+            上传原始负荷 Excel（两列：时间 + 负荷），脚本将自动根据节点类型（居民/工业/商业）选择建模算法生成 runtime 文件。
           </p>
         </section>
 
@@ -428,22 +565,11 @@ function AssetsPage() {
           <button
             onClick={loadDashboard}
             disabled={loading || uploading}
-            className="rounded-xl border border-border bg-card px-4 py-2 text-xs font-semibold text-muted-foreground hover:text-foreground transition-colors"
+            className="rounded-xl border border-border bg-muted/50 px-4 py-2 text-xs font-semibold text-muted-foreground hover:bg-muted hover:text-foreground transition-colors"
           >
             {loading ? '刷新中...' : '刷新状态'}
           </button>
         </div>
-      </div>
-    </div>
-  );
-}
-
-function RuntimeInfo({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="rounded-xl border border-border bg-card px-3 py-2.5 min-w-0">
-      <div className="text-xs text-muted-foreground">{label}</div>
-      <div className="mt-1 text-[13px] font-semibold text-foreground break-words">
-        {value}
       </div>
     </div>
   );
