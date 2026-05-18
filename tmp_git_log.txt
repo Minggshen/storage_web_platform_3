@@ -1,0 +1,21 @@
+a366af3 refactor: build_runtime 脚本添加 process_one_node 入口
+abd4453 feat: 添加 scripts 包和 scikit-learn 依赖
+a408944 refactor: 居民建模脚本添加 process_raw_data 入口
+bf06bce feat: 新增 register_asset_file 方法支持磁盘文件注册
+b80952c refactor: 工商业建模脚本添加 process_raw_data 入口
+269a8d7 plan: runtime 数据处理一体化实施计划（12个任务）
+fd2dde4 docs: 补充 register_asset_file 兼容方案和 start.bat 依赖更新
+00adb4d docs: runtime 数据处理一体化设计文档
+581e426 fix: 文件选择按钮与上传按钮等高对齐（h-7）
+91c4f47 fix: 增强按钮视觉辨识度，统一按钮背景底色
+8f2f503 feat: 移除内置IEEE33模板，改为用户自定义模板选择
+c6d9e1b fix: 修复交付版跨域请求被拒问题（CORS + URL 对齐）
+7256f31 chore: 删除非项目源码的第三方文件与缓存
+fa99e8e docs: 修正 README 后端入口文件名、工作流页数，补充快速部署说明
+a89cef5 docs: 补充 BuildPage 交互细节到 CLAUDE.md
+1e1278c feat: 前端6页面步骤化布局重设计及可视化优化
+9f4fa9a chore: 将 patent_outputs 加入 .gitignore
+4db6b90 chore: 从仓库移除专利材料，加入 .gitignore
+0c1fbcc chore: 存档当前工程状态，含前端主题系统、技能模块及交互优化
+1899e2d docs: 更新 README 仓库地址
+d21d973 initial commit: 工商业储能优化平台

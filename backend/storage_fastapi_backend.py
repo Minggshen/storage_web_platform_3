@@ -37,6 +37,15 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
+@app.middleware("http")
+async def _cache_control_middleware(request, call_next):
+    response = await call_next(request)
+    path = request.url.path
+    if path.startswith("/assets/"):
+        response.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+    return response
+
 _static_dir = Path(__file__).parent / "static"
 _has_frontend = _static_dir.is_dir()
 
@@ -58,7 +67,7 @@ if _has_frontend:
     # Favicon
     @app.get("/favicon.svg", include_in_schema=False)
     async def favicon():
-        return FileResponse(str(_static_dir / "favicon.svg"))
+        return FileResponse(str(_static_dir / "favicon.svg"), headers={"Cache-Control": "no-cache"})
 
     # SPA fallback: 所有非 API 的 GET 请求返回 index.html（必须在 API 路由之后）
     @app.get("/{full_path:path}", include_in_schema=False)
@@ -66,7 +75,7 @@ if _has_frontend:
         requested = _static_dir / full_path
         if requested.is_file():
             return FileResponse(str(requested))
-        return FileResponse(str(_static_dir / "index.html"))
+        return FileResponse(str(_static_dir / "index.html"), headers={"Cache-Control": "no-cache"})
 else:
     @app.get("/")
     def root() -> dict:

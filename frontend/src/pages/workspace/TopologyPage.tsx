@@ -4751,8 +4751,8 @@ const paletteBtnStyle: React.CSSProperties = {
   textAlign: 'left',
   padding: '9px 10px',
   borderRadius: 10,
-  border: '1px solid #d1d5db',
-  background: '#ffffff',
+  border: '1px solid #cbd5e1',
+  background: '#f8fafc',
   fontWeight: 600,
   cursor: 'pointer',
 };

@@ -198,7 +198,7 @@ function ProjectsPage() {
               <button
                 type="button"
                 onClick={() => setDeleteTarget(null)}
-                className="rounded-xl border bg-background px-4 py-2 text-sm font-medium hover:bg-muted transition-colors"
+                className="rounded-xl border bg-muted/50 px-4 py-2 text-sm font-medium hover:bg-muted transition-colors"
               >
                 取消
               </button>

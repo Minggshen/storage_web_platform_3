@@ -35,6 +35,26 @@ class ProjectDashboardService:
             and n.runtime_binding.model_library_file_id
         ]
 
+        # Count load nodes with actually uploaded runtime files (not just topology binding)
+        load_node_ids = {str(n.id) for n in load_nodes}
+        nodes_with_year_map: set = set()
+        nodes_with_model_library: set = set()
+        for asset in project.assets.values():
+            meta = asset.metadata or {}
+            if meta.get("category") != "runtime":
+                continue
+            if not meta.get("is_current"):
+                continue
+            node_id = str(meta.get("subfolder", ""))
+            if node_id not in load_node_ids:
+                continue
+            kind = str(meta.get("runtime_kind", ""))
+            if kind == "year_map":
+                nodes_with_year_map.add(node_id)
+            elif kind == "model_library":
+                nodes_with_model_library.add(node_id)
+        runtime_uploaded = nodes_with_year_map & nodes_with_model_library
+
         build_manifest_exists = (
             self.project_service._project_dir(project_id)
             / "build"
@@ -136,7 +156,7 @@ class ProjectDashboardService:
         assets_done = (
             has_tariff
             and has_device_library
-            and len(runtime_bound) == len(load_nodes)
+            and len(runtime_uploaded) == len(load_nodes)
             and len(load_nodes) > 0
         )
 

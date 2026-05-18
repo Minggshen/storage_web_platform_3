@@ -1,0 +1,1006 @@
+from __future__ import annotations
+
+import warnings
+from pathlib import Path
+
+import numpy as np
+import pandas as pd
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+from sklearn.cluster import KMeans
+from sklearn.metrics import silhouette_score
+from sklearn.preprocessing import StandardScaler
+
+warnings.filterwarnings("ignore")
+
+# ==============================
+# 参数区
+# ==============================
+OUTPUT_ROOT_NAME = "按工休和年峰谷分析的1h级典型日负荷模型_改"
+
+TARGET_FREQ = "1h"
+POINTS_PER_DAY = 24
+
+# 周内工休初判参数
+WEEK_CLUSTER_SIL_THRESHOLD = 0.12
+WEEK_PROFILE_GAP_THRESHOLD = 0.05
+WEEK_ENERGY_GAP_THRESHOLD = 0.04
+
+# 主模式修正规则阈值
+SPECIAL_WEEK_SIL_THRESHOLD = 0.15
+
+# 年度峰谷分段参数
+YEAR_CLUSTER_SIL_THRESHOLD = 0.18
+YEAR_MAX_CLUSTERS = 5
+
+RANDOM_STATE = 42
+
+plt.rcParams["font.sans-serif"] = ["Microsoft YaHei", "SimHei", "Arial Unicode MS", "DejaVu Sans"]
+plt.rcParams["axes.unicode_minus"] = False
+
+FINAL_CAT_CODE_MAP = {
+    "工作日": 1,
+    "休息日": 2,
+    "同类日": 3,
+}
+
+PATTERN_CHAR_MAP = {
+    "工作日": "W",
+    "休息日": "R",
+    "同类日": "S",
+}
+
+PATTERN_CHAR_TO_NAME = {
+    "W": "工作日",
+    "R": "休息日",
+    "S": "同类日",
+}
+
+
+# ==============================
+# 工具函数
+# ==============================
+
+def get_time_labels(points_per_day: int) -> list[str]:
+    if points_per_day == 24:
+        return [f"{h:02d}:00" for h in range(24)]
+    elif points_per_day == 96:
+        return [f"{i//4:02d}:{(i % 4) * 15:02d}" for i in range(96)]
+    else:
+        step_minutes = 24 * 60 // points_per_day
+        labels = []
+        for i in range(points_per_day):
+            total_minutes = i * step_minutes
+            hh = total_minutes // 60
+            mm = total_minutes % 60
+            labels.append(f"{hh:02d}:{mm:02d}")
+        return labels
+
+
+TIME_LABELS = get_time_labels(POINTS_PER_DAY)
+
+
+def pattern_to_text(pattern: str) -> str:
+    """
+    将如 WWWWWRR / SSSSSSS 转成中文说明
+    """
+    if pattern is None or pd.isna(pattern):
+        return "无法识别"
+
+    week_names = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"]
+
+    if pattern == "SSSSSSS":
+        return "全周同类日"
+
+    if "M" in pattern:
+        return "不完整周"
+
+    parts = []
+    for i, ch in enumerate(pattern):
+        parts.append(f"{week_names[i]}-{PATTERN_CHAR_TO_NAME.get(ch, '未知')}")
+
+    return "；".join(parts)
+
+
+def count_pattern_mismatch(a: str, b: str) -> int | None:
+    """
+    统计两个周模式之间的偏离天数（忽略 M）
+    """
+    if not a or not b:
+        return None
+    if len(a) != len(b):
+        return None
+
+    cnt = 0
+    valid = 0
+    for x, y in zip(a, b):
+        if x == "M" or y == "M":
+            continue
+        valid += 1
+        if x != y:
+            cnt += 1
+
+    if valid == 0:
+        return None
+    return cnt
+
+
+# ==============================
+# 读取与预处理
+# ==============================
+
+def read_load_excel(file_path: Path) -> pd.DataFrame:
+    """
+    默认读取方式：
+    第 1 列为时间，第 2 列为负荷。
+    若首行像表头，则自动剔除。
+    """
+    raw = pd.read_excel(file_path, sheet_name=0, header=None)
+
+    if raw.shape[1] < 2:
+        raise ValueError("Excel 至少需要两列：时间列、负荷列。")
+
+    raw = raw.iloc[:, :2].copy()
+    raw.columns = ["时间", "负荷"]
+
+    first_time = pd.to_datetime(raw.iloc[0, 0], errors="coerce")
+    first_load = pd.to_numeric(raw.iloc[0, 1], errors="coerce")
+    if pd.isna(first_time) and pd.isna(first_load):
+        raw = raw.iloc[1:].copy()
+
+    raw["时间"] = pd.to_datetime(raw["时间"], errors="coerce")
+    raw["负荷"] = pd.to_numeric(raw["负荷"], errors="coerce")
+    raw = raw.dropna(subset=["时间", "负荷"])
+    raw = raw.sort_values("时间")
+
+    raw = raw.groupby("时间", as_index=False)["负荷"].mean()
+
+    df = raw.set_index("时间").sort_index()
+    inferred_freq = pd.infer_freq(df.index)
+    if inferred_freq is None:
+        inferred_freq = "15min"
+
+    full_index = pd.date_range(df.index.min(), df.index.max(), freq=inferred_freq)
+    df = df.reindex(full_index)
+    df.index.name = "时间"
+
+    df["负荷"] = df["负荷"].interpolate(method="time", limit_direction="both")
+    df["负荷"] = df["负荷"].ffill().bfill()
+
+    df_1h = df.resample(TARGET_FREQ).mean()
+    df_1h["负荷"] = df_1h["负荷"].interpolate(method="time", limit_direction="both")
+    df_1h["负荷"] = df_1h["负荷"].ffill().bfill()
+
+    return df_1h.reset_index()
+
+
+def build_daily_profiles(df: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """
+    输入：1h 负荷序列
+    输出：
+    1) 每日 24 点曲线 + 元信息
+    2) 原始 1h 序列 + 元信息
+    """
+    df = df.copy()
+    df["日期"] = df["时间"].dt.date
+    df["时段序号"] = df["时间"].dt.hour
+    df["星期序号"] = df["时间"].dt.weekday
+    df["星期"] = df["星期序号"].map({
+        0: "周一", 1: "周二", 2: "周三", 3: "周四",
+        4: "周五", 5: "周六", 6: "周日"
+    })
+    df["周起始日"] = (
+        df["时间"].dt.normalize() - pd.to_timedelta(df["时间"].dt.weekday, unit="D")
+    ).dt.date
+
+    pivot = df.pivot_table(index="日期", columns="时段序号", values="负荷", aggfunc="mean")
+    pivot = pivot.reindex(columns=range(POINTS_PER_DAY))
+    pivot = pivot.dropna(how="any")
+
+    daily = pivot.reset_index()
+    meta = df.groupby("日期").agg(
+        星期序号=("星期序号", "first"),
+        星期=("星期", "first"),
+        周起始日=("周起始日", "first"),
+    ).reset_index()
+
+    daily = daily.merge(meta, on="日期", how="left")
+    return daily, df
+
+
+# ==============================
+# 第一步：按周做工休初判
+# ==============================
+
+def _build_day_features(day_matrix: np.ndarray) -> np.ndarray:
+    """
+    对每天的 24 点曲线构造特征
+    """
+    day_mean = day_matrix.mean(axis=1)
+    day_peak = day_matrix.max(axis=1)
+    day_valley = day_matrix.min(axis=1)
+    day_std = day_matrix.std(axis=1)
+    load_factor = np.divide(day_mean, day_peak, out=np.zeros_like(day_mean), where=day_peak != 0)
+
+    shape_feature = np.divide(
+        day_matrix,
+        day_mean[:, None],
+        out=np.zeros_like(day_matrix),
+        where=day_mean[:, None] != 0
+    )
+
+    feature = np.concatenate(
+        [
+            shape_feature,
+            day_mean[:, None],
+            day_peak[:, None],
+            day_valley[:, None],
+            day_std[:, None],
+            load_factor[:, None],
+        ],
+        axis=1,
+    )
+    return feature
+
+
+def classify_one_week(week_df: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame, dict]:
+    """
+    对单周做工休初判
+    返回：
+    1) 本周逐日初判结果
+    2) 本周典型曲线
+    3) 本周摘要
+    """
+    result = week_df[["日期", "星期序号", "星期", "周起始日"]].copy()
+    day_matrix = week_df.loc[:, list(range(POINTS_PER_DAY))].to_numpy(dtype=float)
+    n_days = len(week_df)
+
+    labels = np.zeros(n_days, dtype=int)
+    model_count = 1
+    silhouette = np.nan
+    profile_gap = np.nan
+    energy_gap = np.nan
+
+    if n_days >= 4:
+        feature = _build_day_features(day_matrix)
+        feature_std = StandardScaler().fit_transform(feature)
+
+        km = KMeans(n_clusters=2, n_init=10, random_state=RANDOM_STATE)
+        labels_2 = km.fit_predict(feature_std)
+        counts = pd.Series(labels_2).value_counts()
+
+        if counts.min() >= 2:
+            silhouette = silhouette_score(feature_std, labels_2)
+            center0 = day_matrix[labels_2 == 0].mean(axis=0)
+            center1 = day_matrix[labels_2 == 1].mean(axis=0)
+            mean_level = max(day_matrix.mean(), 1e-9)
+
+            profile_gap = np.mean(np.abs(center0 - center1)) / mean_level
+            energy_gap = abs(day_matrix[labels_2 == 0].mean() - day_matrix[labels_2 == 1].mean()) / mean_level
+
+            if silhouette >= WEEK_CLUSTER_SIL_THRESHOLD and (
+                profile_gap >= WEEK_PROFILE_GAP_THRESHOLD or energy_gap >= WEEK_ENERGY_GAP_THRESHOLD
+            ):
+                labels = labels_2.copy()
+                model_count = 2
+
+    result["原始簇"] = labels
+
+    # 情况 1：无明显工休差异
+    if model_count == 1:
+        result["初判周内类别名称"] = "同类日"
+        result["初判周内类别编码"] = FINAL_CAT_CODE_MAP["同类日"]
+
+        same_curve = day_matrix.mean(axis=0)
+        weekly_curve = pd.DataFrame([same_curve], columns=TIME_LABELS)
+        weekly_curve.insert(0, "模型名称", ["同类日模型"])
+        weekly_curve.insert(0, "类别名称", ["同类日"])
+        weekly_curve.insert(0, "类别编码", [FINAL_CAT_CODE_MAP["同类日"]])
+        weekly_curve.insert(0, "判定说明", ["全周无明显工休差异"])
+        weekly_curve.insert(0, "周起始日", [week_df["周起始日"].iloc[0]])
+
+        summary = {
+            "周起始日": week_df["周起始日"].iloc[0],
+            "本周天数": n_days,
+            "周内模型数": 1,
+            "判定结论": "全周无明显工休差异",
+            "工作日数量": 0,
+            "休息日数量": 0,
+            "同类日数量": n_days,
+            "轮廓系数": None if pd.isna(silhouette) else float(silhouette),
+            "曲线差异指标": None if pd.isna(profile_gap) else float(profile_gap),
+            "能量差异指标": None if pd.isna(energy_gap) else float(energy_gap),
+        }
+        return result, weekly_curve, summary
+
+    # 情况 2：存在明显工休差异
+    temp = result.copy()
+    temp["日均负荷"] = day_matrix.mean(axis=1)
+
+    weekend_ratio = temp.groupby("原始簇")["星期序号"].apply(lambda s: (s >= 5).mean()).to_dict()
+    mean_energy = temp.groupby("原始簇")["日均负荷"].mean().to_dict()
+
+    ratio0 = weekend_ratio.get(0, 0)
+    ratio1 = weekend_ratio.get(1, 0)
+
+    if ratio0 > ratio1:
+        rest_raw = 0
+    elif ratio1 > ratio0:
+        rest_raw = 1
+    else:
+        rest_raw = min(mean_energy, key=mean_energy.get)
+
+    result["初判周内类别名称"] = np.where(result["原始簇"] == rest_raw, "休息日", "工作日")
+    result["初判周内类别编码"] = result["初判周内类别名称"].map(FINAL_CAT_CODE_MAP)
+
+    work_curve = day_matrix[result["初判周内类别名称"].to_numpy() == "工作日"].mean(axis=0)
+    rest_curve = day_matrix[result["初判周内类别名称"].to_numpy() == "休息日"].mean(axis=0)
+
+    weekly_curve = pd.DataFrame([work_curve, rest_curve], columns=TIME_LABELS)
+    weekly_curve.insert(0, "模型名称", ["工作日模型", "休息日模型"])
+    weekly_curve.insert(0, "类别名称", ["工作日", "休息日"])
+    weekly_curve.insert(0, "类别编码", [FINAL_CAT_CODE_MAP["工作日"], FINAL_CAT_CODE_MAP["休息日"]])
+    weekly_curve.insert(0, "判定说明", ["存在明显工休差异", "存在明显工休差异"])
+    weekly_curve.insert(0, "周起始日", [week_df["周起始日"].iloc[0], week_df["周起始日"].iloc[0]])
+
+    summary = {
+        "周起始日": week_df["周起始日"].iloc[0],
+        "本周天数": n_days,
+        "周内模型数": 2,
+        "判定结论": "存在明显工休差异",
+        "工作日数量": int((result["初判周内类别名称"] == "工作日").sum()),
+        "休息日数量": int((result["初判周内类别名称"] == "休息日").sum()),
+        "同类日数量": 0,
+        "轮廓系数": None if pd.isna(silhouette) else float(silhouette),
+        "曲线差异指标": None if pd.isna(profile_gap) else float(profile_gap),
+        "能量差异指标": None if pd.isna(energy_gap) else float(energy_gap),
+    }
+
+    return result, weekly_curve, summary
+
+
+def analyze_weekly_work_rest(daily: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    day_result_list = []
+    curve_list = []
+    summary_list = []
+
+    for _, week_df in daily.groupby("周起始日", sort=True):
+        day_result, curve_df, summary = classify_one_week(week_df)
+        day_result_list.append(day_result)
+        curve_list.append(curve_df)
+        summary_list.append(summary)
+
+    weekly_day_result = pd.concat(day_result_list, ignore_index=True)
+    weekly_curve_result = pd.concat(curve_list, ignore_index=True)
+    weekly_summary_result = pd.DataFrame(summary_list)
+
+    return weekly_day_result, weekly_curve_result, weekly_summary_result
+
+
+# ==============================
+# 第二步：识别公司主工休模式
+# ==============================
+
+def encode_week_pattern(week_day_result: pd.DataFrame, label_col: str = "初判周内类别名称") -> str:
+    """
+    将单周逐日标签编码为长度 7 的模式串：
+    工作日=W，休息日=R，同类日=S，缺失=M
+    顺序：周一到周日
+    """
+    full_week = pd.DataFrame({"星期序号": list(range(7))})
+    temp = week_day_result[["星期序号", label_col]].copy()
+    temp = full_week.merge(temp, on="星期序号", how="left")
+    temp["编码"] = temp[label_col].map(PATTERN_CHAR_MAP).fillna("M")
+    return "".join(temp["编码"].tolist())
+
+
+def infer_company_main_workrest_pattern(
+    weekly_day_result: pd.DataFrame,
+    weekly_summary_result: pd.DataFrame
+) -> tuple[pd.DataFrame, pd.DataFrame, str | None]:
+    """
+    统计全年每周的初判模式，取出现次数最多的完整周模式作为主模式
+    """
+    rows = []
+
+    for week_start, grp in weekly_day_result.groupby("周起始日", sort=True):
+        pattern_code = encode_week_pattern(grp, label_col="初判周内类别名称")
+        summary_row = weekly_summary_result.loc[weekly_summary_result["周起始日"] == week_start].iloc[0]
+
+        rows.append({
+            "周起始日": week_start,
+            "初判周模式编码": pattern_code,
+            "初判周模式说明": pattern_to_text(pattern_code),
+            "是否完整周": ("M" not in pattern_code),
+            "本周天数": summary_row["本周天数"],
+            "周内模型数": summary_row["周内模型数"],
+            "判定结论": summary_row["判定结论"],
+            "轮廓系数": summary_row["轮廓系数"],
+            "曲线差异指标": summary_row["曲线差异指标"],
+            "能量差异指标": summary_row["能量差异指标"],
+        })
+
+    week_pattern_df = pd.DataFrame(rows)
+
+    valid_df = week_pattern_df[week_pattern_df["是否完整周"]].copy()
+    pattern_count = (
+        valid_df["初判周模式编码"]
+        .value_counts()
+        .rename_axis("周模式编码")
+        .reset_index(name="出现周数")
+    )
+
+    if not pattern_count.empty:
+        total_valid_weeks = pattern_count["出现周数"].sum()
+        pattern_count["占完整周比例"] = pattern_count["出现周数"] / total_valid_weeks
+        pattern_count["模式说明"] = pattern_count["周模式编码"].apply(pattern_to_text)
+        main_pattern = pattern_count.iloc[0]["周模式编码"]
+    else:
+        pattern_count["占完整周比例"] = []
+        pattern_count["模式说明"] = []
+        main_pattern = None
+
+    week_pattern_df["公司主工休模式"] = main_pattern
+    week_pattern_df["公司主工休模式说明"] = pattern_to_text(main_pattern) if main_pattern else "无法识别"
+
+    if main_pattern is not None:
+        week_pattern_df["与主模式偏离天数"] = week_pattern_df["初判周模式编码"].apply(
+            lambda x: count_pattern_mismatch(x, main_pattern)
+        )
+    else:
+        week_pattern_df["与主模式偏离天数"] = None
+
+    return week_pattern_df, pattern_count, main_pattern
+
+
+# ==============================
+# 第三步：按主模式修正，同时保留特殊周
+# ==============================
+
+def revise_week_labels_by_main_pattern(
+    weekly_day_result: pd.DataFrame,
+    weekly_summary_result: pd.DataFrame,
+    week_pattern_df: pd.DataFrame,
+    main_pattern: str | None,
+) -> pd.DataFrame:
+    """
+    按规则修正：
+    1) 与主模式完全一致 -> 主模式周
+    2) 与主模式不一致，且轮廓系数 >= 0.15 -> 特殊周保留
+    3) 本周为 SSSSSSS -> 特殊周保留
+    4) 只轻微偏离主模式，且本周分类不够稳定 -> 按主模式修正
+    """
+    revised_rows = []
+
+    for week_start, grp in weekly_day_result.groupby("周起始日", sort=True):
+        grp = grp.copy()
+        pattern_row = week_pattern_df.loc[week_pattern_df["周起始日"] == week_start].iloc[0]
+        summary_row = weekly_summary_result.loc[weekly_summary_result["周起始日"] == week_start].iloc[0]
+
+        this_pattern = pattern_row["初判周模式编码"]
+        silhouette = summary_row["轮廓系数"]
+
+        grp["初判周模式编码"] = this_pattern
+        grp["公司主工休模式"] = main_pattern
+        grp["公司主工休模式说明"] = pattern_to_text(main_pattern) if main_pattern else "无法识别"
+        grp["与主模式偏离天数"] = count_pattern_mismatch(this_pattern, main_pattern) if main_pattern else None
+
+        # 无法识别主模式时，保留初判
+        if main_pattern is None:
+            grp["最终周内类别名称"] = grp["初判周内类别名称"]
+            grp["最终周内类别编码"] = grp["最终周内类别名称"].map(FINAL_CAT_CODE_MAP)
+            grp["周类型"] = "无法识别主模式"
+            grp["修正规则"] = "未识别到公司主工休模式，保留初判结果"
+            revised_rows.append(grp)
+            continue
+
+        # 规则 1：与主模式完全一致
+        if this_pattern == main_pattern:
+            grp["最终周内类别名称"] = grp["初判周内类别名称"]
+            grp["最终周内类别编码"] = grp["最终周内类别名称"].map(FINAL_CAT_CODE_MAP)
+            grp["周类型"] = "主模式周"
+            grp["修正规则"] = "与主模式完全一致"
+            revised_rows.append(grp)
+            continue
+
+        # 规则 3：本周为 SSSSSSS
+        if this_pattern == "SSSSSSS":
+            grp["最终周内类别名称"] = grp["初判周内类别名称"]
+            grp["最终周内类别编码"] = grp["最终周内类别名称"].map(FINAL_CAT_CODE_MAP)
+            grp["周类型"] = "特殊周"
+            grp["修正规则"] = "本周为 SSSSSSS，特殊周保留"
+            revised_rows.append(grp)
+            continue
+
+        # 规则 2：与主模式不一致，且本周轮廓系数 >= 0.15
+        if silhouette is not None and not pd.isna(silhouette) and silhouette >= SPECIAL_WEEK_SIL_THRESHOLD:
+            grp["最终周内类别名称"] = grp["初判周内类别名称"]
+            grp["最终周内类别编码"] = grp["最终周内类别名称"].map(FINAL_CAT_CODE_MAP)
+            grp["周类型"] = "特殊周"
+            grp["修正规则"] = f"与主模式不一致且轮廓系数≥{SPECIAL_WEEK_SIL_THRESHOLD:.2f}，特殊周保留"
+            revised_rows.append(grp)
+            continue
+
+        # 规则 4：轻微偏离且分类不稳定 -> 按主模式修正
+        def apply_main_pattern(day_idx: int) -> str:
+            ch = main_pattern[day_idx]
+            return PATTERN_CHAR_TO_NAME[ch]
+
+        grp["最终周内类别名称"] = grp["星期序号"].apply(apply_main_pattern)
+        grp["最终周内类别编码"] = grp["最终周内类别名称"].map(FINAL_CAT_CODE_MAP)
+        grp["周类型"] = "主模式修正周"
+        grp["修正规则"] = "轻微偏离主模式且分类不够稳定，按主模式修正"
+        revised_rows.append(grp)
+
+    revised_day_result = pd.concat(revised_rows, ignore_index=True)
+    return revised_day_result
+
+
+# ==============================
+# 第四步：年度峰谷分段
+# ==============================
+
+def build_weekly_feature_table(daily: pd.DataFrame) -> pd.DataFrame:
+    rows = []
+
+    for week_start, x in daily.groupby("周起始日", sort=True):
+        mat = x.loc[:, list(range(POINTS_PER_DAY))].to_numpy(dtype=float)
+        day_mean = x.loc[:, list(range(POINTS_PER_DAY))].mean(axis=1)
+        day_peak = x.loc[:, list(range(POINTS_PER_DAY))].max(axis=1)
+        day_valley = x.loc[:, list(range(POINTS_PER_DAY))].min(axis=1)
+
+        rows.append(
+            {
+                "周起始日": week_start,
+                "周内天数": len(x),
+                "周平均负荷": float(mat.mean()),
+                "周峰值负荷": float(mat.max()),
+                "周谷值负荷": float(mat.min()),
+                "周负荷标准差": float(mat.std()),
+                "周平均日峰谷差": float((day_peak - day_valley).mean()),
+                "周日均负荷": float(day_mean.mean()),
+            }
+        )
+
+    return pd.DataFrame(rows)
+
+
+def classify_annual_periods(weekly_feature: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """
+    年度峰谷分段：
+    自动尝试 2~YEAR_MAX_CLUSTERS 类，
+    用轮廓系数选最佳分类数；
+    若差异不明显，则归为 1 类“常规期”
+    """
+    if weekly_feature.empty:
+        raise ValueError("weekly_feature 为空，无法进行年度峰谷分段。")
+
+    feature_cols = ["周平均负荷", "周峰值负荷", "周谷值负荷", "周负荷标准差", "周平均日峰谷差", "周日均负荷"]
+    X = weekly_feature[feature_cols].to_numpy(dtype=float)
+    n_weeks = len(weekly_feature)
+
+    best_labels = np.zeros(n_weeks, dtype=int)
+    best_score = -1.0
+
+    if n_weeks >= 6:
+        X_std = StandardScaler().fit_transform(X)
+
+        for k in range(2, min(YEAR_MAX_CLUSTERS, n_weeks - 1) + 1):
+            km = KMeans(n_clusters=k, n_init=10, random_state=RANDOM_STATE)
+            labels = km.fit_predict(X_std)
+            counts = pd.Series(labels).value_counts()
+
+            if counts.min() < 2:
+                continue
+
+            score = silhouette_score(X_std, labels)
+            if score > best_score:
+                best_labels = labels.copy()
+                best_score = score
+
+        if best_score < YEAR_CLUSTER_SIL_THRESHOLD:
+            best_labels = np.zeros(n_weeks, dtype=int)
+
+    out = weekly_feature.copy()
+    out["原始年类簇"] = best_labels
+
+    rank_order = (
+        out.groupby("原始年类簇")["周平均负荷"]
+        .mean()
+        .sort_values(ascending=False)
+        .index
+        .tolist()
+    )
+    raw_to_rank = {raw: idx + 1 for idx, raw in enumerate(rank_order)}
+    out["年类编码"] = out["原始年类簇"].map(raw_to_rank)
+
+    total_classes = len(rank_order)
+
+    def name_by_rank(rank: int) -> str:
+        if total_classes == 1:
+            return "常规期"
+        if rank == 1:
+            return "高负荷期"
+        if rank == total_classes:
+            return "低负荷期"
+        return f"中间负荷期{rank - 1}"
+
+    out["年类名称"] = out["年类编码"].apply(name_by_rank)
+
+    summary = (
+        out.groupby(["年类编码", "年类名称"], as_index=False)
+        .agg(
+            周数=("周起始日", "count"),
+            平均周负荷=("周平均负荷", "mean"),
+            平均周峰值=("周峰值负荷", "mean"),
+            平均周谷值=("周谷值负荷", "mean"),
+        )
+        .sort_values("年类编码")
+    )
+    summary.insert(0, "自动识别年类总数", total_classes)
+    summary.insert(1, "最佳轮廓系数", None if best_score < 0 else round(best_score, 4))
+
+    return out, summary
+
+
+# ==============================
+# 第五步：全年逐日映射表
+# ==============================
+
+def build_final_daily_mapping(
+    daily: pd.DataFrame,
+    revised_day_result: pd.DataFrame,
+    annual_period_result: pd.DataFrame,
+) -> pd.DataFrame:
+    mapping = daily[["日期", "星期", "星期序号", "周起始日"]].copy()
+
+    day_cols = [
+        "日期",
+        "初判周内类别名称",
+        "初判周内类别编码",
+        "最终周内类别名称",
+        "最终周内类别编码",
+        "初判周模式编码",
+        "公司主工休模式",
+        "公司主工休模式说明",
+        "与主模式偏离天数",
+        "周类型",
+        "修正规则",
+    ]
+    mapping = mapping.merge(revised_day_result[day_cols], on="日期", how="left")
+
+    mapping = mapping.merge(
+        annual_period_result[["周起始日", "年类编码", "年类名称"]],
+        on="周起始日",
+        how="left",
+    )
+
+    mapping["组合模型编号"] = mapping.apply(
+        lambda r: f"({int(r['最终周内类别编码'])},{int(r['年类编码'])})",
+        axis=1
+    )
+    mapping["组合模型名称"] = mapping["最终周内类别名称"] + "-" + mapping["年类名称"]
+
+    mapping = mapping.sort_values("日期").reset_index(drop=True)
+    return mapping
+
+
+def build_model_library(daily: pd.DataFrame, daily_mapping: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
+    merged = daily.merge(
+        daily_mapping[["日期", "组合模型编号", "组合模型名称"]],
+        on="日期",
+        how="left",
+    )
+
+    time_cols = list(range(POINTS_PER_DAY))
+    curve_rows = []
+    summary_rows = []
+
+    for model_id, grp in merged.groupby("组合模型编号", sort=True):
+        mat = grp[time_cols].to_numpy(dtype=float)
+        mean_curve = mat.mean(axis=0)
+        model_name = grp["组合模型名称"].iloc[0]
+
+        summary_rows.append(
+            {
+                "组合模型编号": model_id,
+                "组合模型名称": model_name,
+                "包含天数": len(grp),
+                "平均日负荷": float(mat.mean()),
+                "平均日峰值": float(mat.max(axis=1).mean()),
+                "平均日谷值": float(mat.min(axis=1).mean()),
+            }
+        )
+
+        row = pd.DataFrame([mean_curve], columns=TIME_LABELS)
+        row.insert(0, "组合模型名称", model_name)
+        row.insert(0, "组合模型编号", model_id)
+        curve_rows.append(row)
+
+    curve_df = pd.concat(curve_rows, ignore_index=True)
+    summary_df = pd.DataFrame(summary_rows).sort_values("组合模型编号").reset_index(drop=True)
+
+    return summary_df, curve_df
+
+
+# ==============================
+# 绘图
+# ==============================
+
+def plot_weekly_work_rest_final(daily_mapping: pd.DataFrame, out_file: Path) -> None:
+    plot_df = daily_mapping.copy()
+    plot_df["日期"] = pd.to_datetime(plot_df["日期"])
+
+    y_map = {"工作日": 1, "休息日": 2, "同类日": 3}
+    color_map = {"工作日": "#54A24B", "休息日": "#E45756", "同类日": "#4C78A8"}
+
+    plot_df["y"] = plot_df["最终周内类别名称"].map(y_map).fillna(0)
+    colors = plot_df["最终周内类别名称"].map(color_map).fillna("#999999")
+
+    plt.figure(figsize=(15, 4.2))
+    plt.scatter(plot_df["日期"], plot_df["y"], c=colors, s=22)
+    plt.yticks([1, 2, 3], ["工作日", "休息日", "同类日"])
+    plt.xlabel("日期")
+    plt.ylabel("最终周内类别")
+    plt.title("全年逐日工休划分结果（最终，1h级）")
+    plt.grid(alpha=0.25, linestyle="--")
+    plt.tight_layout()
+    plt.savefig(out_file, dpi=200, bbox_inches="tight")
+    plt.close()
+
+
+def plot_annual_periods(annual_period_result: pd.DataFrame, out_file: Path) -> None:
+    plot_df = annual_period_result.copy()
+    plot_df["周起始日"] = pd.to_datetime(plot_df["周起始日"])
+
+    plt.figure(figsize=(15, 4.5))
+    for code, grp in plot_df.groupby("年类编码", sort=True):
+        plt.scatter(
+            grp["周起始日"],
+            grp["周平均负荷"],
+            label=f"年类{code}-{grp['年类名称'].iloc[0]}",
+            s=35
+        )
+
+    plt.plot(plot_df["周起始日"], plot_df["周平均负荷"], alpha=0.35)
+    plt.xlabel("周起始日")
+    plt.ylabel("周平均负荷")
+    plt.title("年度周尺度峰谷分段结果（1h级）")
+    plt.grid(alpha=0.25, linestyle="--")
+    plt.legend()
+    plt.tight_layout()
+    plt.savefig(out_file, dpi=200, bbox_inches="tight")
+    plt.close()
+
+
+def plot_model_library(model_curve_df: pd.DataFrame, out_file: Path) -> None:
+    time_cols = [c for c in model_curve_df.columns if c not in ["组合模型编号", "组合模型名称"]]
+    x = np.arange(len(time_cols))
+
+    plt.figure(figsize=(15, 6))
+    for _, row in model_curve_df.iterrows():
+        plt.plot(x, row[time_cols].to_numpy(dtype=float), label=f"{row['组合模型编号']} {row['组合模型名称']}")
+
+    plt.xticks(np.arange(len(time_cols)), time_cols, rotation=45)
+    plt.xlabel("时刻")
+    plt.ylabel("负荷")
+    plt.title("组合典型日负荷模型曲线（1h级）")
+    plt.grid(alpha=0.25, linestyle="--")
+    plt.legend(fontsize=8, ncol=2)
+    plt.tight_layout()
+    plt.savefig(out_file, dpi=200, bbox_inches="tight")
+    plt.close()
+
+
+# ==============================
+# 导出结果
+# ==============================
+
+def save_excel_results(
+    company_dir: Path,
+    weekly_day_result: pd.DataFrame,
+    revised_day_result: pd.DataFrame,
+    weekly_curve_result: pd.DataFrame,
+    weekly_summary_result: pd.DataFrame,
+    week_pattern_df: pd.DataFrame,
+    pattern_count_df: pd.DataFrame,
+    annual_period_result: pd.DataFrame,
+    annual_summary_result: pd.DataFrame,
+    daily_mapping: pd.DataFrame,
+    model_summary_df: pd.DataFrame,
+    model_curve_df: pd.DataFrame,
+) -> None:
+    with pd.ExcelWriter(company_dir / "00_公司主工休模式识别结果.xlsx", engine="openpyxl") as writer:
+        week_pattern_df.to_excel(writer, sheet_name="每周模式识别", index=False)
+        pattern_count_df.to_excel(writer, sheet_name="模式频次统计", index=False)
+
+    with pd.ExcelWriter(company_dir / "01_每周工休划分结果.xlsx", engine="openpyxl") as writer:
+        weekly_day_result.to_excel(writer, sheet_name="逐日初判结果", index=False)
+        revised_day_result.to_excel(writer, sheet_name="逐日修正结果", index=False)
+        weekly_summary_result.to_excel(writer, sheet_name="每周摘要", index=False)
+        weekly_curve_result.to_excel(writer, sheet_name="每周典型曲线", index=False)
+
+    with pd.ExcelWriter(company_dir / "02_年度峰谷分段结果.xlsx", engine="openpyxl") as writer:
+        annual_period_result.to_excel(writer, sheet_name="每周分段结果", index=False)
+        annual_summary_result.to_excel(writer, sheet_name="年类摘要", index=False)
+
+    daily_mapping.to_excel(company_dir / "03_全年逐日模型映射表.xlsx", index=False)
+
+    with pd.ExcelWriter(company_dir / "04_组合典型日负荷模型库.xlsx", engine="openpyxl") as writer:
+        model_summary_df.to_excel(writer, sheet_name="模型摘要", index=False)
+        model_curve_df.to_excel(writer, sheet_name="模型24点曲线", index=False)
+
+
+def save_summary_txt(
+    company_dir: Path,
+    company_name: str,
+    week_pattern_df: pd.DataFrame,
+    pattern_count_df: pd.DataFrame,
+    daily_mapping: pd.DataFrame,
+    annual_summary_result: pd.DataFrame,
+    model_summary_df: pd.DataFrame,
+) -> None:
+    main_pattern = None
+    main_pattern_text = "无法识别"
+
+    if not week_pattern_df.empty:
+        main_pattern = week_pattern_df["公司主工休模式"].dropna().iloc[0] if week_pattern_df["公司主工休模式"].notna().any() else None
+        main_pattern_text = pattern_to_text(main_pattern) if main_pattern else "无法识别"
+
+    lines = []
+    lines.append(f"公司文件名：{company_name}.xlsx")
+    lines.append(f"全年有效天数：{len(daily_mapping)}")
+    lines.append(f"公司主工休模式：{main_pattern if main_pattern else '无法识别'}")
+    lines.append(f"公司主工休模式说明：{main_pattern_text}")
+    lines.append("")
+
+    if not pattern_count_df.empty:
+        lines.append("完整周模式频次统计：")
+        for _, row in pattern_count_df.iterrows():
+            lines.append(
+                f"  {row['周模式编码']} | 出现周数={row['出现周数']} | 占完整周比例={row['占完整周比例']:.2%} | {row['模式说明']}"
+            )
+        lines.append("")
+
+    if not annual_summary_result.empty:
+        lines.append(f"自动识别年度分段数：{annual_summary_result['自动识别年类总数'].iloc[0]}")
+        lines.append(f"最终组合模型个数：{len(model_summary_df)}")
+        lines.append("")
+
+    if not daily_mapping.empty:
+        week_type_stat = daily_mapping[["周起始日", "周类型"]].drop_duplicates()["周类型"].value_counts().to_dict()
+        lines.append(f"周类型统计：{week_type_stat}")
+        lines.append("")
+
+    lines.append("最终组合模型：")
+    for _, row in model_summary_df.iterrows():
+        lines.append(
+            f"  {row['组合模型编号']} | {row['组合模型名称']} | 包含天数={row['包含天数']} | 平均日负荷={row['平均日负荷']:.2f}"
+        )
+
+    (company_dir / "05_结果说明.txt").write_text("\n".join(lines), encoding="utf-8")
+
+
+# ==============================
+# 单公司处理主流程
+# ==============================
+
+def process_one_company(file_path: Path, output_root: Path) -> None:
+    company_name = file_path.stem
+    company_dir = output_root / company_name
+    company_dir.mkdir(parents=True, exist_ok=True)
+
+    df_1h = read_load_excel(file_path)
+    daily, _ = build_daily_profiles(df_1h)
+
+    if daily.empty:
+        raise ValueError(f"{file_path.name} 无法构成完整的 1h 日负荷曲线。")
+
+    # 1) 每周工休初判
+    weekly_day_result, weekly_curve_result, weekly_summary_result = analyze_weekly_work_rest(daily)
+
+    # 2) 公司主工休模式识别
+    week_pattern_df, pattern_count_df, main_pattern = infer_company_main_workrest_pattern(
+        weekly_day_result,
+        weekly_summary_result
+    )
+
+    # 3) 按主模式修正，同时保留特殊周
+    revised_day_result = revise_week_labels_by_main_pattern(
+        weekly_day_result,
+        weekly_summary_result,
+        week_pattern_df,
+        main_pattern
+    )
+
+    # 4) 年度峰谷分段
+    annual_feature = build_weekly_feature_table(daily)
+    annual_period_result, annual_summary_result = classify_annual_periods(annual_feature)
+
+    # 5) 全年逐日模型映射
+    daily_mapping = build_final_daily_mapping(
+        daily,
+        revised_day_result,
+        annual_period_result
+    )
+
+    # 6) 组合模型库
+    model_summary_df, model_curve_df = build_model_library(daily, daily_mapping)
+
+    # 7) 导出
+    save_excel_results(
+        company_dir,
+        weekly_day_result,
+        revised_day_result,
+        weekly_curve_result,
+        weekly_summary_result,
+        week_pattern_df,
+        pattern_count_df,
+        annual_period_result,
+        annual_summary_result,
+        daily_mapping,
+        model_summary_df,
+        model_curve_df,
+    )
+
+    plot_weekly_work_rest_final(daily_mapping, company_dir / "01_全年工休划分示意图.png")
+    plot_annual_periods(annual_period_result, company_dir / "02_年度峰谷分段示意图.png")
+    plot_model_library(model_curve_df, company_dir / "03_组合典型日曲线.png")
+
+    save_summary_txt(
+        company_dir,
+        company_name,
+        week_pattern_df,
+        pattern_count_df,
+        daily_mapping,
+        annual_summary_result,
+        model_summary_df,
+    )
+
+
+# ==============================
+# 批量入口
+# ==============================
+
+def main() -> None:
+    base_dir = Path(__file__).resolve().parent
+    output_root = base_dir / OUTPUT_ROOT_NAME
+    output_root.mkdir(exist_ok=True)
+
+    excel_files = [p for p in base_dir.glob("*.xlsx") if not p.name.startswith("~$")]
+
+    if not excel_files:
+        print("当前脚本同级目录下未找到任何 xlsx 文件。")
+        return
+
+    for file_path in excel_files:
+        try:
+            print(f"开始处理：{file_path.name}")
+            process_one_company(file_path, output_root)
+            print(f"处理完成：{file_path.name}")
+        except Exception as exc:
+            print(f"处理失败：{file_path.name} -> {exc}")
+
+    print("全部处理结束。")
+    print(f"结果目录：{output_root}")
+
+
+if __name__ == "__main__":
+    main()
+
+
+def process_raw_data(raw_excel_path: str | Path, output_dir: str | Path) -> dict:
+    """
+    供后端调用的入口：处理单个原始工商业负荷 Excel。
+    """
+    file_path = Path(raw_excel_path)
+    output_root = Path(output_dir)
+    output_root.mkdir(parents=True, exist_ok=True)
+
+    process_one_company(file_path, output_root)
+
+    charts = sorted([p.name for p in output_root.glob("*.png")], key=lambda x: x)
+    excel_files = sorted([p.name for p in output_root.glob("*.xlsx")], key=lambda x: x)
+
+    return {"charts": charts, "excel_files": excel_files, "error": None}
