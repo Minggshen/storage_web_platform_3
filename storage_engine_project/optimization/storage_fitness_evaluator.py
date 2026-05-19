@@ -312,6 +312,10 @@ class StorageFitnessEvaluator:
     ) -> None:
         if not self.config.enable_result_cache:
             return
+        # Full recheck / full-year results carry 365-day network traces;
+        # deepcopy can exhaust memory on large models.
+        if mode in ("full_recheck", "full_year"):
+            return
         key = result.metadata.get("cache_key") if isinstance(result.metadata, dict) else None
         if not isinstance(key, tuple):
             key = (
