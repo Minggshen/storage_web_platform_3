@@ -422,13 +422,9 @@ export default function SolverPage() {
         <div className="grid gap-4" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(400px, 1fr))' }} aria-live="polite">
           <section>
             <h3 className="mb-2 mt-0 text-sm font-semibold text-muted-foreground">stdout 日志</h3>
-            {!activeTaskId ? (
-              <div className="text-muted-foreground">暂无日志。</div>
-            ) : (
-              <pre className="whitespace-pre-wrap break-words rounded-xl border border-border bg-muted/30 p-3 text-sm max-h-[560px] min-h-[420px] overflow-auto overscroll-contain">
-                {stdoutText || 'stdout 为空。'}
-              </pre>
-            )}
+            <pre className="whitespace-pre-wrap break-words rounded-xl border border-border bg-muted/30 p-3 text-sm max-h-[560px] min-h-[420px] overflow-auto overscroll-contain">
+              {stdoutText || 'stdout 为空。'}
+            </pre>
           </section>
 
           <section>
