@@ -53,4 +53,4 @@ full = [
 ]
 
 [tool.setuptools.packages.find]
-include = ["storage_engine_project*", "backend*", "scripts*"]
+include = ["storage_engine_project*", "backend*"]

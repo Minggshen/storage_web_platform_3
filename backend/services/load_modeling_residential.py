@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import warnings
+import shutil
 from pathlib import Path
 
 import numpy as np
@@ -19,36 +20,19 @@ warnings.filterwarnings("ignore")
 # =========================================================
 OUTPUT_ROOT_NAME = "居民典型日负荷1h级模型"
 
-# 目标建模时间粒度：
-# 可选 "1h" 或 "15min"
 TARGET_FREQ = "1h"
 
-# 聚类参数
 MIN_CLUSTERS = 2
 MAX_CLUSTERS = 8
 DAILY_CLUSTER_SIL_THRESHOLD = 0.08
 RANDOM_STATE = 42
 
-# 手动配置节假日（可为空）
-# 建议按你数据所在年份自行填写
-MANUAL_HOLIDAYS = [
-    # "2025-01-01",
-    # "2025-01-28", "2025-01-29", "2025-01-30", "2025-01-31",
-    # "2025-02-01", "2025-02-02", "2025-02-03", "2025-02-04",
-    # "2025-04-04", "2025-04-05", "2025-04-06",
-    # "2025-05-01", "2025-05-02", "2025-05-03", "2025-05-04", "2025-05-05",
-    # "2025-05-31", "2025-06-01", "2025-06-02",
-    # "2025-10-01", "2025-10-02", "2025-10-03", "2025-10-04",
-    # "2025-10-05", "2025-10-06", "2025-10-07", "2025-10-08",
-]
+MANUAL_HOLIDAYS = []
 
 plt.rcParams["font.sans-serif"] = ["Microsoft YaHei", "SimHei", "Arial Unicode MS", "DejaVu Sans"]
 plt.rcParams["axes.unicode_minus"] = False
 
 
-# =========================================================
-# 基础工具
-# =========================================================
 def get_points_per_day(freq: str) -> int:
     td = pd.to_timedelta(freq)
     return int(pd.Timedelta(days=1) / td)
@@ -83,57 +67,35 @@ def to_holiday_set(manual_holidays: list[str]) -> set:
 HOLIDAY_SET = to_holiday_set(MANUAL_HOLIDAYS)
 
 
-# =========================================================
-# 读取与重采样
-# =========================================================
 def read_load_excel(file_path: Path) -> pd.DataFrame:
-    """
-    默认读取方式：
-    第 1 列为时间，第 2 列为负荷。
-    若首行像表头，则自动剔除。
-    """
     raw = pd.read_excel(file_path, sheet_name=0, header=None)
-
     if raw.shape[1] < 2:
         raise ValueError("Excel 至少需要两列：时间列、负荷列。")
-
     raw = raw.iloc[:, :2].copy()
     raw.columns = ["时间", "负荷"]
-
     first_time = pd.to_datetime(raw.iloc[0, 0], errors="coerce")
     first_load = pd.to_numeric(raw.iloc[0, 1], errors="coerce")
     if pd.isna(first_time) and pd.isna(first_load):
         raw = raw.iloc[1:].copy()
-
     raw["时间"] = pd.to_datetime(raw["时间"], errors="coerce")
     raw["负荷"] = pd.to_numeric(raw["负荷"], errors="coerce")
-
     raw = raw.dropna(subset=["时间", "负荷"]).sort_values("时间")
     raw = raw.groupby("时间", as_index=False)["负荷"].mean()
-
     df = raw.set_index("时间").sort_index()
-
     inferred_freq = pd.infer_freq(df.index)
     if inferred_freq is None:
         inferred_freq = "15min"
-
     full_index = pd.date_range(df.index.min(), df.index.max(), freq=inferred_freq)
     df = df.reindex(full_index)
     df.index.name = "时间"
-
     df["负荷"] = df["负荷"].interpolate(method="time", limit_direction="both")
     df["负荷"] = df["负荷"].ffill().bfill()
-
     df_target = df.resample(TARGET_FREQ).mean()
     df_target["负荷"] = df_target["负荷"].interpolate(method="time", limit_direction="both")
     df_target["负荷"] = df_target["负荷"].ffill().bfill()
-
     return df_target.reset_index()
 
 
-# =========================================================
-# 构造每日曲线
-# =========================================================
 def build_daily_profiles(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
     df["日期"] = df["时间"].dt.date
@@ -145,16 +107,12 @@ def build_daily_profiles(df: pd.DataFrame) -> pd.DataFrame:
     })
     df["是否周末"] = (df["星期序号"] >= 5).astype(int)
     df["是否节假日"] = df["日期"].apply(lambda x: 1 if x in HOLIDAY_SET else 0)
-
     step_minutes = int(pd.to_timedelta(TARGET_FREQ).total_seconds() // 60)
     df["时段序号"] = ((df["时间"].dt.hour * 60 + df["时间"].dt.minute) // step_minutes).astype(int)
-
     pivot = df.pivot_table(index="日期", columns="时段序号", values="负荷", aggfunc="mean")
     pivot = pivot.reindex(columns=range(POINTS_PER_DAY))
     pivot = pivot.dropna(how="any")
-
     daily = pivot.reset_index()
-
     meta = df.groupby("日期").agg(
         月份=("月份", "first"),
         星期序号=("星期序号", "first"),
@@ -162,21 +120,13 @@ def build_daily_profiles(df: pd.DataFrame) -> pd.DataFrame:
         是否周末=("是否周末", "first"),
         是否节假日=("是否节假日", "first"),
     ).reset_index()
-
     daily = daily.merge(meta, on="日期", how="left")
     daily = daily.sort_values("日期").reset_index(drop=True)
     return daily
 
 
-# =========================================================
-# 日特征提取
-# =========================================================
 def build_time_masks(points_per_day: int) -> dict[str, np.ndarray]:
-    """
-    根据一天内点数构建时间分区掩码
-    """
     slot_hours = np.arange(points_per_day) * (24 / points_per_day)
-
     masks = {
         "夜间": (slot_hours >= 0) & (slot_hours < 6),
         "早高峰": (slot_hours >= 6) & (slot_hours < 10),
@@ -208,41 +158,33 @@ def season_group(month: int) -> str:
 def build_daily_feature_matrix(daily: pd.DataFrame) -> tuple[np.ndarray, pd.DataFrame]:
     time_cols = list(range(POINTS_PER_DAY))
     mat = daily[time_cols].to_numpy(dtype=float)
-
     day_mean = mat.mean(axis=1)
     day_peak = mat.max(axis=1)
     day_valley = mat.min(axis=1)
     day_std = mat.std(axis=1)
     peak_valley_diff = day_peak - day_valley
     load_factor = np.divide(day_mean, day_peak, out=np.zeros_like(day_mean), where=day_peak != 0)
-
     morning_mean = safe_zone_mean(mat, TIME_MASKS["早高峰"])
     daytime_mean = safe_zone_mean(mat, TIME_MASKS["白天"])
     evening_mean = safe_zone_mean(mat, TIME_MASKS["晚高峰"])
     night_mean = safe_zone_mean(mat, TIME_MASKS["夜间"])
     late_mean = safe_zone_mean(mat, TIME_MASKS["深夜"])
-
     morning_ratio = np.divide(morning_mean, day_mean, out=np.zeros_like(day_mean), where=day_mean != 0)
     daytime_ratio = np.divide(daytime_mean, day_mean, out=np.zeros_like(day_mean), where=day_mean != 0)
     evening_ratio = np.divide(evening_mean, day_mean, out=np.zeros_like(day_mean), where=day_mean != 0)
     night_ratio = np.divide(night_mean, day_mean, out=np.zeros_like(day_mean), where=day_mean != 0)
     late_ratio = np.divide(late_mean, day_mean, out=np.zeros_like(day_mean), where=day_mean != 0)
-
-    # 归一化曲线形状特征
     shape_feature = np.divide(
         mat,
         day_mean[:, None],
         out=np.zeros_like(mat),
         where=day_mean[:, None] != 0
     )
-
     month = daily["月份"].to_numpy(dtype=float)
     month_sin = np.sin(2 * np.pi * month / 12)
     month_cos = np.cos(2 * np.pi * month / 12)
-
     is_weekend = daily["是否周末"].to_numpy(dtype=float)
     is_holiday = daily["是否节假日"].to_numpy(dtype=float)
-
     feature = np.concatenate(
         [
             shape_feature,
@@ -264,7 +206,6 @@ def build_daily_feature_matrix(daily: pd.DataFrame) -> tuple[np.ndarray, pd.Data
         ],
         axis=1,
     )
-
     aux = pd.DataFrame({
         "日期": daily["日期"],
         "日均负荷": day_mean,
@@ -279,19 +220,13 @@ def build_daily_feature_matrix(daily: pd.DataFrame) -> tuple[np.ndarray, pd.Data
         "夜间占比": night_ratio,
         "深夜占比": late_ratio,
     })
-
     return feature, aux
 
 
-# =========================================================
-# 聚类
-# =========================================================
 def cluster_daily_models(daily: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
     feature, aux = build_daily_feature_matrix(daily)
     n_days = len(daily)
-
     result = daily.copy().merge(aux, on="日期", how="left")
-
     if n_days < 10:
         result["模型编号"] = "R01"
         result["原始簇"] = 0
@@ -302,21 +237,16 @@ def cluster_daily_models(daily: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFram
             "说明": "有效天数过少，直接视为 1 类"
         }])
         return result, eval_df
-
     X_std = StandardScaler().fit_transform(feature)
-
     eval_rows = []
     best_score = -1.0
     best_k = 1
     best_labels = np.zeros(n_days, dtype=int)
-
     max_k = min(MAX_CLUSTERS, n_days - 1)
     min_k = min(MIN_CLUSTERS, max_k)
-
     for k in range(min_k, max_k + 1):
         km = KMeans(n_clusters=k, n_init=10, random_state=RANDOM_STATE)
         labels = km.fit_predict(X_std)
-
         counts = pd.Series(labels).value_counts()
         if counts.min() < 2:
             eval_rows.append({
@@ -326,7 +256,6 @@ def cluster_daily_models(daily: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFram
                 "说明": "存在样本数小于2的簇，跳过"
             })
             continue
-
         score = silhouette_score(X_std, labels)
         eval_rows.append({
             "聚类数k": k,
@@ -334,16 +263,13 @@ def cluster_daily_models(daily: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFram
             "是否采用": False,
             "说明": ""
         })
-
         if score > best_score:
             best_score = score
             best_k = k
             best_labels = labels.copy()
-
     if best_score < DAILY_CLUSTER_SIL_THRESHOLD:
         best_k = 1
         best_labels = np.zeros(n_days, dtype=int)
-
     eval_df = pd.DataFrame(eval_rows)
     if best_k == 1:
         eval_df = pd.concat([
@@ -358,10 +284,7 @@ def cluster_daily_models(daily: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFram
     else:
         eval_df.loc[eval_df["聚类数k"] == best_k, "是否采用"] = True
         eval_df.loc[eval_df["聚类数k"] == best_k, "说明"] = "采用该聚类数"
-
     result["原始簇"] = best_labels
-
-    # 重新编号：按包含天数从多到少排序，得到 R01, R02...
     cluster_order = (
         result.groupby("原始簇")["日期"]
         .count()
@@ -371,57 +294,40 @@ def cluster_daily_models(daily: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFram
     )
     raw_to_model = {raw: f"R{idx + 1:02d}" for idx, raw in enumerate(cluster_order)}
     result["模型编号"] = result["原始簇"].map(raw_to_model)
-
     return result, eval_df
 
 
-# =========================================================
-# 模型命名
-# =========================================================
 def infer_shape_name(mean_curve: np.ndarray) -> str:
     daily_mean = mean_curve.mean()
     daily_std = mean_curve.std()
-
     def zone_avg(mask_name: str) -> float:
         mask = TIME_MASKS[mask_name]
         if mask.sum() == 0:
             return 0.0
         return float(mean_curve[mask].mean())
-
     morning = zone_avg("早高峰")
     daytime = zone_avg("白天")
     evening = zone_avg("晚高峰")
     night = zone_avg("夜间")
     late = zone_avg("深夜")
-
     if daily_mean == 0:
         return "平稳型"
-
     if daily_std / daily_mean < 0.10:
         return "平稳型"
-
-    # 早晚双峰型
     if (
         morning >= daily_mean * 1.05
         and evening >= daily_mean * 1.08
         and abs(morning - evening) / max(daily_mean, 1e-9) < 0.12
     ):
         return "早晚双峰型"
-
-    # 晚高峰型
     if evening == max(morning, daytime, evening, night, late):
         if evening >= daily_mean * 1.10:
             return "晚高峰型"
-
-    # 白天高平台型
     if daytime == max(morning, daytime, evening, night, late):
         if daytime >= daily_mean * 1.08:
             return "白天高平台型"
-
-    # 夜间偏高型
     if max(night, late) >= max(morning, daytime, evening):
         return "夜间偏高型"
-
     return "综合波动型"
 
 
@@ -431,7 +337,6 @@ def infer_season_name(month_series: pd.Series) -> str:
         return "全年"
     top_season = season_count.idxmax()
     top_ratio = season_count.iloc[0] / season_count.sum()
-
     if top_ratio >= 0.60:
         return top_season
     return "全年"
@@ -451,17 +356,13 @@ def build_model_library(clustered_daily: pd.DataFrame) -> tuple[pd.DataFrame, pd
     time_cols = list(range(POINTS_PER_DAY))
     curve_rows = []
     summary_rows = []
-
     for model_id, grp in clustered_daily.groupby("模型编号", sort=True):
         mat = grp[time_cols].to_numpy(dtype=float)
         mean_curve = mat.mean(axis=0)
-
         season_name = infer_season_name(grp["月份"])
         daytype_name = infer_daytype_name(grp["是否周末"].mean(), grp["是否节假日"].mean())
         shape_name = infer_shape_name(mean_curve)
-
         model_name = f"{season_name}{daytype_name}{shape_name}"
-
         summary_rows.append({
             "模型编号": model_id,
             "模型名称": model_name,
@@ -477,41 +378,30 @@ def build_model_library(clustered_daily: pd.DataFrame) -> tuple[pd.DataFrame, pd
             "日期属性": daytype_name,
             "曲线属性": shape_name,
         })
-
         row = pd.DataFrame([mean_curve], columns=TIME_LABELS)
         row.insert(0, "模型名称", model_name)
         row.insert(0, "模型编号", model_id)
         curve_rows.append(row)
-
     summary_df = pd.DataFrame(summary_rows).sort_values("模型编号").reset_index(drop=True)
     curve_df = pd.concat(curve_rows, ignore_index=True)
-
     return summary_df, curve_df
 
 
-# =========================================================
-# 全年逐日映射
-# =========================================================
 def build_daily_mapping(clustered_daily: pd.DataFrame, model_summary_df: pd.DataFrame) -> pd.DataFrame:
     mapping = clustered_daily[[
         "日期", "月份", "星期", "星期序号", "是否周末", "是否节假日",
         "模型编号", "日均负荷", "日峰值", "日谷值", "峰谷差", "负荷率",
         "早高峰占比", "白天占比", "晚高峰占比", "夜间占比", "深夜占比"
     ]].copy()
-
     mapping = mapping.merge(
         model_summary_df[["模型编号", "模型名称", "季节属性", "日期属性", "曲线属性"]],
         on="模型编号",
         how="left"
     )
-
     mapping = mapping.sort_values("日期").reset_index(drop=True)
     return mapping
 
 
-# =========================================================
-# 统计表
-# =========================================================
 def build_distribution_tables(daily_mapping: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
     month_dist = (
         daily_mapping.pivot_table(
@@ -523,7 +413,6 @@ def build_distribution_tables(daily_mapping: pd.DataFrame) -> tuple[pd.DataFrame
         )
         .reset_index()
     )
-
     weekday_dist = (
         daily_mapping.pivot_table(
             index="星期",
@@ -535,17 +424,12 @@ def build_distribution_tables(daily_mapping: pd.DataFrame) -> tuple[pd.DataFrame
         .reindex(["周一", "周二", "周三", "周四", "周五", "周六", "周日"])
         .reset_index()
     )
-
     return month_dist, weekday_dist
 
 
-# =========================================================
-# 绘图
-# =========================================================
 def plot_model_curves(model_curve_df: pd.DataFrame, out_file: Path) -> None:
     time_cols = [c for c in model_curve_df.columns if c not in ["模型编号", "模型名称"]]
     x = np.arange(len(time_cols))
-
     plt.figure(figsize=(15, 6))
     for _, row in model_curve_df.iterrows():
         plt.plot(x, row[time_cols].to_numpy(dtype=float), label=f"{row['模型编号']} {row['模型名称']}")
@@ -566,11 +450,9 @@ def plot_model_curves(model_curve_df: pd.DataFrame, out_file: Path) -> None:
 def plot_daily_model_mapping(daily_mapping: pd.DataFrame, out_file: Path) -> None:
     plot_df = daily_mapping.copy()
     plot_df["日期"] = pd.to_datetime(plot_df["日期"])
-
     model_order = sorted(plot_df["模型编号"].dropna().unique().tolist())
     y_map = {m: i + 1 for i, m in enumerate(model_order)}
     plot_df["y"] = plot_df["模型编号"].map(y_map)
-
     plt.figure(figsize=(15, 4.5))
     plt.scatter(plot_df["日期"], plot_df["y"], s=18)
     plt.yticks(list(y_map.values()), list(y_map.keys()))
@@ -587,14 +469,12 @@ def plot_month_distribution(month_dist: pd.DataFrame, out_file: Path) -> None:
     plot_df = month_dist.copy()
     x = plot_df["月份"].to_numpy()
     model_cols = [c for c in plot_df.columns if c != "月份"]
-
     plt.figure(figsize=(12, 5))
     bottom = np.zeros(len(plot_df))
     for col in model_cols:
         y = plot_df[col].to_numpy(dtype=float)
         plt.bar(x, y, bottom=bottom, label=col)
         bottom += y
-
     plt.xlabel("月份")
     plt.ylabel("天数")
     plt.title("各居民模型月度分布")
@@ -606,9 +486,6 @@ def plot_month_distribution(month_dist: pd.DataFrame, out_file: Path) -> None:
     plt.close()
 
 
-# =========================================================
-# 导出
-# =========================================================
 def save_excel_results(
     company_dir: Path,
     daily_mapping: pd.DataFrame,
@@ -622,11 +499,9 @@ def save_excel_results(
         daily_mapping.to_excel(writer, sheet_name="逐日映射", index=False)
         month_dist.to_excel(writer, sheet_name="月度分布", index=False)
         weekday_dist.to_excel(writer, sheet_name="星期分布", index=False)
-
     with pd.ExcelWriter(company_dir / "02_居民典型日模型库.xlsx", engine="openpyxl") as writer:
         model_summary_df.to_excel(writer, sheet_name="模型摘要", index=False)
         model_curve_df.to_excel(writer, sheet_name="模型曲线", index=False)
-
     with pd.ExcelWriter(company_dir / "03_聚类评估结果.xlsx", engine="openpyxl") as writer:
         eval_df.to_excel(writer, sheet_name="聚类数评估", index=False)
 
@@ -645,7 +520,6 @@ def save_summary_txt(
     lines.append(f"居民典型日模型数：{len(model_summary_df)}")
     lines.append(f"手动节假日数量：{len(HOLIDAY_SET)}")
     lines.append("")
-
     adopted = eval_df[eval_df["是否采用"] == True]
     if not adopted.empty:
         row = adopted.iloc[0]
@@ -654,7 +528,6 @@ def save_summary_txt(
         if pd.notna(row["轮廓系数"]):
             lines.append(f"轮廓系数：{row['轮廓系数']}")
         lines.append("")
-
     lines.append("各模型摘要：")
     for _, r in model_summary_df.iterrows():
         lines.append(
@@ -662,7 +535,6 @@ def save_summary_txt(
             f"天数={r['包含天数']} | 平均日负荷={r['平均日负荷']:.2f} | "
             f"周末占比={r['周末占比']:.2%} | 节假日占比={r['节假日占比']:.2%}"
         )
-
     lines.append("")
     lines.append("节假日配置说明：")
     if len(HOLIDAY_SET) == 0:
@@ -670,29 +542,21 @@ def save_summary_txt(
         lines.append("  若需提高居民建模效果，建议在 MANUAL_HOLIDAYS 中填写对应年份节假日。")
     else:
         lines.append("  已启用手动节假日识别。")
-
     (company_dir / "04_结果说明.txt").write_text("\n".join(lines), encoding="utf-8")
 
 
-# =========================================================
-# 单文件处理
-# =========================================================
 def process_one_company(file_path: Path, output_root: Path) -> None:
     company_name = file_path.stem
     company_dir = output_root / company_name
     company_dir.mkdir(parents=True, exist_ok=True)
-
     df = read_load_excel(file_path)
     daily = build_daily_profiles(df)
-
     if daily.empty:
         raise ValueError(f"{file_path.name} 无法构成完整的日负荷曲线。")
-
     clustered_daily, eval_df = cluster_daily_models(daily)
     model_summary_df, model_curve_df = build_model_library(clustered_daily)
     daily_mapping = build_daily_mapping(clustered_daily, model_summary_df)
     month_dist, weekday_dist = build_distribution_tables(daily_mapping)
-
     save_excel_results(
         company_dir,
         daily_mapping,
@@ -702,11 +566,9 @@ def process_one_company(file_path: Path, output_root: Path) -> None:
         weekday_dist,
         eval_df,
     )
-
     plot_model_curves(model_curve_df, company_dir / "01_居民典型日曲线.png")
     plot_daily_model_mapping(daily_mapping, company_dir / "02_全年逐日模型映射.png")
     plot_month_distribution(month_dist, company_dir / "03_模型月度分布.png")
-
     save_summary_txt(
         company_dir,
         company_name,
@@ -716,23 +578,17 @@ def process_one_company(file_path: Path, output_root: Path) -> None:
     )
 
 
-# =========================================================
-# 批量入口
-# =========================================================
 def main() -> None:
     base_dir = Path(__file__).resolve().parent
     output_root = base_dir / OUTPUT_ROOT_NAME
     output_root.mkdir(exist_ok=True)
-
     excel_files = [
         p for p in base_dir.glob("*.xlsx")
         if not p.name.startswith("~$")
     ]
-
     if not excel_files:
         print("当前脚本同级目录下未找到任何 xlsx 文件。")
         return
-
     for file_path in excel_files:
         try:
             print(f"开始处理：{file_path.name}")
@@ -740,7 +596,6 @@ def main() -> None:
             print(f"处理完成：{file_path.name}")
         except Exception as exc:
             print(f"处理失败：{file_path.name} -> {exc}")
-
     print("全部处理结束。")
     print(f"结果目录：{output_root}")
 
@@ -750,21 +605,18 @@ if __name__ == "__main__":
 
 
 def process_raw_data(raw_excel_path: str | Path, output_dir: str | Path) -> dict:
-    """
-    供后端调用的入口：处理单个原始负荷 Excel，输出全部建模产物。
-
-    Args:
-        raw_excel_path: 用户上传的原始 Excel 路径（两列：时间+负荷）
-        output_dir: 输出目录（如 raw_load_data/load_01/）
-
-    Returns:
-        {"charts": ["01_居民典型日曲线.png", ...], "excel_files": [...], "error": None}
-    """
     file_path = Path(raw_excel_path)
     output_root = Path(output_dir)
     output_root.mkdir(parents=True, exist_ok=True)
-
     process_one_company(file_path, output_root)
+
+    # process_one_company creates output_root / file_path.stem / subdirectory.
+    # Move all files up to output_root / to eliminate the extra nesting.
+    nested_dir = output_root / file_path.stem
+    if nested_dir.is_dir():
+        for f in nested_dir.iterdir():
+            shutil.move(str(f), str(output_root / f.name))
+        nested_dir.rmdir()
 
     charts = sorted(
         [p.name for p in output_root.glob("*.png")],
@@ -774,5 +626,4 @@ def process_raw_data(raw_excel_path: str | Path, output_dir: str | Path) -> dict
         [p.name for p in output_root.glob("*.xlsx")],
         key=lambda x: x
     )
-
     return {"charts": charts, "excel_files": excel_files, "error": None}

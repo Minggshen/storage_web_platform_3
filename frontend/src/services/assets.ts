@@ -116,6 +116,15 @@ export async function listUploadedNodes(
   return res.json();
 }
 
+export async function deleteRawLoadData(
+  projectId: string,
+  nodeId: string,
+): Promise<{ success: boolean; deleted: boolean }> {
+  const res = await fetch(`/api/assets/raw-load-data/${projectId}/${nodeId}`, { method: 'DELETE' });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
 export function processRuntime(
   projectId: string,
   nodeIds: string[],

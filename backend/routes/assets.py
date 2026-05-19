@@ -338,6 +338,16 @@ def list_uploaded_nodes(project_id: str) -> dict:
     }
 
 
+@router.delete("/raw-load-data/{project_id}/{node_id}")
+def delete_raw_load_data(project_id: str, node_id: str) -> dict:
+    """删除某节点已上传的原始数据"""
+    try:
+        deleted = processing_service.delete_raw_load_data(project_id, node_id)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return {"success": True, "project_id": project_id, "node_id": node_id, "deleted": deleted}
+
+
 @router.post("/process-runtime")
 async def process_runtime(request: ProcessRuntimeRequest):
     """一键批量处理——SSE 流式返回日志"""

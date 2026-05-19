@@ -8,6 +8,7 @@ import {
   uploadDeviceLibraryFile,
   uploadRawLoadData,
   listUploadedNodes,
+  deleteRawLoadData,
   processRuntime,
   listPreviewFiles,
   fetchPreviewContent,
@@ -222,6 +223,16 @@ function AssetsPage() {
     }
   }
 
+  async function onDeleteRawData(nodeId: string) {
+    if (!projectId) return;
+    try {
+      await deleteRawLoadData(projectId, nodeId);
+      await refreshUploadedNodes();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  }
+
   function onStartProcessing() {
     if (!projectId || processing) return;
     const nodeIds = uploadedNodeIds.filter((id) => !processedNodeIds.includes(id));
@@ -392,10 +403,10 @@ function AssetsPage() {
         {/* Step 3: Runtime Files */}
         <section className="mb-5 rounded-2xl border border-border bg-card p-5">
           <div className="flex items-center justify-between gap-3 flex-wrap">
-            <StepBadge step={3} label="Runtime 文件绑定" />
+            <StepBadge step={3} label="负荷数据导入" />
             <span
               className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-semibold ${
-                uploadedNodeIds.length > 0
+                uploadedNodeIds.length === totalLoadNodes && processedNodeIds.length === totalLoadNodes
                   ? 'border border-emerald-500/30 bg-emerald-500/10 text-emerald-600'
                   : 'border border-amber-500/30 bg-amber-500/10 text-amber-600'
               }`}
@@ -438,7 +449,17 @@ function AssetsPage() {
               <div className="mt-3 flex items-center gap-3 flex-wrap">
                 <span className="text-xs text-muted-foreground">
                   已上传：{uploadedNodeIds.map((id) => (
-                    <span key={id} className="mr-1.5 mb-0.5 inline-flex items-center rounded-full border border-emerald-500/30 bg-emerald-500/10 px-2 py-0.5 text-[10px] font-semibold text-emerald-600">{id} ✓</span>
+                    <span key={id} className="mr-1.5 mb-0.5 inline-flex items-center gap-1 rounded-full border border-emerald-500/30 bg-emerald-500/10 pl-2 pr-1 py-0.5 text-[10px] font-semibold text-emerald-600">
+                      {id} ✓
+                      <button
+                        type="button"
+                        className="inline-flex h-4 w-4 items-center justify-center rounded-full text-muted-foreground hover:bg-red-500/20 hover:text-red-600 transition-colors"
+                        title={`删除 ${id} 的上传文件`}
+                        onClick={() => onDeleteRawData(id)}
+                      >
+                        ×
+                      </button>
+                    </span>
                   ))}
                 </span>
                 <Button size="sm" onClick={onStartProcessing} disabled={processing || uploadedNodeIds.length === 0}>
