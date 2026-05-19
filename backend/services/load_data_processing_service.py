@@ -138,12 +138,6 @@ class LoadDataProcessingService:
                 project.assets[ml_asset.file_id] = ml_asset
                 self.project_service.save_project(project)
 
-                # Clean up intermediate .xlsx/.txt from modeling_output, keep only .png
-                for f in model_dir.glob("*.xlsx"):
-                    f.unlink()
-                for f in model_dir.glob("*.txt"):
-                    f.unlink()
-
                 success += 1
                 charts = result.get("charts", [])
                 yield f"data: {json.dumps({'type': 'done', 'node': node_id, 'charts': charts, 'current': idx + 1, 'total': len(node_ids)}, ensure_ascii=False)}\n\n"
