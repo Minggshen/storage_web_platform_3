@@ -417,6 +417,24 @@ class RollingDispatchController:
 
         for t in range(24):
             ge = float(actual_net[t] + pch_exec[t] - pdis_exec[t])
+
+            # Derive planned charge/discharge the same way the main loop did
+            planned_net_power = float(plan.discharge_kw[t] - plan.charge_kw[t]) if t < len(plan.discharge_kw) else 0.0
+            if self.config.net_power_execution_mode:
+                planned_charge = 0.0 if planned_net_power >= 0 else -planned_net_power
+                planned_discharge = planned_net_power if planned_net_power >= 0 else 0.0
+            else:
+                planned_charge = float(plan.charge_kw[t]) if t < len(plan.charge_kw) else 0.0
+                planned_discharge = float(plan.discharge_kw[t]) if t < len(plan.discharge_kw) else 0.0
+
+            planned_service = float(plan.service_commit_kw[t]) if t < len(plan.service_commit_kw) else 0.0
+
+            exec_differs = (
+                abs(float(pch_exec[t]) - planned_charge) > 1e-6
+                or abs(float(pdis_exec[t]) - planned_discharge) > 1e-6
+                or abs(float(psrv_exec[t]) - planned_service) > 1e-6
+            )
+
             constraint = oracle.get_hour_constraint(
                 ctx=ctx,
                 day_index=plan.day_index,
