@@ -422,12 +422,21 @@ class RollingDispatchController:
         for t in range(24):
             ge = float(actual_net[t] + pch_exec[t] - pdis_exec[t])
 
-            # Check if executed power matches planned (i.e., no correction touched this hour)
-            planned_charge = float(plan.charge_kw[t]) if t < len(plan.charge_kw) else 0.0
-            planned_discharge = float(plan.discharge_kw[t]) if t < len(plan.discharge_kw) else 0.0
+            # Derive planned charge/discharge the same way the main loop did (L144-149)
+            plan_ch_raw = float(plan.charge_kw[t]) if t < len(plan.charge_kw) else 0.0
+            plan_dis_raw = float(plan.discharge_kw[t]) if t < len(plan.discharge_kw) else 0.0
+            if self.config.net_power_execution_mode:
+                planned_net = plan_dis_raw - plan_ch_raw
+                planned_charge = 0.0 if planned_net >= 0 else -planned_net
+                planned_discharge = planned_net if planned_net >= 0 else 0.0
+            else:
+                planned_charge = plan_ch_raw
+                planned_discharge = plan_dis_raw
+            planned_service = float(plan.service_commit_kw[t]) if t < len(plan.service_commit_kw) else 0.0
             exec_differs = (
                 abs(float(pch_exec[t]) - planned_charge) > 1e-6
                 or abs(float(pdis_exec[t]) - planned_discharge) > 1e-6
+                or abs(float(psrv_exec[t]) - planned_service) > 1e-6
             )
             if saved_constraints is not None and t < len(saved_constraints) and not exec_differs:
                 constraint = saved_constraints[t]

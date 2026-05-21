@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections import OrderedDict
 from dataclasses import dataclass, replace
 from typing import Any, Iterable
 import warnings
@@ -47,7 +48,8 @@ class DayAheadScheduler:
         self.config = config or DayAheadSchedulerConfig()
         self._solver_name_cache = tuple(self._iter_available_solvers(self.config.preferred_solvers))
         self._solver_priority = {name: idx for idx, name in enumerate(self._solver_name_cache)}
-        self._plan_cache: dict[tuple[Any, ...], DayAheadDispatchPlan] = {}
+        self._plan_cache: OrderedDict[tuple[Any, ...], DayAheadDispatchPlan] = OrderedDict()
+        self._plan_cache_max_size: int = 500
         if self.config.print_solver_order:
             logger.info("日前调度器 当前求解器顺序：%s", self._solver_name_cache)
 
@@ -159,6 +161,8 @@ class DayAheadScheduler:
             )
 
         if self.config.enable_plan_cache:
+            if len(self._plan_cache) >= self._plan_cache_max_size:
+                self._plan_cache.popitem(last=False)
             self._plan_cache[cache_key] = plan
         return plan
 
@@ -316,6 +320,7 @@ class DayAheadScheduler:
 
                 if problem.status not in {cp.OPTIMAL, cp.OPTIMAL_INACCURATE}:
                     continue
+                is_optimal = problem.status == cp.OPTIMAL
                 pch = np.maximum(np.asarray(p_charge.value, dtype=float).reshape(h), 0.0)
                 pdis = np.maximum(np.asarray(p_discharge.value, dtype=float).reshape(h), 0.0)
                 psrv = np.maximum(np.asarray(p_service.value, dtype=float).reshape(h), 0.0)
@@ -343,6 +348,8 @@ class DayAheadScheduler:
                         "simultaneous_sum": simultaneous_sum,
                     }
                 )
+                if is_optimal:
+                    break
             except Exception as exc:
                 last_error = exc
                 if self.config.log_solver_failure:
@@ -583,6 +590,9 @@ class DayAheadScheduler:
             return float(np.clip(getattr(ctx.operation_config, "fixed_terminal_soc_target", initial_soc), soc_min, soc_max))
         if mode == "strategy_mid":
             return float(np.clip(0.5 * (soc_min + soc_max), soc_min, soc_max))
+        if mode in {"weekly_anchor", "monthly_anchor", "blended_anchor"}:
+            anchor_target = getattr(ctx.operation_config, "anchor_soc_target", initial_soc)
+            return float(np.clip(anchor_target, soc_min, soc_max))
         return float(np.clip(initial_soc, soc_min, soc_max))
 
     @staticmethod
