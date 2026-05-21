@@ -71,6 +71,7 @@ function AssetsPage() {
   const [previewFile, setPreviewFile] = useState<{ name: string; type: string } | null>(null);
   const [previewFiles, setPreviewFiles] = useState<Array<{ name: string; type: string; url: string }>>([]);
   const [previewLoading, setPreviewLoading] = useState(false);
+  const blobUrlRef = useRef<string | null>(null);
   const [previewContent, setPreviewContent] = useState<{
     kind: 'image' | 'csv' | 'text';
     imageUrl?: string;
@@ -164,6 +165,12 @@ function AssetsPage() {
   useEffect(() => {
     if (projectId) refreshUploadedNodes();
   }, [projectId, loadNodes]);
+
+  useEffect(() => {
+    return () => {
+      if (blobUrlRef.current) URL.revokeObjectURL(blobUrlRef.current);
+    };
+  }, []);
 
   async function onUploadTariff() {
     if (!projectId || !tariffFile) return;
@@ -294,7 +301,10 @@ function AssetsPage() {
     try {
       const result = await fetchPreviewContent(projectId, previewNodeId, file.name);
       if (result instanceof Blob) {
-        setPreviewContent({ kind: 'image', imageUrl: URL.createObjectURL(result) });
+        if (blobUrlRef.current) URL.revokeObjectURL(blobUrlRef.current);
+        const url = URL.createObjectURL(result);
+        blobUrlRef.current = url;
+        setPreviewContent({ kind: 'image', imageUrl: url });
       } else if ('content' in result && result.content) {
         setPreviewContent({ kind: 'text', textContent: result.content });
       } else if ('rows' in result && result.rows) {
