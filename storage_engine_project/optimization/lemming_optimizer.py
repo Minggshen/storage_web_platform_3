@@ -101,20 +101,10 @@ class LemmingOptimizer:
             population = self._next_population(results, target_size=target_pop_size)
 
         final_best = select_best_compromise(archive, safety_economy_tradeoff=self.safety_economy_tradeoff)
-        final_results = self.bridge.evaluate_population(
-            ctx=ctx,
-            population=population,
-            actual_load_matrix_kw=actual_load_matrix_kw,
-            actual_pv_matrix_kw=actual_pv_matrix_kw,
-            network_oracle=network_oracle,
-        )
-        all_eval_count += len(final_results)
-        archive = update_archive(archive, final_results)
-        final_best = select_best_compromise(archive, safety_economy_tradeoff=self.safety_economy_tradeoff)
 
         return LemmingOptimizationRunResult(
             archive_results=archive,
-            population_results=final_results,
+            population_results=results,
             history=history,
             best_result=final_best,
             all_evaluation_count=all_eval_count,

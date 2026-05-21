@@ -103,7 +103,7 @@ export async function uploadRawLoadData(
   form.append('project_id', projectId);
   form.append('node_id', nodeId);
   form.append('file', file);
-  const res = await fetch('/api/assets/raw-load-data/upload', { method: 'POST', body: form });
+  const res = await fetch(`${API_BASE}/api/assets/raw-load-data/upload`, { method: 'POST', body: form });
   if (!res.ok) throw new Error(await res.text());
   return res.json();
 }
@@ -111,7 +111,7 @@ export async function uploadRawLoadData(
 export async function listUploadedNodes(
   projectId: string,
 ): Promise<{ uploaded_nodes: string[]; processed_nodes: string[] }> {
-  const res = await fetch(`/api/assets/raw-load-data/uploaded/${projectId}`);
+  const res = await fetch(`${API_BASE}/api/assets/raw-load-data/uploaded/${projectId}`);
   if (!res.ok) throw new Error(await res.text());
   return res.json();
 }
@@ -120,7 +120,7 @@ export async function deleteRawLoadData(
   projectId: string,
   nodeId: string,
 ): Promise<{ success: boolean; deleted: boolean }> {
-  const res = await fetch(`/api/assets/raw-load-data/${projectId}/${nodeId}`, { method: 'DELETE' });
+  const res = await fetch(`${API_BASE}/api/assets/raw-load-data/${projectId}/${nodeId}`, { method: 'DELETE' });
   if (!res.ok) throw new Error(await res.text());
   return res.json();
 }
@@ -135,7 +135,7 @@ export function processRuntime(
   const controller = new AbortController();
   const body = JSON.stringify({ project_id: projectId, node_ids: nodeIds });
 
-  fetch('/api/assets/process-runtime', {
+  fetch(`${API_BASE}/api/assets/process-runtime`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body,
@@ -170,7 +170,7 @@ export async function listPreviewFiles(
   projectId: string,
   nodeId: string,
 ): Promise<{ node_id: string; files: Array<{ name: string; type: string; url: string }> }> {
-  const res = await fetch(`/api/assets/preview/${projectId}/${nodeId}`);
+  const res = await fetch(`${API_BASE}/api/assets/preview/${projectId}/${nodeId}`);
   if (!res.ok) throw new Error(await res.text());
   return res.json();
 }
@@ -180,7 +180,7 @@ export async function fetchPreviewContent(
   nodeId: string,
   fileName: string,
 ): Promise<{ file_name?: string; columns?: string[]; rows?: Array<Record<string, string>>; content?: string } | Blob> {
-  const url = `/api/assets/preview/${projectId}/${nodeId}/${fileName}`;
+  const url = `${API_BASE}/api/assets/preview/${projectId}/${nodeId}/${fileName}`;
   const res = await fetch(url);
   if (!res.ok) throw new Error(await res.text());
   const contentType = res.headers.get('content-type') || '';

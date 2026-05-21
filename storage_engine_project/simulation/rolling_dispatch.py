@@ -136,6 +136,7 @@ class RollingDispatchController:
         psrv_exec = np.zeros(h, dtype=float)
 
         notes: list[str] = []
+        saved_constraints: list = []  # cache oracle results per hour
 
         for t in range(h):
             planned_net_power = float(pdis_plan[t] - pch_plan[t])
@@ -160,8 +161,9 @@ class RollingDispatchController:
                 rated_energy_kwh=float(plan.rated_energy_kwh),
                 effective_power_cap_kw=eff_power_cap,
                 current_soc=float(soc[t]),
-                extra={"plan_summary": plan.summary_dict()},
+                extra={"plan_summary": plan.summary_dict(), "capture_network_trace": True},
             )
+            saved_constraints.append(constraint)
 
             service_cap = max(0.0, min(planned_service, constraint.service_power_cap_kw, eff_power_cap))
             base_power_cap = max(0.0, eff_power_cap - service_cap)
@@ -253,6 +255,7 @@ class RollingDispatchController:
             pch_exec=pch_exec,
             pdis_exec=pdis_exec,
             psrv_exec=psrv_exec,
+            saved_constraints=saved_constraints,
         )
 
         after_error: float | None = None
@@ -396,6 +399,7 @@ class RollingDispatchController:
         pch_exec,
         pdis_exec,
         psrv_exec,
+        saved_constraints=None,
     ):
         eta_c = float(ctx.strategy.eta_charge)
         eta_d = float(ctx.strategy.eta_discharge)
@@ -418,37 +422,39 @@ class RollingDispatchController:
         for t in range(24):
             ge = float(actual_net[t] + pch_exec[t] - pdis_exec[t])
 
-            # Derive planned charge/discharge the same way the main loop did
-            planned_net_power = float(plan.discharge_kw[t] - plan.charge_kw[t]) if t < len(plan.discharge_kw) else 0.0
+            # Derive planned charge/discharge the same way the main loop did (L144-149)
+            plan_ch_raw = float(plan.charge_kw[t]) if t < len(plan.charge_kw) else 0.0
+            plan_dis_raw = float(plan.discharge_kw[t]) if t < len(plan.discharge_kw) else 0.0
             if self.config.net_power_execution_mode:
-                planned_charge = 0.0 if planned_net_power >= 0 else -planned_net_power
-                planned_discharge = planned_net_power if planned_net_power >= 0 else 0.0
+                planned_net = plan_dis_raw - plan_ch_raw
+                planned_charge = 0.0 if planned_net >= 0 else -planned_net
+                planned_discharge = planned_net if planned_net >= 0 else 0.0
             else:
-                planned_charge = float(plan.charge_kw[t]) if t < len(plan.charge_kw) else 0.0
-                planned_discharge = float(plan.discharge_kw[t]) if t < len(plan.discharge_kw) else 0.0
-
+                planned_charge = plan_ch_raw
+                planned_discharge = plan_dis_raw
             planned_service = float(plan.service_commit_kw[t]) if t < len(plan.service_commit_kw) else 0.0
-
             exec_differs = (
                 abs(float(pch_exec[t]) - planned_charge) > 1e-6
                 or abs(float(pdis_exec[t]) - planned_discharge) > 1e-6
                 or abs(float(psrv_exec[t]) - planned_service) > 1e-6
             )
-
-            constraint = oracle.get_hour_constraint(
-                ctx=ctx,
-                day_index=plan.day_index,
-                hour_index=t,
-                actual_net_load_kw=float(actual_net[t]),
-                planned_charge_kw=float(pch_exec[t]),
-                planned_discharge_kw=float(pdis_exec[t]),
-                planned_service_kw=float(psrv_exec[t]),
-                rated_power_kw=float(plan.rated_power_kw),
-                rated_energy_kwh=float(plan.rated_energy_kwh),
-                effective_power_cap_kw=float(plan.effective_power_cap_kw),
-                current_soc=float(soc[t]),
-                extra={"plan_summary": plan.summary_dict(), "capture_network_trace": True},
-            )
+            if saved_constraints is not None and t < len(saved_constraints) and not exec_differs:
+                constraint = saved_constraints[t]
+            else:
+                constraint = oracle.get_hour_constraint(
+                    ctx=ctx,
+                    day_index=plan.day_index,
+                    hour_index=t,
+                    actual_net_load_kw=float(actual_net[t]),
+                    planned_charge_kw=float(pch_exec[t]),
+                    planned_discharge_kw=float(pdis_exec[t]),
+                    planned_service_kw=float(psrv_exec[t]),
+                    rated_power_kw=float(plan.rated_power_kw),
+                    rated_energy_kwh=float(plan.rated_energy_kwh),
+                    effective_power_cap_kw=float(plan.effective_power_cap_kw),
+                    current_soc=float(soc[t]),
+                    extra={"plan_summary": plan.summary_dict(), "capture_network_trace": True},
+                )
             meta = constraint.metadata or {}
             has_loss_trace = any(
                 meta.get(key) is not None

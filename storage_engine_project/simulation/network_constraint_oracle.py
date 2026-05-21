@@ -170,7 +170,8 @@ class SimpleNetworkConstraintOracle(NetworkConstraintOracle):
                 notes.append("当前负荷超过变压器限值，建议优先保留放电能力。")
 
             if self.config.voltage_penalty_enabled:
-                overload_proxy_kw = max(0.0, actual_net_load_kw + planned_charge_kw - limit)
+                grid_flow = actual_net_load_kw + planned_charge_kw - planned_discharge_kw
+                overload_proxy_kw = max(0.0, grid_flow - limit)
                 voltage_penalty_yuan = (
                     float(self.config.voltage_penalty_yuan_per_kw_over_transformer)
                     * overload_proxy_kw
@@ -181,7 +182,6 @@ class SimpleNetworkConstraintOracle(NetworkConstraintOracle):
             limit = None
 
         # 服务容量也共享额定功率，不宜高于可用功率上限
-        service_cap_kw = min(service_cap_kw, effective_power_cap_kw)
 
         return HourlyNetworkConstraint(
             max_charge_kw=max_charge_kw,

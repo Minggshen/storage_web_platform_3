@@ -42,14 +42,14 @@ try:
         OpenDSSConstraintOracle,
         OpenDSSOracleConfig,
     )
-except Exception:  # pragma: no cover
+except ImportError:  # pragma: no cover
     OpenDSSConstraintOracle = None
     OpenDSSOracleConfig = None
 
 
 def _env_str(name: str, default: str = "") -> str:
-    val = os.getenv(name, default)
-    return str(val) if val is not None else str(default)
+    val = os.getenv(name)
+    return str(val) if val is not None else default
 
 
 def _env_bool(name: str, default: bool = False) -> bool:
@@ -208,7 +208,7 @@ def _build_network_oracle(args: argparse.Namespace):
         voltage_min_pu=float(args.opendss_vmin_pu),
         voltage_max_pu=float(args.opendss_vmax_pu),
         voltage_penalty_coeff_yuan_per_pu=float(args.opendss_voltage_penalty_coeff),
-        compile_each_call=True,
+        compile_each_call=False,  # oracle 内部按日控制编译，此参数不再生效
         allow_engine_fallback=False,
         log_failures=True,
     )
@@ -291,9 +291,9 @@ def _build_evaluator(args: argparse.Namespace) -> StorageFitnessEvaluator:
             keep_daily_objects_fast_proxy=False,
             run_full_recheck_for_every_candidate=False,
             full_recheck_for_fast_feasible_only=True,
-            full_recheck_max_payback_years=15.0,
-            full_recheck_min_npv_to_investment_ratio=-0.10,
-            full_recheck_require_non_negative_cashflow=False,
+            full_recheck_max_payback_years=10.0,
+            full_recheck_min_npv_to_investment_ratio=0.0,
+            full_recheck_require_non_negative_cashflow=True,
             prefer_opendss_in_full_recheck=bool(args.prefer_opendss_in_full_recheck),
             print_candidate_logs=False,
             print_screening_fail_logs=True,

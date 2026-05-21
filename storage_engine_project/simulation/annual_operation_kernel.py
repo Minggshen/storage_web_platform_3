@@ -729,11 +729,14 @@ class AnnualOperationKernel:
             selected = sorted({int(x) for x in fast_proxy_selected_day_indices if 0 <= int(x) < 365})
             return [(d, [d]) for d in selected]
 
-        groups: dict[tuple[tuple[float, ...], tuple[float, ...]], list[int]] = defaultdict(list)
+        groups: dict[tuple[int, int, int], list[int]] = defaultdict(list)
         for day in range(365):
+            load = np.asarray(load_matrix_kw[day], dtype=float)
+            tariff = np.asarray(tariff_matrix_yuan_per_kwh[day], dtype=float)
             sig = (
-                tuple(np.round(np.asarray(load_matrix_kw[day], dtype=float), self.config.load_round_ndigits)),
-                tuple(np.round(np.asarray(tariff_matrix_yuan_per_kwh[day], dtype=float), self.config.tariff_round_ndigits)),
+                int(round(float(np.mean(load)) / 50)),    # mean load in 50kW bins
+                int(round(float(np.std(load)) / 30)),      # load std in 30kW bins
+                int(round(float(np.mean(tariff)) * 20)),   # mean tariff in 0.05 yuan bins
             )
             groups[sig].append(day)
 
