@@ -72,7 +72,9 @@ if _has_frontend:
     # SPA fallback: 所有非 API 的 GET 请求返回 index.html（必须在 API 路由之后）
     @app.get("/{full_path:path}", include_in_schema=False)
     async def spa_fallback(full_path: str):
-        requested = _static_dir / full_path
+        requested = (_static_dir / full_path).resolve()
+        if not str(requested).startswith(str(_static_dir.resolve())):
+            return FileResponse(str(_static_dir / "index.html"), headers={"Cache-Control": "no-cache"})
         if requested.is_file():
             return FileResponse(str(requested))
         return FileResponse(str(_static_dir / "index.html"), headers={"Cache-Control": "no-cache"})
