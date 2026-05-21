@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import { cancelSolverTask, fetchLatestSolverTask, fetchTaskLogs, rerunSolver } from '../../services/solver';
 import { fetchProjectTopology } from '../../services/topology';
@@ -167,16 +167,32 @@ export default function SolverPage() {
     }
   }
 
+  // 任务结束后自动停止轮询
+  useEffect(() => {
+    if (taskIsTerminal && pollingRef.current !== null) {
+      window.clearInterval(pollingRef.current);
+      pollingRef.current = null;
+    }
+  }, [taskIsTerminal]);
+
   useEffect(() => {
     loadTargetOptions().catch((err) => {
       setError(err instanceof Error ? err.message : String(err));
       setTargetOptions([]);
     });
     refreshTask(false);
-    const timer = window.setInterval(() => {
-      refreshTask(true);
-    }, 3000);
-    return () => window.clearInterval(timer);
+    // 仅在无活跃任务时启动轮询；任务结束后由上方 effect 自动停止
+    if (!taskIsTerminal) {
+      pollingRef.current = window.setInterval(() => {
+        refreshTask(true);
+      }, 3000);
+    }
+    return () => {
+      if (pollingRef.current !== null) {
+        window.clearInterval(pollingRef.current);
+        pollingRef.current = null;
+      }
+    };
   }, [projectId]);
 
   const stdoutText = useMemo(() => logsTask?.stdout_text ?? '', [logsTask]);
@@ -188,8 +204,10 @@ export default function SolverPage() {
   }, [latestTask, logsTask?.progress_hint, stdoutText, generations]);
   const mustChooseTarget = targetOptions.length > 1 && !targetId;
   const hasNoTargetOptions = targetOptions.length === 0;
+  const pollingRef = useRef<number | null>(null);
   const taskStatus = String(latestTask?.status ?? '').toLowerCase();
   const taskIsActive = taskStatus === 'running' || taskStatus === 'cancelling' || taskStatus === 'canceling';
+  const taskIsTerminal = taskStatus === 'completed' || taskStatus === 'failed';
   const stopDisabled = !activeTaskId || !taskIsActive || cancelling;
   const latestRunRequest = toRecord(logsTask?.metadata?.run_request ?? latestTask?.metadata?.run_request);
   const latestTaskTargetId = String(latestRunRequest?.target_id ?? '').trim();
