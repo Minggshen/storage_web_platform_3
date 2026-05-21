@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import re
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -157,8 +158,13 @@ def list_templates() -> TopologyTemplateListResponse:
     return TopologyTemplateListResponse(success=True, templates=templates)
 
 
+TEMPLATE_ID_PATTERN = re.compile(r"^[a-zA-Z0-9_-]+$")
+
+
 @router.get("/templates/{template_id}", response_model=TopologyTemplateDetailResponse)
 def get_template(template_id: str) -> TopologyTemplateDetailResponse:
+    if not TEMPLATE_ID_PATTERN.match(template_id):
+        raise HTTPException(status_code=400, detail="无效的模板 ID。")
     _ensure_templates_dir()
     path = TEMPLATES_DIR / f"{template_id}.json"
     if not path.exists():
@@ -190,6 +196,8 @@ def save_template(request: SaveTemplateRequest) -> TopologyTemplateDetailRespons
 
 @router.delete("/templates/{template_id}")
 def delete_template(template_id: str) -> dict[str, Any]:
+    if not TEMPLATE_ID_PATTERN.match(template_id):
+        raise HTTPException(status_code=400, detail="无效的模板 ID。")
     _ensure_templates_dir()
     path = TEMPLATES_DIR / f"{template_id}.json"
     if not path.exists():
