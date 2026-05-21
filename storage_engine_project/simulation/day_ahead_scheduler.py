@@ -212,9 +212,11 @@ class DayAheadScheduler:
         cfg = self.config
         op_cfg = ctx.operation_config
         strategy = ctx.strategy
+        # 充放电效率：η_c ≤ 1（充电储存效率），η_d ≤ 1（放电输出效率）
         eta_c = float(strategy.eta_charge)
         eta_d = float(strategy.eta_discharge)
         energy_kwh = float(rated_energy_kwh)
+        # η_loss = η_c - 1/η_d：辅助服务双向充放的往返效率净损耗
         eta_loss = eta_c - 1.0 / eta_d
         deg_coeff = float(strategy.degradation_cost_yuan_per_kwh_throughput)
         transformer_limit_kw = ctx.transformer_active_power_limit_kw

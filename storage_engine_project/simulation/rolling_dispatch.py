@@ -126,6 +126,8 @@ class RollingDispatchController:
         del_price = np.asarray(plan.service_delivery_price_yuan_per_kwh, dtype=float).reshape(24)
         pen_price = np.asarray(plan.service_penalty_price_yuan_per_kwh, dtype=float).reshape(24)
         expected_penalty_ratio = max(0.0, 1.0 - float(ctx.service_config.delivery_score_floor))
+        # η_loss = η_c - 1/η_d：辅助服务（调频）的净 SOC 损耗系数。
+        # 辅助服务需双向充放，每 kWh 吞吐经历一次充放循环的往返效率损失。
         eta_loss = eta_c - 1.0 / eta_d
 
         soc = np.zeros(h + 1, dtype=float)
@@ -194,6 +196,8 @@ class RollingDispatchController:
             pdis_exec[t] = discharge
             psrv_exec[t] = service_cap
 
+            # SOC 递推：充电 η_c 倍存入，放电需 1/η_d 倍取出，辅助服务按净损耗扣除。
+            # 符号约定：charge/discharge/service 均以 kW 为正，SOC ∈ [0, 1]。
             soc[t + 1] = (
                 soc[t]
                 + eta_c * charge / rated_energy_kwh
