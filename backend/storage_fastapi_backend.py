@@ -14,13 +14,15 @@ from routes.project import router as project_router
 from routes.topology import router as topology_router
 from routes.solver import router as solver_router
 
+APP_VERSION = "2.6.0"
+
 app = FastAPI(
     title="Storage Visual Modeling Backend",
     description=(
         "工作流接口增强版：补齐前端页面化工作流所需的项目列表/创建、项目总览聚合、整拓扑提交、"
         "搜索边界推导表、任务日志等接口，配合图形化建模前端使用。"
     ),
-    version="2.6.0",
+    version=APP_VERSION,
 )
 
 _cors_origins_raw = os.getenv(
@@ -51,7 +53,7 @@ _has_frontend = _static_dir.is_dir()
 
 @app.get("/health")
 def health() -> dict:
-    return {"success": True, "status": "ok", "version": "2.6.0"}
+    return {"success": True, "status": "ok", "version": APP_VERSION}
 
 
 app.include_router(project_router)
@@ -84,5 +86,5 @@ else:
         return {
             "success": True,
             "message": "Storage visual modeling backend is running.",
-            "version": "2.6.0",
+            "version": APP_VERSION,
         }
