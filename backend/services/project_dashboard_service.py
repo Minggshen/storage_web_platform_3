@@ -8,6 +8,23 @@ from services.project_model_service import ProjectModelService
 from services.solver_execution_service import SolverExecutionService
 
 
+def _npv_wan(best: dict) -> float | None:
+    """从 best 行中提取 npv_wan，兼容 npv_yuan 原始值。"""
+    raw = best.get("npv_wan")
+    if raw is not None:
+        try:
+            return float(raw)
+        except (TypeError, ValueError):
+            pass
+    npv_yuan = best.get("npv_yuan")
+    if npv_yuan is not None:
+        try:
+            return float(npv_yuan) / 10000.0
+        except (TypeError, ValueError):
+            pass
+    return None
+
+
 class ProjectDashboardService:
     def __init__(
         self,
@@ -90,7 +107,7 @@ class ProjectDashboardService:
                         "power_kw": best.get("power_kw") or best.get("rated_power_kw"),
                         "energy_kwh": best.get("energy_kwh") or best.get("rated_energy_kwh"),
                         "duration_h": best.get("duration_h"),
-                        "npv_wan": best.get("npv_wan"),
+                        "npv_wan": _npv_wan(best),
                         "payback_years": best.get("payback_years") or best.get("simple_payback_years"),
                         "irr_percent": best.get("irr_percent"),
                         "annual_equivalent_cycles": best.get("annual_equivalent_cycles"),
@@ -114,7 +131,7 @@ class ProjectDashboardService:
                         "power_kw": best.get("power_kw") or best.get("rated_power_kw"),
                         "energy_kwh": best.get("energy_kwh") or best.get("rated_energy_kwh"),
                         "duration_h": best.get("duration_h"),
-                        "npv_wan": best.get("npv_wan"),
+                        "npv_wan": _npv_wan(best),
                         "payback_years": best.get("payback_years") or best.get("simple_payback_years"),
                         "irr_percent": best.get("irr_percent"),
                         "annual_equivalent_cycles": best.get("annual_equivalent_cycles"),

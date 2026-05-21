@@ -10,7 +10,9 @@ function valueOf(summary: Record<string, unknown> | undefined, keys: string[], s
   for (const key of keys) {
     const v = summary[key];
     if (v !== null && v !== undefined && v !== '') {
-      return `${String(v)}${suffix}`;
+      const num = Number(v);
+      const display = Number.isFinite(num) ? String(Math.round(num * 100) / 100) : String(v);
+      return `${display}${suffix}`;
     }
   }
   return '--';

@@ -256,7 +256,7 @@ export default function SolverPage() {
               任务运行中，参数已锁定为本次运行的实际设置。
             </div>
           )}
-          <div className="grid gap-3" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))' }}>
+          <div className="grid gap-3" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 240px))' }}>
             <label htmlFor="solver-population-size" className="grid gap-1.5">
               <span className="text-[13px] font-bold text-foreground/70">population_size</span>
               <input
