@@ -1,4 +1,4 @@
-import { http } from './http';
+import { http, API_BASE } from './http';
 import type {
   ResultChartsResponse,
   ResultFilePreviewResponse,
@@ -72,8 +72,6 @@ export async function fetchResultFilePreview(projectId: string, relativePath: st
   if (taskId) query.set('task_id', taskId);
   return http<ResultFilePreviewResponse>(`/api/solver/project/${projectId}/result-file?${query.toString()}`);
 }
-
-const API_BASE = import.meta.env.VITE_API_BASE_URL ?? '';
 
 export function getResultFileDownloadUrl(projectId: string, relativePath: string, group?: string, taskId?: string) {
   const query = new URLSearchParams({ relative_path: relativePath });

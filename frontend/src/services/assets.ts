@@ -1,6 +1,4 @@
-import { http } from './http';
-
-const API_BASE = import.meta.env.VITE_API_BASE_URL ?? '';
+import { http, API_BASE } from './http';
 
 export type ProjectAsset = {
   file_id: string;

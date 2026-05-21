@@ -1,4 +1,4 @@
-const API_BASE = import.meta.env.VITE_API_BASE_URL ?? '';
+export const API_BASE = import.meta.env.VITE_API_BASE_URL ?? '';
 const API_TIMEOUT_FROM_ENV = Number(import.meta.env.VITE_API_TIMEOUT_MS ?? 60000);
 const API_TIMEOUT_MS = Number.isFinite(API_TIMEOUT_FROM_ENV) && API_TIMEOUT_FROM_ENV > 0 ? API_TIMEOUT_FROM_ENV : 60000;
 
