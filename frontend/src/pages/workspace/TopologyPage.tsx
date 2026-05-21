@@ -1594,7 +1594,8 @@ export default function TopologyPage() {
         if (row.node_id) next[row.node_id] = row;
       });
       setInferenceRowsByNodeId(next);
-    } catch {
+    } catch (err) {
+      console.warn('解析搜索空间推断结果失败：', err);
       setInferenceRowsByNodeId({});
     }
   }
@@ -3770,7 +3771,7 @@ function createEdge(fromId: string, toId: string) {
 
                       <PropertyGroupTitle>调度设置</PropertyGroupTitle>
 
-                      <label style={labelStyle}>调度模式</label>
+                      <label style={labelStyle}>调度模式<span style={{fontSize:'11px',color:'#999',marginLeft:'6px',fontWeight:400}}>（预留，暂未生效）</span></label>
                       <select
                         disabled={!selectedLoadStorageEnabled}
                         value={stringParam(selectedNode.params, 'dispatch_mode', 'hybrid')}

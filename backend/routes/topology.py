@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 import uuid
 from datetime import datetime, timezone
@@ -33,6 +34,7 @@ from services.network_topology_service import NetworkTopologyService
 from services.project_model_service import ProjectModelService
 from services.project_validation_service import ProjectValidationService
 
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/topology", tags=["topology"])
 
@@ -154,6 +156,7 @@ def list_templates() -> TopologyTemplateListResponse:
                 edge_count=len(edges) if isinstance(edges, list) else 0,
             ))
         except Exception:
+            logger.warning("读取模板文件失败：%s", path, exc_info=True)
             continue
     return TopologyTemplateListResponse(success=True, templates=templates)
 
