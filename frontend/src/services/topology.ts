@@ -73,12 +73,12 @@ export async function saveProjectTopology(
 ): Promise<ProjectTopology> {
   // 先尝试直接提交 topology
   try {
-    const data = await putJson(`${API_BASE}/api/topology/project/${projectId}`, topology);
+    const data = await putJson(`/api/topology/project/${projectId}`, topology);
     return normalizeTopology(data);
   } catch (firstErr) {
     // 再尝试包装成 { network: topology }
     try {
-      const data = await putJson(`${API_BASE}/api/topology/project/${projectId}`, {
+      const data = await putJson(`/api/topology/project/${projectId}`, {
         network: topology,
       });
       return normalizeTopology(data);
