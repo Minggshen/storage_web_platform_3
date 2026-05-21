@@ -1,3 +1,5 @@
+import { http } from './http';
+
 const API_BASE = import.meta.env.VITE_API_BASE_URL ?? '';
 
 export type ProjectAsset = {
@@ -89,8 +91,7 @@ export async function uploadRuntimeFile(
 }
 
 export async function listProjectAssets(projectId: string): Promise<ProjectAsset[]> {
-  const response = await fetch(`${API_BASE}/api/assets/project/${projectId}`);
-  const data = await parseJsonResponse(response);
+  const data = await http<any>(`/api/assets/project/${projectId}`);
   return Array.isArray(data?.assets) ? (data.assets as ProjectAsset[]) : [];
 }
 
@@ -111,18 +112,14 @@ export async function uploadRawLoadData(
 export async function listUploadedNodes(
   projectId: string,
 ): Promise<{ uploaded_nodes: string[]; processed_nodes: string[] }> {
-  const res = await fetch(`${API_BASE}/api/assets/raw-load-data/uploaded/${projectId}`);
-  if (!res.ok) throw new Error(await res.text());
-  return res.json();
+  return http(`/api/assets/raw-load-data/uploaded/${projectId}`);
 }
 
 export async function deleteRawLoadData(
   projectId: string,
   nodeId: string,
 ): Promise<{ success: boolean; deleted: boolean }> {
-  const res = await fetch(`${API_BASE}/api/assets/raw-load-data/${projectId}/${nodeId}`, { method: 'DELETE' });
-  if (!res.ok) throw new Error(await res.text());
-  return res.json();
+  return http(`/api/assets/raw-load-data/${projectId}/${nodeId}`, { method: 'DELETE' });
 }
 
 export function processRuntime(
@@ -170,9 +167,7 @@ export async function listPreviewFiles(
   projectId: string,
   nodeId: string,
 ): Promise<{ node_id: string; files: Array<{ name: string; type: string; url: string }> }> {
-  const res = await fetch(`${API_BASE}/api/assets/preview/${projectId}/${nodeId}`);
-  if (!res.ok) throw new Error(await res.text());
-  return res.json();
+  return http(`/api/assets/preview/${projectId}/${nodeId}`);
 }
 
 export async function fetchPreviewContent(

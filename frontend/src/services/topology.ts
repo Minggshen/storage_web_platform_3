@@ -6,8 +6,6 @@ export type ProjectTopology = {
   economic_parameters?: Record<string, unknown>;
 };
 
-const API_BASE = import.meta.env.VITE_API_BASE_URL ?? '';
-
 function normalizeTopology(data: any): ProjectTopology {
   if (data?.project?.network) {
     return {
@@ -51,20 +49,11 @@ export async function fetchProjectTopology(projectId: string): Promise<ProjectTo
 }
 
 async function putJson(path: string, body: unknown) {
-  const response = await fetch(`${API_BASE}${path}`, {
+  return http(path, {
     method: 'PUT',
-    headers: {
-      'Content-Type': 'application/json',
-    },
+    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
   });
-
-  const text = await response.text();
-  if (!response.ok) {
-    throw new Error(text || `HTTP ${response.status}`);
-  }
-
-  return text ? JSON.parse(text) : { success: true };
 }
 
 export async function saveProjectTopology(
