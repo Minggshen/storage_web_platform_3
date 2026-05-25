@@ -211,6 +211,13 @@ class ReportDataService:
                 }
             )
 
+        # fallback: compute annualized_net_cashflow from cashflow if not in summary
+        ann_cf = _number(core.get("annualized_net_cashflow_yuan")) or _number(best.get("annualized_net_cashflow_yuan"))
+        if not ann_cf and cashflow_out:
+            cf_vals = [r["net_cashflow_yuan"] for r in cashflow_out if r.get("net_cashflow_yuan") is not None]
+            if cf_vals:
+                ann_cf = round(sum(cf_vals) / len(cf_vals), 2)
+
         return {
             "core": {
                 "npv_yuan": _number(core.get("npv_yuan")) or _number(best.get("npv_yuan")),
@@ -218,7 +225,7 @@ class ReportDataService:
                 "simple_payback_years": _number(core.get("simple_payback_years")) or _number(best.get("simple_payback_years")),
                 "discounted_payback_years": _number(core.get("discounted_payback_years")) or _number(best.get("discounted_payback_years")),
                 "initial_investment_yuan": _number(core.get("initial_investment_yuan")) or _number(best.get("initial_investment_yuan")),
-                "annualized_net_cashflow_yuan": _number(core.get("annualized_net_cashflow_yuan")) or _number(best.get("annualized_net_cashflow_yuan")),
+                "annualized_net_cashflow_yuan": ann_cf,
                 "lcoe_yuan_per_kwh": _number(core.get("lcoe_yuan_per_kwh")),
                 "roi_pct": _number(core.get("roi_pct")),
                 "revenue_breakdown": {
@@ -444,6 +451,18 @@ class ReportDataService:
                     if matched_row is None and len(rows) == 1:
                         matched_row = rows[0]
                     if matched_row is None:
+                        # return node identity from best when metrics unavailable
+                        node_ref = target_load_id or target_bus
+                        if node_ref:
+                            return {
+                                "peak_kw": None,
+                                "valley_kw": None,
+                                "annual_mean_kw": None,
+                                "mean_daily_energy_kwh": None,
+                                "load_factor": None,
+                                "target_node_name": node_ref,
+                                "target_node_id": node_ref,
+                            }
                         return {}
                     peak = _number(getattr(matched_row, "peak_kw", None))
                     valley = _number(getattr(matched_row, "valley_kw", None))

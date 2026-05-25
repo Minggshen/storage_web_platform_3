@@ -1020,7 +1020,7 @@ function buildProjectOverview(payload: ReportPayload): string {
       ['任务编号', task.task_id],
       ['任务状态', task.status ? label(String(task.status)) : '--'],
       ['完成时间', task.completed_at ? dateLabel(task.completed_at) : '--'],
-      ['选用算例', task.selected_case],
+      ['选用算例', task.selected_case ? friendlyNodeName(String(task.selected_case)) : null],
     ]));
   }
 
@@ -1048,11 +1048,13 @@ function buildProjectOverview(payload: ReportPayload): string {
 
 function buildTechnicalSolution(payload: ReportPayload): string {
   const cfg = payload.configuration;
+  const fin = payload.financial;
   const devices = payload.devices;
 
   // system architecture description
+  const accessPoint = friendlyNodeName(cfg?.target_bus || cfg?.target_id || '指定母线');
   const archText = cfg
-    ? `本项目拟在<strong>${esc(cfg.target_bus || cfg.target_id || '指定母线')}</strong>接入储能系统，配置额定功率 <strong>${num(cfg.rated_power_kw, 0)} kW</strong>、额定容量 <strong>${num(cfg.rated_energy_kwh, 0)} kWh</strong>，持续放电时间约 <strong>${num(cfg.duration_h, 1)} 小时</strong>。系统通过储能变流器（PCS）实现交直流变换，由能量管理系统（EMS）进行智能调度，采用${cfg.strategy_name ? esc(cfg.strategy_name) + '策略' : '峰谷套利+需量管理综合策略'}运行。`
+    ? `本项目拟在<strong>${esc(accessPoint)}</strong>接入储能系统，配置额定功率 <strong>${num(cfg.rated_power_kw, 0)} kW</strong>、额定容量 <strong>${num(cfg.rated_energy_kwh, 0)} kWh</strong>，持续放电时间约 <strong>${num(cfg.duration_h, 1)} 小时</strong>。系统通过储能变流器（PCS）实现交直流变换，由能量管理系统（EMS）进行智能调度，采用${cfg.strategy_name ? esc(cfg.strategy_name) + '策略' : '峰谷套利+需量管理综合策略'}运行。`
     : `<p class="no-data">暂无储能配置数据。请先完成求解以生成技术方案。</p>`;
 
   // primary device spec
@@ -1139,28 +1141,32 @@ function buildTechnicalSolution(payload: ReportPayload): string {
 
   // candidate comparison
   let comparisonSection = '';
-  const comp = payload.candidate_comparison;
-  const recommended = comp?.recommended as Record<string, unknown> | null | undefined;
-  const alternatives = comp?.alternatives || [];
-  if (recommended && alternatives.length > 0) {
-    const allCandidates = [recommended, ...alternatives].slice(0, 5);
-    const compCols = ['方案', '功率 (kW)', '容量 (kWh)', '投资 (万元)', 'NPV (万元)', 'IRR', '回收期 (年)', '电网风险', '推荐理由'];
-    const compRows = allCandidates.map((c, i) => {
-      const isRec = i === 0;
-      const pwr = num(c.ratedPowerKw ?? c.rated_power_kw, 0);
-      const en = num(c.ratedEnergyKwh ?? c.rated_energy_kwh, 0);
-      const inv = num((c.initialInvestmentWan ?? c.initial_investment_yuan), 0);
-      const npvVal = num((c.npvWan ?? c.npv_yuan), 0);
-      const irrVal = c.irr != null ? pct(c.irr) : '暂无数据';
-      const payback = c.paybackYears ?? c.simple_payback_years != null ? `${num(c.paybackYears ?? c.simple_payback_years, 1)} 年` : '暂无数据';
-      const risk = c.feasible ? '低风险' : '存在越限';
-      const reason = isRec ? '综合经济性与电网安全性最优' : '备选方案';
-      const rowClass = isRec ? ' style="background:#ecfdf5;font-weight:600;"' : '';
-      return [`<span${rowClass}>${isRec ? '★ 推荐方案' : `方案 ${i + 1}`}</span>`, pwr, en, inv, npvVal, irrVal, payback, risk, reason];
+  const alternatives = payload.candidate_comparison?.alternatives || [];
+  if (cfg && fin && alternatives.length > 0) {
+    // build recommended row from configuration + financial.core (already normalized)
+    const finCore = fin.core || (fin as Record<string, unknown>);
+    const recPower = num(cfg.rated_power_kw, 0);
+    const recEnergy = num(cfg.rated_energy_kwh, 0);
+    const recInvest = num((finCore.initial_investment_yuan ?? 0), 0);
+    const recNpv = num((finCore.npv_yuan ?? 0), 0);
+    const recIrr = finCore.irr != null ? pct(finCore.irr) : '暂无数据';
+    const recPayback = finCore.simple_payback_years != null ? `${num(finCore.simple_payback_years, 1)} 年` : '暂无数据';
+    const recRow = [`<span style="background:#ecfdf5;font-weight:600;">★ 推荐方案</span>`, recPower, recEnergy, recInvest, recNpv, recIrr, recPayback, '低风险', '综合经济性与电网安全性最优'];
+
+    const altRows = alternatives.slice(0, 4).map((a, i) => {
+      const pwr = num(a.ratedPowerKw ?? a.rated_power_kw, 0);
+      const en = num(a.ratedEnergyKwh ?? a.rated_energy_kwh, 0);
+      const inv = num((a.initialInvestmentWan ?? a.initial_investment_yuan), 0);
+      const npvVal = num((a.npvWan ?? a.npv_yuan), 0);
+      const irrVal = a.irr != null ? pct(a.irr) : '暂无数据';
+      const payback = a.paybackYears ?? a.simple_payback_years != null ? `${num(a.paybackYears ?? a.simple_payback_years, 1)} 年` : '暂无数据';
+      return [`方案 ${i + 1}`, pwr, en, inv, npvVal, irrVal, payback, a.feasible ? '低风险' : '存在越限', '备选方案'];
     });
+
+    const compCols = ['方案', '功率 (kW)', '容量 (kWh)', '投资 (万元)', 'NPV (万元)', '全投资内部收益率 (IRR)', '回收期 (年)', '电网风险', '推荐理由'];
     comparisonSection = subSection('2.6 候选方案对比',
       '<p>求解器在搜索空间中生成了多个候选配置方案，下表对比推荐方案与备选方案的关键指标：</p>' +
-      dataTable(compCols, compRows, ['left', 'right', 'right', 'right', 'right', 'right', 'right', 'left', 'left'], new Set([0]))
+      dataTable(compCols, [recRow, ...altRows], ['left', 'right', 'right', 'right', 'right', 'right', 'right', 'left', 'left'], new Set([0]))
     );
   }
 
@@ -1182,7 +1188,7 @@ function buildTechnicalSolution(payload: ReportPayload): string {
       '<p>基于推荐方案配置及选型设备参数，初步估算一次系统主要设计参数如下。标注"待现场确认"的项目需在施工前由设计单位现场踏勘后确定。</p>' +
       kvTable([
         ['接入电压等级', primaryDevice.ac_grid_voltage_v || '待现场确认'],
-        ['接入点', cfg.target_bus || cfg.target_id || '待现场确认'],
+        ['接入点', friendlyNodeName(cfg.target_bus || cfg.target_id || '待现场确认')],
         ['PCS 数量（估算）', qty > 0 ? `${qty} 台（与储能柜配套）` : '待现场确认'],
         ['储能柜数量（估算）', qty > 0 ? `${qty} 台` : '待现场确认'],
         ['并网柜 / 计量柜', '需根据接入方案设计配置（待现场确认）'],
@@ -1225,16 +1231,20 @@ function buildControlStrategy(payload: ReportPayload): string {
   if (repDay?.rows?.length) {
     const dualData = repDay.rows.map((r: Record<string, unknown>) => {
       const soc = typeof r.socOpen === 'number' ? r.socOpen : typeof r.soc === 'number' ? r.soc : 0;
-      const chg = typeof r.chargeKw === 'number' ? r.chargeKw : 0;
+      const chgRaw = typeof r.chargeKw === 'number' ? r.chargeKw : 0;
       const dis = typeof r.dischargeKw === 'number' ? r.dischargeKw : 0;
+      // backend outputs chargeKw as negative magnitude; normalize: discharge +, charge -
+      const netPower = (chgRaw as number) < 0
+        ? (dis as number) + (chgRaw as number)
+        : (dis as number) - (chgRaw as number);
       return {
         label: String(r.hour ?? ''),
         leftValue: (soc as number) * 100,
-        rightValue: (dis as number) - (chg as number),
+        rightValue: netPower,
       };
     });
     repDayChart = subSection('3.4 代表日运行曲线',
-      `<p>以下为年吞吐量最大日的充放电功率与荷电状态变化（正=放电，负=充电）：</p>` +
+      `<p>以下为年吞吐量最大日的充放电功率与荷电状态变化（绿色=放电，红色=充电，蓝色折线=SOC%）：</p>` +
       svgDualAxisChart(dualData, 600, 350, {
         leftLabel: '荷电状态 SOC (%)',
         rightLabel: '净放电功率 (kW)',
