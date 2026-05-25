@@ -56,7 +56,7 @@ class ReportDataService:
             "task_meta": self._build_task_meta(project_id, task_id),
             "source_files": self._build_source_files(project_id, task_id),
             "assumptions": self._build_assumptions(project, deliverables),
-            "load_profile": self._build_load_profile(project, project_id, best),
+            "load_profile": self._build_load_profile(project, project_id, best, deliverables),
             "charts": self._build_charts(project_id, task_id),
             "candidate_comparison": self._build_candidate_comparison(project_id, task_id),
             "data_quality": self._build_data_quality(deliverables),
@@ -426,13 +426,17 @@ class ReportDataService:
     # ------------------------------------------------------------------
     # load_profile
     # ------------------------------------------------------------------
-    def _build_load_profile(self, project, project_id: str, best: Dict[str, Any]) -> Dict[str, Any]:
+    def _build_load_profile(self, project, project_id: str, best: Dict[str, Any], deliverables: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         try:
+            # also check solver binding configuration for node identity
+            cfg = {}
+            if deliverables and isinstance(deliverables.get("configuration"), dict):
+                cfg = deliverables["configuration"]
             if self._inference_service and project_id:
                 rows = self._inference_service.get_inference_rows(project_id)
                 if rows:
-                    target_load_id = best.get("load_id") or best.get("internal_model_id")
-                    target_bus = best.get("target_bus")
+                    target_load_id = best.get("load_id") or best.get("internal_model_id") or cfg.get("target_id") or cfg.get("load_id")
+                    target_bus = best.get("target_bus") or cfg.get("target_bus")
                     matched_row = None
                     # pass 1: exact node_id match
                     for row in rows:

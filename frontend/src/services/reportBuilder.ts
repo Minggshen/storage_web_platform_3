@@ -786,7 +786,9 @@ function svgDualAxisChart(
   const legend = `<line x1="${margin.left}" y1="12" x2="${margin.left + 24}" y2="12" stroke="${leftColor}" stroke-width="2" />
     <text x="${margin.left + 28}" y="16" font-size="9" fill="#374151">${esc(cfg.leftLabel)}</text>
     <rect x="${margin.left + 120}" y="6" width="12" height="12" fill="${rightColor}" opacity="0.6" rx="1" />
-    <text x="${margin.left + 136}" y="16" font-size="9" fill="#374151">${esc(cfg.rightLabel)}</text>`;
+    <text x="${margin.left + 136}" y="16" font-size="9" fill="#374151">放电 (正)</text>
+    <rect x="${margin.left + 210}" y="6" width="12" height="12" fill="#ef4444" opacity="0.6" rx="1" />
+    <text x="${margin.left + 226}" y="16" font-size="9" fill="#374151">充电 (负)</text>`;
 
   return `<div class="chart-figure"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${width} ${height}" preserveAspectRatio="xMidYMid meet" class="report-chart" style="font-family:'PingFang SC','Microsoft YaHei',sans-serif;max-width:100%;">
     ${leftLabel}${rightLabel}${leftTicks}${rightTicks}${xLabels}${legend}<path d="${leftPath}" fill="none" stroke="${leftColor}" stroke-width="2" />${bars}
@@ -1144,20 +1146,30 @@ function buildTechnicalSolution(payload: ReportPayload): string {
   const alternatives = payload.candidate_comparison?.alternatives || [];
   if (cfg && fin && alternatives.length > 0) {
     // build recommended row from configuration + financial.core (already normalized)
-    const finCore = fin.core || (fin as Record<string, unknown>);
+    const finCore = (fin as ReportFinancial).core || (fin as Record<string, unknown>);
     const recPower = num(cfg.rated_power_kw, 0);
     const recEnergy = num(cfg.rated_energy_kwh, 0);
-    const recInvest = num((finCore.initial_investment_yuan ?? 0), 0);
-    const recNpv = num((finCore.npv_yuan ?? 0), 0);
+    const recInvest = num(((Number(finCore.initial_investment_yuan) || 0) / 10000), 0);
+    const recNpv = num(((Number(finCore.npv_yuan) || 0) / 10000), 0);
     const recIrr = finCore.irr != null ? pct(finCore.irr) : '暂无数据';
     const recPayback = finCore.simple_payback_years != null ? `${num(finCore.simple_payback_years, 1)} 年` : '暂无数据';
     const recRow = [`<span style="background:#ecfdf5;font-weight:600;">★ 推荐方案</span>`, recPower, recEnergy, recInvest, recNpv, recIrr, recPayback, '低风险', '综合经济性与电网安全性最优'];
 
-    const altRows = alternatives.slice(0, 4).map((a, i) => {
+    // deduplicate by power+capacity+NPV
+    const seen = new Set<string>();
+    const uniqueAlts = alternatives.filter((a: Record<string, unknown>) => {
+      const key = `${a.ratedPowerKw ?? a.rated_power_kw}_${a.ratedEnergyKwh ?? a.rated_energy_kwh}_${a.npvWan ?? a.npv_yuan}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    }).slice(0, 4);
+    const altRows = uniqueAlts.map((a: Record<string, unknown>, i: number) => {
       const pwr = num(a.ratedPowerKw ?? a.rated_power_kw, 0);
       const en = num(a.ratedEnergyKwh ?? a.rated_energy_kwh, 0);
-      const inv = num((a.initialInvestmentWan ?? a.initial_investment_yuan), 0);
-      const npvVal = num((a.npvWan ?? a.npv_yuan), 0);
+      const invYuan = a.initialInvestmentWan ?? (a.initial_investment_yuan != null ? Number(a.initial_investment_yuan) / 10000 : null);
+      const inv = num(invYuan, 0);
+      const npvYuan = a.npvWan ?? (a.npv_yuan != null ? Number(a.npv_yuan) / 10000 : null);
+      const npvVal = num(npvYuan, 0);
       const irrVal = a.irr != null ? pct(a.irr) : '暂无数据';
       const payback = a.paybackYears ?? a.simple_payback_years != null ? `${num(a.paybackYears ?? a.simple_payback_years, 1)} 年` : '暂无数据';
       return [`方案 ${i + 1}`, pwr, en, inv, npvVal, irrVal, payback, a.feasible ? '低风险' : '存在越限', '备选方案'];
