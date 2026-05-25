@@ -267,14 +267,22 @@ function friendlyNodeName(id: string): string {
   // edge_tx_load_<N> → <N>#配变线路
   m = id.match(/^edge_tx_load_(\d+)$/i);
   if (m) return `${m[1]}#配变线路（${id}）`;
-  // line_<from>_<to> or edge_...
-  m = id.match(/^(?:line|edge)_(.+)_(.+)$/i);
+  // edge_<from>_<to> → 线路 <from>-<to>
+  m = id.match(/^edge_(.+)_(.+)$/i);
+  if (m) return `线路 ${m[1]}-${m[2]}（${id}）`;
+  // line_<from>_<to> → 线路 <from>-<to>
+  m = id.match(/^line_(.+)_(.+)$/i);
   if (m) return `线路 ${m[1]}-${m[2]}（${id}）`;
   // bus_<N> → 母线 <N>
   m = id.match(/^bus_(\d+)$/i);
   if (m) return `母线 ${m[1]}（${id}）`;
+  // load_<N> → 负荷点 <N>
+  m = id.match(/^load_(\d+)$/i);
+  if (m) return `负荷点 ${m[1]}（${id}）`;
   // tx_... or transformer_... → 变压器 ...
   if (/^(tx_|transformer_|user_tx_)/i.test(id)) return `变压器 ${id}`;
+  // branch_* → 分支点
+  if (/^branch_/i.test(id)) return `分支点 ${id}`;
   return id;
 }
 
@@ -429,6 +437,9 @@ const CSS = /* css */ `
   .rec-status.not-recommended { background: #fef2f2; color: #991b1b; border: 1px solid #ef4444; }
   .disclaimer-box { border: 1px solid #d1d5db; border-radius: 6px; padding: 12pt 16pt; margin: 10pt 0; background: #f9fafb; color: #6b7280; font-size: 9.5pt; }
 
+  .chart-figure { break-inside: avoid; page-break-inside: avoid; margin: 12pt 0; text-align: center; }
+  .report-chart { display: block; width: 100%; height: auto; overflow: visible; max-width: 100%; }
+
   .severity-critical { color: #dc2626; font-weight: 700; }
   .severity-warning { color: #d97706; font-weight: 600; }
 
@@ -518,9 +529,9 @@ function svgBarChart(
   const yLabel = cfg.yLabel ? `<text x="${margin.left - 55}" y="${margin.top + plotH / 2}" text-anchor="middle" font-size="10" fill="#374151" transform="rotate(-90, ${margin.left - 55}, ${margin.top + plotH / 2})">${esc(cfg.yLabel)}</text>` : '';
   const xLabel = cfg.xLabel ? `<text x="${margin.left + plotW / 2}" y="${height - 6}" text-anchor="middle" font-size="10" fill="#374151">${esc(cfg.xLabel)}</text>` : '';
 
-  return `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" style="font-family:'PingFang SC','Microsoft YaHei',sans-serif;max-width:100%;">
+  return `<div class="chart-figure"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${width} ${height}" preserveAspectRatio="xMidYMid meet" class="report-chart" style="font-family:'PingFang SC','Microsoft YaHei',sans-serif;max-width:100%;">
     ${yLabel}${xLabel}${yGrid}${bars}
-  </svg>`;
+  </svg></div>`;
 }
 
 function svgLineChart(
@@ -604,9 +615,9 @@ function svgLineChart(
 
   const yLabel = cfg.yLabel ? `<text x="${margin.left - 55}" y="${margin.top + plotH / 2}" text-anchor="middle" font-size="10" fill="#374151" transform="rotate(-90, ${margin.left - 55}, ${margin.top + plotH / 2})">${esc(cfg.yLabel)}</text>` : '';
 
-  return `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" style="font-family:'PingFang SC','Microsoft YaHei',sans-serif;max-width:100%;">
+  return `<div class="chart-figure"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${width} ${height}" preserveAspectRatio="xMidYMid meet" class="report-chart" style="font-family:'PingFang SC','Microsoft YaHei',sans-serif;max-width:100%;">
     ${yLabel}${yGrid}${legend}${paths}${dots}
-  </svg>`;
+  </svg></div>`;
 }
 
 function svgStackedBarChart(
@@ -648,16 +659,22 @@ function svgStackedBarChart(
 
   const yLabel = cfg.yLabel ? `<text x="${margin.left - 55}" y="${margin.top + plotH / 2}" text-anchor="middle" font-size="10" fill="#374151" transform="rotate(-90, ${margin.left - 55}, ${margin.top + plotH / 2})">${esc(cfg.yLabel)}</text>` : '';
 
-  // legend
+  // legend — multi-row, wrap within plot width
+  const legendItemW = 110;
+  const legendCols = Math.max(1, Math.floor(plotW / legendItemW));
   const allKeys = data[0]?.segments || [];
-  const legend = allKeys.map((seg, i) =>
-    `<rect x="${margin.left + i * 100}" y="${height - 16}" width="10" height="10" fill="${seg.color}" rx="2" />
-     <text x="${margin.left + 14 + i * 100}" y="${height - 6}" font-size="9" fill="#374151">${esc(seg.key)}</text>`
-  ).join('');
+  const legend = allKeys.map((seg, i) => {
+    const col = i % legendCols;
+    const row = Math.floor(i / legendCols);
+    const lx = margin.left + col * legendItemW;
+    const ly = height - 12 - row * 16;
+    return `<rect x="${lx}" y="${ly}" width="10" height="10" fill="${seg.color}" rx="2" />
+     <text x="${lx + 14}" y="${ly + 10}" font-size="9" fill="#374151">${esc(seg.key)}</text>`;
+  }).join('');
 
-  return `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" style="font-family:'PingFang SC','Microsoft YaHei',sans-serif;max-width:100%;">
+  return `<div class="chart-figure"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${width} ${height}" preserveAspectRatio="xMidYMid meet" class="report-chart" style="font-family:'PingFang SC','Microsoft YaHei',sans-serif;max-width:100%;">
     ${yLabel}${yGrid}${bars}${legend}
-  </svg>`;
+  </svg></div>`;
 }
 
 function svgScatterChart(
@@ -698,9 +715,9 @@ function svgScatterChart(
     <rect x="${width - 100}" y="8" width="10" height="10" fill="#9ca3af" rx="2" opacity="0.8" />
     <text x="${width - 86}" y="18" font-size="9" fill="#374151">不可行</text>`;
 
-  return `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" style="font-family:'PingFang SC','Microsoft YaHei',sans-serif;max-width:100%;">
+  return `<div class="chart-figure"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${width} ${height}" preserveAspectRatio="xMidYMid meet" class="report-chart" style="font-family:'PingFang SC','Microsoft YaHei',sans-serif;max-width:100%;">
     ${yLabel}${xLabel}${dots}${legend}
-  </svg>`;
+  </svg></div>`;
 }
 
 function svgDualAxisChart(
@@ -742,15 +759,16 @@ function svgDualAxisChart(
     return `${i === 0 ? 'M' : 'L'}${x.toFixed(1)},${y.toFixed(1)}`;
   }).join(' ');
 
-  // right bars (power)
+  // right bars (power) — zero baseline
+  const zeroY = margin.top + plotH - ((0 - rightMin) / rightRange) * plotH;
   const barW = Math.max(6, (plotW / data.length) * 0.7);
   const gap = plotW / data.length;
   const bars = data.map((d, i) => {
     const x = margin.left + gap * i + (gap - barW) / 2;
-    const h = Math.max(0, ((d.rightValue - rightMin) / rightRange) * plotH);
-    const y = margin.top + plotH - h;
+    const barH = Math.max(0.5, Math.abs((d.rightValue - 0) / rightRange) * plotH);
+    const barTop = d.rightValue >= 0 ? zeroY - barH : zeroY;
     const fill = d.rightValue >= 0 ? rightColor : '#ef4444';
-    return `<rect x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${barW.toFixed(1)}" height="${h.toFixed(1)}" fill="${fill}" opacity="0.6" rx="1" />`;
+    return `<rect x="${x.toFixed(1)}" y="${barTop.toFixed(1)}" width="${barW.toFixed(1)}" height="${barH.toFixed(1)}" fill="${fill}" opacity="0.6" rx="1" />`;
   }).join('');
 
   // x labels (every few hours)
@@ -770,9 +788,26 @@ function svgDualAxisChart(
     <rect x="${margin.left + 120}" y="6" width="12" height="12" fill="${rightColor}" opacity="0.6" rx="1" />
     <text x="${margin.left + 136}" y="16" font-size="9" fill="#374151">${esc(cfg.rightLabel)}</text>`;
 
-  return `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" style="font-family:'PingFang SC','Microsoft YaHei',sans-serif;max-width:100%;">
+  return `<div class="chart-figure"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${width} ${height}" preserveAspectRatio="xMidYMid meet" class="report-chart" style="font-family:'PingFang SC','Microsoft YaHei',sans-serif;max-width:100%;">
     ${leftLabel}${rightLabel}${leftTicks}${rightTicks}${xLabels}${legend}<path d="${leftPath}" fill="none" stroke="${leftColor}" stroke-width="2" />${bars}
-  </svg>`;
+  </svg></div>`;
+}
+
+// ====================================================================
+// shared helpers
+// ====================================================================
+
+function countRiskItems(ni: ReportPayload['network_impact']): { improved: number; worsened: number } {
+  const risks = Array.isArray(ni?.risk_classification) ? ni.risk_classification : [];
+  let improved = 0;
+  let worsened = 0;
+  for (const r of risks) {
+    const cls = String((r as Record<string, unknown>).classification ?? '');
+    const total = Number((r as Record<string, unknown>).total) || 0;
+    if (cls === 'improved_by_storage' || cls === 'cleared_by_storage') improved += total;
+    if (cls === 'worsened_by_storage' || cls === 'storage_induced') worsened += total;
+  }
+  return { improved, worsened };
 }
 
 // ====================================================================
@@ -840,8 +875,8 @@ function buildExecutiveSummary(payload: ReportPayload): string {
   const feasibilityFeasible = feasibilityStatus === 'feasible';
   const feasibilityInfeasible = feasibilityStatus === 'infeasible';
 
-  const targetConclusion = ni?.target_area_conclusion as Record<string, unknown> | null | undefined;
-  const gridStatus = targetConclusion?.status ? String(targetConclusion.status) : '';
+  const { improved, worsened } = countRiskItems(ni);
+  const gridStatus = improved > worsened ? 'improved' : worsened > improved ? 'worsened' : 'neutral';
 
   // derive recommendation level
   let recLevel: 'recommended' | 'conditional' | 'not-recommended' = 'conditional';
@@ -874,8 +909,8 @@ function buildExecutiveSummary(payload: ReportPayload): string {
   if (criticalIssues.length > 0) {
     const riskText = criticalIssues.slice(0, 3).map(i => classifyLabel(i.code || '')).join('、');
     recRows.push(['主要风险', riskText || '详见第七章风险矩阵']);
-  } else if (gridStatus === 'worsened') {
-    recRows.push(['主要风险', '储能接入后局部电网指标恶化，需复核']);
+  } else if (worsened > 0) {
+    recRows.push(['主要风险', `电网影响分析识别出 ${worsened} 项安全指标恶化，需复核（详见第五章）`]);
   } else {
     recRows.push(['主要风险', '暂未识别严重风险项']);
   }
@@ -885,8 +920,8 @@ function buildExecutiveSummary(payload: ReportPayload): string {
   if (!payload.assumptions?.opendss_enabled) {
     prerequisites.push('建议启用 OpenDSS 配电网安全校核后重新求解验证');
   }
-  if (gridStatus === 'worsened') {
-    prerequisites.push('需对恶化线路/变压器进行现场复核或改造');
+  if (worsened > 0) {
+    prerequisites.push(`需对 ${worsened} 项恶化指标对应的线路/变压器进行现场复核或改造`);
   }
   prerequisites.push('实施前需完成现场踏勘与接入方案电网公司批复');
   recRows.push(['实施前置条件', prerequisites.join('；') || '完成现场踏勘与接入方案批复']);
@@ -903,11 +938,14 @@ function buildExecutiveSummary(payload: ReportPayload): string {
   if (feasibilityInfeasible) {
     recommendation = '当前推荐方案未通过可行性校验，建议检查输入数据与约束条件，调整搜索空间后重新求解。项目不建议按当前方案实施。';
     conclusionClass = 'worsened';
-  } else if (gridStatus === 'improved') {
-    recommendation = '储能接入后目标区域电网安全指标整体改善，推荐按本方案实施。建议在项目实施前完成现场踏勘与详细接入设计。';
+  } else if (worsened === 0 && improved > 0) {
+    recommendation = '储能接入后目标区域电网安全指标整体改善，未新增系统性风险。推荐按本方案实施，建议在项目实施前完成现场踏勘与详细接入设计。';
     conclusionClass = 'improved';
-  } else if (gridStatus === 'worsened') {
-    recommendation = '储能接入后目标区域部分安全指标出现恶化，建议在实施前对配电网进行针对性改造或调整储能运行策略，并经电网公司接入审批。';
+  } else if (worsened > 0 && improved >= worsened) {
+    recommendation = `储能接入后电网部分指标改善（${improved} 项），但存在 ${worsened} 项局部风险需关注。建议在实施前对恶化项进行现场复核，并经电网公司接入审批。`;
+    conclusionClass = 'neutral';
+  } else if (worsened > improved) {
+    recommendation = `储能接入后存在 ${worsened} 项安全指标恶化（改善 ${improved} 项），建议在实施前对配电网进行针对性改造或调整储能运行策略，并经电网公司接入审批。`;
     conclusionClass = 'worsened';
   }
 
@@ -955,7 +993,7 @@ function buildProjectOverview(payload: ReportPayload): string {
     if (nodeInfoRows.length > 0) {
       loadSection = subSection('1.4 负荷特性分析',
         kvTable(nodeInfoRows) +
-        '<div class="warning-banner"><strong>负荷指标数据不完整：</strong>未能提取峰值/谷值/年均负荷等关键指标，部分经济分析可能受限。请确认已在资产配置页面上传并绑定正确的负荷数据文件，完成后重新建模与求解。</div>'
+        '<div class="note"><strong>负荷画像缺失说明：</strong>未能提取峰值/谷值/年均负荷等统计指标（可能原因：负荷数据覆盖不足或建模未完成）。<strong>这不影响本次基于求解结果的方案摘要</strong>——后续章节的目标接入点、设备配置、收益测算及电网影响分析均已基于求解器输出完成。如需完整的负荷特性分析，请确认已在资产配置页面上传完整的年负荷数据（≥8760 小时）并重新建模与求解。</div>'
       );
     } else {
       loadSection = subSection('1.4 负荷特性分析',
@@ -1433,42 +1471,30 @@ function buildSafetyGridImpact(payload: ReportPayload): string {
   let parts = '';
 
   // target area conclusion
-  const conclusion = ni.target_area_conclusion as Record<string, unknown> | null | undefined;
-  if (conclusion) {
-    // count improved vs worsened risks for nuanced conclusion
-    const risks = Array.isArray(ni.risk_classification) ? ni.risk_classification : [];
-    let improvedCount = 0;
-    let worsenedCount = 0;
-    for (const r of risks) {
-      const cls = String((r as Record<string, unknown>).classification ?? '');
-      if (cls === 'improved_by_storage' || cls === 'cleared_by_storage') improvedCount += (Number((r as Record<string, unknown>).total) || 0);
-      if (cls === 'worsened_by_storage' || cls === 'storage_induced') worsenedCount += (Number((r as Record<string, unknown>).total) || 0);
-    }
-    let conclusionTitle: string;
-    let conclusionText: string;
-    let conclusionClass: string;
-    if (worsenedCount === 0 && improvedCount > 0) {
-      conclusionTitle = '✓ 总体改善';
-      conclusionText = '储能接入后目标区域电网安全指标总体改善，未新增系统性风险。建议在项目实施前对关键节点进行现场复核。';
-      conclusionClass = 'improved';
-    } else if (improvedCount >= worsenedCount && worsenedCount > 0) {
-      conclusionTitle = '— 部分改善，存在局部风险';
-      conclusionText = `储能接入后部分指标改善（${improvedCount} 项），但存在 ${worsenedCount} 项局部风险需关注。建议在实施前对恶化项进行现场复核或配电网改造，并经电网公司接入审批。`;
-      conclusionClass = 'neutral';
-    } else if (worsenedCount > improvedCount) {
-      conclusionTitle = '⚠ 需重点关注';
-      conclusionText = `储能接入后存在 ${worsenedCount} 项安全指标恶化（改善 ${improvedCount} 项），建议在实施前对配电网进行针对性改造或调整储能运行策略。`;
-      conclusionClass = 'worsened';
-    } else {
-      const origStatus = String(conclusion.status ?? '');
-      conclusionTitle = origStatus === 'improved' ? '✓ 改善' : origStatus === 'worsened' ? '✗ 恶化' : '— 中性';
-      conclusionText = conclusion.conclusion ? String(conclusion.conclusion) : '暂无结论';
-      conclusionClass = origStatus;
-    }
-    parts += subSection('5.1 目标接入区域综合结论',
-      `<div class="conclusion-box ${conclusionClass}"><strong>${conclusionTitle}</strong> — ${esc(conclusionText)}</div>`
-    );
+  const { improved: improvedCount, worsened: worsenedCount } = countRiskItems(ni);
+  let conclusionTitle: string;
+  let conclusionText: string;
+  let conclusionClass: string;
+  if (worsenedCount === 0 && improvedCount > 0) {
+    conclusionTitle = '✓ 总体改善';
+    conclusionText = '储能接入后目标区域电网安全指标总体改善，未新增系统性风险。建议在项目实施前对关键节点进行现场复核。';
+    conclusionClass = 'improved';
+  } else if (improvedCount >= worsenedCount && worsenedCount > 0) {
+    conclusionTitle = '— 部分改善，存在局部风险';
+    conclusionText = `储能接入后部分指标改善（${improvedCount} 项），但存在 ${worsenedCount} 项局部风险需关注。建议在实施前对恶化项进行现场复核或配电网改造，并经电网公司接入审批。`;
+    conclusionClass = 'neutral';
+  } else if (worsenedCount > improvedCount) {
+    conclusionTitle = '⚠ 需重点关注';
+    conclusionText = `储能接入后存在 ${worsenedCount} 项安全指标恶化（改善 ${improvedCount} 项），建议在实施前对配电网进行针对性改造或调整储能运行策略。`;
+    conclusionClass = 'worsened';
+  } else {
+    conclusionTitle = '— 无显著影响';
+    conclusionText = '储能接入后未检测到显著的电网安全指标变化。';
+    conclusionClass = 'neutral';
   }
+  parts += subSection('5.1 目标接入区域综合结论',
+    `<div class="conclusion-box ${conclusionClass}"><strong>${conclusionTitle}</strong> — ${esc(conclusionText)}</div>`
+  );
 
   // risk classification
   const risks = Array.isArray(ni.risk_classification) ? ni.risk_classification : [];

@@ -188,18 +188,26 @@ class ReportDataService:
         ledger_items = ledger.get("items") if isinstance(ledger.get("items"), list) else []
         audit_summary = fin.get("audit_ledger_summary") if isinstance(fin.get("audit_ledger_summary"), dict) else {}
 
-        # cashflow – top 25 rows
+        # cashflow – top 25 rows, compute cumulative values from CSV
         cashflow_out = []
+        cum_undiscounted = 0.0
+        cum_discounted = 0.0
         for row in cashflow[:25]:
+            net_cf = _number(row.get("net_cashflow_yuan"))
+            disc_net = _number(row.get("discounted_net_cashflow_yuan"))
+            if net_cf is not None:
+                cum_undiscounted += net_cf
+            if disc_net is not None:
+                cum_discounted += disc_net
             cashflow_out.append(
                 {
                     "year": _number(row.get("year")),
-                    "revenue_yuan": _number(row.get("total_revenue_yuan")),
-                    "op_cost_yuan": _number(row.get("total_operating_cost_yuan")),
-                    "net_cashflow_yuan": _number(row.get("net_cashflow_yuan")),
-                    "cumulative_undiscounted_yuan": _number(row.get("cumulative_undiscounted_cashflow_yuan")),
-                    "discounted_net_yuan": _number(row.get("discounted_net_cashflow_yuan")),
-                    "cumulative_discounted_yuan": _number(row.get("cumulative_discounted_cashflow_yuan")),
+                    "revenue_yuan": _number(row.get("revenue_yuan")),
+                    "op_cost_yuan": _number(row.get("operating_cost_yuan")),
+                    "net_cashflow_yuan": net_cf,
+                    "cumulative_undiscounted_yuan": round(cum_undiscounted, 2),
+                    "discounted_net_yuan": disc_net,
+                    "cumulative_discounted_yuan": round(cum_discounted, 2),
                 }
             )
 
@@ -482,18 +490,38 @@ class ReportDataService:
             summary = self._solver_service.get_summary(project_id, task_id) if self._solver_service else {}
             if not isinstance(summary, dict):
                 summary = {}
-            best = summary.get("best_result_summary") if isinstance(summary.get("best_result_summary"), dict) else {}
+            best_raw = summary.get("best_result_summary") if isinstance(summary.get("best_result_summary"), dict) else {}
+            # normalize recommended to frontend-expected camelCase 万元 fields
+            best_npv_wan = _number(best_raw.get("npv_yuan"))
+            if best_npv_wan is not None:
+                best_npv_wan = round(best_npv_wan / 10000.0, 2)
+            best_investment_wan = _number(best_raw.get("initial_investment_yuan"))
+            if best_investment_wan is not None:
+                best_investment_wan = round(best_investment_wan / 10000.0, 2)
+            recommended = {
+                "ratedPowerKw": _number(best_raw.get("rated_power_kw")),
+                "ratedEnergyKwh": _number(best_raw.get("rated_energy_kwh")),
+                "durationH": _number(best_raw.get("duration_h")),
+                "npvWan": best_npv_wan,
+                "initialInvestmentWan": best_investment_wan,
+                "paybackYears": _number(best_raw.get("simple_payback_years")),
+                "irr": _number(best_raw.get("irr")),
+                "feasible": True,
+                "annualCycles": _number(best_raw.get("annual_equivalent_full_cycles")),
+            }
             charts = self._build_charts(project_id, task_id)
             pareto = charts.get("pareto") or []
             alternatives = []
-            for p in pareto[:5]:
+            for p in pareto[:6]:
                 if not isinstance(p, dict):
                     continue
-                if p.get("npvWan") == best.get("npv_yuan"):
+                p_npv = p.get("npvWan")
+                # deduplicate: skip if same NPV as recommended (both in 万元 now)
+                if p_npv is not None and best_npv_wan is not None and abs(float(p_npv) - best_npv_wan) < 0.01:
                     continue
                 alternatives.append(p)
             return {
-                "recommended": best,
+                "recommended": recommended,
                 "alternatives": alternatives[:4],
             }
         except Exception:
