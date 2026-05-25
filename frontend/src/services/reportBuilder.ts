@@ -697,6 +697,30 @@ function svgScatterChart(
   const toX = (v: number) => margin.left + ((v - xMin) / (xMax - xMin || 1)) * plotW;
   const toY = (v: number) => margin.top + plotH - ((v - yMin) / (yMax - yMin || 1)) * plotH;
 
+  // y-axis ticks and grid
+  const yTicks = 5;
+  const yStep = (yMax - yMin) / yTicks || 1;
+  const yAxis = Array.from({ length: yTicks + 1 }, (_, i) => {
+    const val = yMin + yStep * i;
+    const y = toY(val);
+    return `<line x1="${margin.left}" x2="${width - margin.right}" y1="${y.toFixed(1)}" y2="${y.toFixed(1)}" stroke="#e5e7eb" stroke-width="0.5" />
+      <text x="${margin.left - 8}" y="${(y + 4).toFixed(1)}" text-anchor="end" font-size="9" fill="#6b7280">${num(val, 0)}</text>`;
+  }).join('');
+
+  // x-axis ticks and grid
+  const xTicks = 5;
+  const xStep = (xMax - xMin) / xTicks || 1;
+  const xAxis = Array.from({ length: xTicks + 1 }, (_, i) => {
+    const val = xMin + xStep * i;
+    const x = toX(val);
+    return `<line x1="${x.toFixed(1)}" x2="${x.toFixed(1)}" y1="${margin.top}" y2="${margin.top + plotH}" stroke="#e5e7eb" stroke-width="0.5" />
+      <text x="${x.toFixed(1)}" y="${margin.top + plotH + 16}" text-anchor="middle" font-size="9" fill="#6b7280">${num(val, 0)}</text>`;
+  }).join('');
+
+  // axis lines
+  const axisLines = `<line x1="${margin.left}" x2="${margin.left}" y1="${margin.top}" y2="${margin.top + plotH}" stroke="#374151" stroke-width="1" />
+    <line x1="${margin.left}" x2="${margin.left + plotW}" y1="${margin.top + plotH}" y2="${margin.top + plotH}" stroke="#374151" stroke-width="1" />`;
+
   const dots = data.map(d => {
     const cx = toX(d.x);
     const cy = toY(d.y);
@@ -716,7 +740,7 @@ function svgScatterChart(
     <text x="${width - 86}" y="18" font-size="9" fill="#374151">不可行</text>`;
 
   return `<div class="chart-figure"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${width} ${height}" preserveAspectRatio="xMidYMid meet" class="report-chart" style="font-family:'PingFang SC','Microsoft YaHei',sans-serif;max-width:100%;">
-    ${yLabel}${xLabel}${dots}${legend}
+    ${yLabel}${xLabel}${yAxis}${xAxis}${axisLines}${dots}${legend}
   </svg></div>`;
 }
 
