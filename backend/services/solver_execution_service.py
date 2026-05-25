@@ -1350,6 +1350,28 @@ class SolverExecutionService:
             "overall_best_schemes": overall_best or [],
         }
 
+    def get_report_deliverables(self, project_id: str, task_id: Optional[str] = None) -> Dict[str, Any]:
+        roots = self._resolve_result_roots(project_id, task_id)
+        integrated_root = roots.get("integrated_optimization")
+        if not integrated_root:
+            return {}
+        summary = self.get_summary(project_id, task_id)
+        case_dir = self._select_case_dir(integrated_root, summary)
+        if case_dir is None:
+            return {}
+        return self._load_result_deliverables(case_dir)
+
+    def get_report_cashflow(self, project_id: str, task_id: Optional[str] = None) -> List[Dict[str, Any]]:
+        roots = self._resolve_result_roots(project_id, task_id)
+        integrated_root = roots.get("integrated_optimization")
+        if not integrated_root:
+            return []
+        summary = self.get_summary(project_id, task_id)
+        case_dir = self._select_case_dir(integrated_root, summary)
+        if case_dir is None:
+            return []
+        return self._read_csv_dicts(case_dir / "best_cashflow_table.csv")
+
     def get_project_summary(self, project_id: str, task_id: Optional[str] = None) -> Dict[str, Any]:
         return {"success": True, **self.get_summary(project_id, task_id)}
 
@@ -1479,6 +1501,87 @@ class SolverExecutionService:
             "source_files": source_files,
             "charts": charts,
             "diagnostics": self._build_result_diagnostics(case_dir, deliverables),
+        }
+
+    def get_report_charts(self, project_id: str, task_id: Optional[str] = None) -> Dict[str, Any]:
+        full = self.get_result_charts(project_id, task_id)
+        charts = full.get("charts", {})
+        if not isinstance(charts, dict):
+            charts = {}
+
+        pareto_raw = charts.get("pareto") or []
+        pareto_sorted = sorted(
+            [p for p in pareto_raw if isinstance(p, dict)],
+            key=lambda x: (x.get("npvWan") or 0),
+            reverse=True,
+        )
+
+        history_raw = charts.get("optimization_history") or []
+        history_summary = self._summarize_history(history_raw)
+
+        feasibility = charts.get("feasibility_diagnostics") or {}
+        if not isinstance(feasibility, dict):
+            feasibility = {}
+
+        nc = charts.get("network_constraints") or {}
+        if not isinstance(nc, dict):
+            nc = {}
+
+        return {
+            "success": full.get("success", True),
+            "project_id": full.get("project_id"),
+            "latest_task": full.get("latest_task"),
+            "selected_case": full.get("selected_case"),
+            "source_files": full.get("source_files"),
+            "charts": {
+                "monthly_revenue": charts.get("monthly_revenue"),
+                "representative_day": charts.get("representative_day"),
+                "cashflow": charts.get("cashflow"),
+                "capital_breakdown": charts.get("capital_breakdown"),
+                "annual_value_breakdown": charts.get("annual_value_breakdown"),
+                "financial_metrics": charts.get("financial_metrics"),
+                "pareto": pareto_sorted[:20],
+                "optimization_history": history_summary,
+                "network_constraints": {
+                    "monthly": nc.get("monthly", []),
+                    "summary": nc.get("summary", []),
+                },
+                "feasibility_diagnostics": {
+                    "summary": feasibility.get("summary"),
+                    "violations": feasibility.get("violations"),
+                    "candidate_status": feasibility.get("candidate_status"),
+                    "candidate_violations": (feasibility.get("candidate_violations") or [])[:5],
+                },
+            },
+        }
+
+    def _summarize_history(self, rows: List[Dict[str, Any]]) -> Dict[str, Any]:
+        if not rows:
+            return {"total_generations": 0}
+        valid = [r for r in rows if isinstance(r, dict)]
+        if not valid:
+            return {"total_generations": len(rows)}
+        best_row = max(valid, key=lambda r: r.get("bestNpvWan") or -1e9)
+        indices = [0, 1, 2, -3, -2, -1]
+        deduped = []
+        seen: set = set()
+        for i in indices:
+            idx = i if i >= 0 else len(valid) + i
+            if 0 <= idx < len(valid):
+                g = valid[idx].get("generation")
+                if g not in seen:
+                    seen.add(g)
+                    deduped.append(valid[idx])
+        best_gen = best_row.get("generation")
+        if best_gen not in seen:
+            deduped.append(best_row)
+        return {
+            "total_generations": len(valid),
+            "best_npv_wan": best_row.get("bestNpvWan"),
+            "best_generation": best_row.get("generation"),
+            "final_feasible_count": valid[-1].get("feasibleCount"),
+            "final_population_size": valid[-1].get("populationSize"),
+            "sampled_points": deduped,
         }
 
     def get_project_results(self, project_id: str, task_id: Optional[str] = None) -> Dict[str, Any]:

@@ -22,7 +22,7 @@ logger = get_logger(__name__)
 
 @dataclass(slots=True)
 class DayAheadSchedulerConfig:
-    preferred_solvers: tuple[str, ...] = ("ECOS", "SCS")
+    preferred_solvers: tuple[str, ...] = ("OSQP", "ECOS", "SCS")
     terminal_soc_penalty_yuan_per_unit_sq: float = 30000.0
     transformer_violation_penalty_yuan_per_kwh: float = 300.0
     throughput_penalty_yuan_per_kwh: float = 0.001
@@ -296,7 +296,9 @@ class DayAheadScheduler:
                 continue
             solver = getattr(cp, solver_name)
             solve_kwargs = {"warm_start": True, "verbose": False}
-            if solver_name == "ECOS":
+            if solver_name == "OSQP":
+                solve_kwargs.update({"max_iter": 50000, "eps_abs": 1e-3, "eps_rel": 1e-3, "polish": True, "adaptive_rho": True})
+            elif solver_name == "ECOS":
                 solve_kwargs.update({"max_iters": 8000, "abstol": 1e-7, "reltol": 1e-7, "feastol": 1e-7})
             elif solver_name == "SCS":
                 solve_kwargs.update({"max_iters": 50000, "eps": 5e-6, "acceleration_lookback": 20})

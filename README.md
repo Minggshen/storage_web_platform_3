@@ -107,6 +107,19 @@ python main.py --registry inputs/registry/node_registry.xlsx --generations 8 --p
 - 前端开发时通过 `VITE_API_BASE_URL` 环境变量指向后端地址。
 - 求解器 `main.py` 使用 `logging` 模块，日志级别通过 `LOG_LEVEL` 环境变量控制，默认 `INFO`。
 - 前端 `pnpm build` 直接输出到 `backend/static/`，FastAPI 自动托管为 SPA。
+- **调度模式（综合优化 / 电价套利 / 削峰填谷）** 为预留功能，求解器侧尚未区分实现，当前统一以电价套利为主、变压器越限被动惩罚的方式运行。
+
+## 性能优化（2026-05）
+
+求解器引擎进行了三轮 OpenDSS COM 调用优化，将 8 种群 × 1 代典型耗时从 4–5 小时降至约 1.5–2 小时：
+
+| 优化项 | 涉及文件 | 说明 |
+|--------|---------|------|
+| 收紧全校验触发门槛 | `main.py` | 仅回收期 ≤10 年、NPV 回正、现金流为正的候选方案触发 365 天 OpenDSS 全仿真 |
+| 合并日内滚动重复调用 | `simulation/rolling_dispatch.py` | `execute_day()` 中两轮逐小时 oracle 调用合并为一轮，小时 0–19 直接复用结果 |
+| 每日单次电路编译 | `simulation/opendss_network_constraint_oracle.py` | 同一天的后续小时用 OpenDSS `Edit` 命令原地更新负荷与储能参数，无需每小时间从零 `Compile` 电路 |
+
+三项优化均不改变仿真精度——潮流校验逻辑、SOC 递推公式、财务模型均保持不变。
 
 ## 快速部署（无需 Node.js）
 

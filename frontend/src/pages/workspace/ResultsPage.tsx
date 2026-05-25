@@ -22,6 +22,7 @@ import {
   ZAxis,
 } from 'recharts';
 import {
+  fetchReportData,
   fetchResultCharts,
   fetchResultFilePreview,
   fetchLatestSolverTask,
@@ -30,6 +31,7 @@ import {
   fetchSolverSummary,
   getResultFileDownloadUrl,
 } from '../../services/solver';
+import { buildProposalHtml } from '../../services/reportBuilder';
 import type {
   EngineDiagnosticsPayload,
   EngineDiagnosticsScenario,
@@ -98,13 +100,24 @@ function formatTaskTime(value: unknown): string {
   return String(value);
 }
 
+function taskStatusText(status: unknown): string {
+  const text = String(status ?? '').trim().toLowerCase();
+  if (text === 'completed') return '已完成';
+  if (text === 'running') return '运行中';
+  if (text === 'failed') return '失败';
+  if (text === 'cancelled' || text === 'cancelling' || text === 'canceling') return '已取消';
+  if (text === 'queued') return '排队中';
+  return text || '--';
+}
+
 function taskOptionLabel(task: SolverTask): string {
   const taskId = task.task_id || '--';
+  const status = taskStatusText(task.status);
   const time = formatTaskTime(task.completed_at ?? task.started_at);
   const health = task.health_status ? ` ｜ ${healthStatusText(task.health_status)}` : '';
   const issueCount = toFiniteNumber(task.health_issue_count);
   const issueText = issueCount !== null && issueCount > 0 ? ` ${issueCount}项` : '';
-  return `${taskId} ｜ ${time}${health}${issueText}`;
+  return `${taskId} ｜ ${status} ｜ ${time}${health}${issueText}`;
 }
 
 function puText(value: unknown): string {
@@ -276,152 +289,6 @@ function feasibilityStatusText(summary: GenericRow): string {
   return '状态未知';
 }
 
-function htmlEscape(value: unknown): string {
-  return String(value ?? '')
-    .replaceAll('&', '&amp;')
-    .replaceAll('<', '&lt;')
-    .replaceAll('>', '&gt;')
-    .replaceAll('"', '&quot;')
-    .replaceAll("'", '&#39;');
-}
-
-function reportValue(value: unknown, suffix = ''): string {
-  return htmlEscape(metricText(value, suffix));
-}
-
-function reportTable(title: string, rows: Array<Record<string, unknown>>, maxRows = 24): string {
-  if (!rows.length) return `<section><h2>${htmlEscape(title)}</h2><p class="muted">暂无数据</p></section>`;
-  const columns = Array.from(new Set(rows.flatMap((row) => Object.keys(row)))).slice(0, 12);
-  const body = rows.slice(0, maxRows).map((row) => (
-    `<tr>${columns.map((column) => `<td>${htmlEscape(row[column])}</td>`).join('')}</tr>`
-  )).join('');
-  return `
-    <section>
-      <h2>${htmlEscape(title)}</h2>
-      <table>
-        <thead><tr>${columns.map((column) => `<th>${htmlEscape(column)}</th>`).join('')}</tr></thead>
-        <tbody>${body}</tbody>
-      </table>
-      ${rows.length > maxRows ? `<p class="muted">仅展示前 ${maxRows} 行，共 ${rows.length} 行。</p>` : ''}
-    </section>
-  `;
-}
-
-function reportBars(title: string, rows: ResultChartPoint[], labelKey: string, valueKey: string, unit = ''): string {
-  if (!rows.length) return `<section><h2>${htmlEscape(title)}</h2><p class="muted">暂无数据</p></section>`;
-  const maxAbs = Math.max(...rows.map((row) => Math.abs(toFiniteNumber(row[valueKey]) ?? 0)), 1);
-  const items = rows.map((row) => {
-    const value = toFiniteNumber(row[valueKey]) ?? 0;
-    const width = Math.max(2, Math.abs(value) / maxAbs * 100);
-    const color = value >= 0 ? COLORS.base : COLORS.accent4;
-    return `
-      <div class="bar-row">
-        <div class="bar-label">${htmlEscape(row[labelKey])}</div>
-        <div class="bar-track"><div class="bar" style="width:${width.toFixed(2)}%;background:${color};"></div></div>
-        <div class="bar-value">${reportValue(value, unit)}</div>
-      </div>
-    `;
-  }).join('');
-  return `<section><h2>${htmlEscape(title)}</h2>${items}</section>`;
-}
-
-function buildReportHtml(input: {
-  projectId: string;
-  selectedCase: string | null;
-  latestTask: ResultChartsResponse['latest_task'] | null;
-  warnings: string[];
-  primary: GenericRow | null;
-  feasibilitySummary: GenericRow;
-  feasibilityViolations: ResultChartPoint[];
-  monthlyRevenue: ResultChartPoint[];
-  financialMetrics: ResultChartPoint[];
-  cashflow: ResultChartPoint[];
-  pareto: ResultChartPoint[];
-  history: ResultChartPoint[];
-  storageImpact: ResultChartPoint[];
-  networkConstraintDaily: ResultChartPoint[];
-  lineCapacity: ResultChartPoint[];
-  networkTopology: NetworkTopologyChart | null;
-  deliverables: GenericRow;
-  summaryRows: Record<string, unknown>[];
-}): string {
-  const generatedAt = new Date().toLocaleString('zh-CN');
-  const configuration = toRecord(input.deliverables.configuration);
-  const backgroundPolicy = String(configuration?.background_load_policy ?? '').trim();
-  const keyMetrics = [
-    ['推荐策略', pickString(input.primary, 'strategy_name', 'strategy_id')],
-    ['配储目标', metricText(configuration?.target_id ?? input.selectedCase)],
-    ['接入母线', metricText(configuration?.target_bus)],
-    ['推荐功率', metricText(pickNumber(input.primary, 'power_kw', 'rated_power_kw'), ' kW')],
-    ['推荐容量', metricText(pickNumber(input.primary, 'energy_kwh', 'rated_energy_kwh'), ' kWh')],
-    ['NPV', metricText(normalizeNpvWan(input.primary), ' 万元')],
-    ['回收期', metricText(pickNumber(input.primary, 'payback_years', 'simple_payback_years'), ' 年')],
-    ['IRR', metricText(normalizeIrrPercent(input.primary), '%')],
-    ['年等效循环', metricText(normalizeCycles(input.primary), ' 次')],
-  ];
-  const keyMetricHtml = keyMetrics.map(([label, value]) => (
-    `<div class="metric"><span>${htmlEscape(label)}</span><strong>${htmlEscape(value)}</strong></div>`
-  )).join('');
-  const warnings = input.warnings.length
-    ? `<section class="warning"><h2>结果提示</h2>${input.warnings.map((warning) => `<p>${htmlEscape(warning)}</p>`).join('')}</section>`
-    : '';
-  const targetPolicySection = backgroundPolicy
-    ? `<section><h2>单目标配储流程</h2><p>${htmlEscape(backgroundPolicy)}</p></section>`
-    : '';
-  const topologySummary = input.networkTopology?.summary ?? [];
-
-  return `<!doctype html>
-<html lang="zh-CN">
-<head>
-  <meta charset="utf-8" />
-  <title>储能优化结果分析报告</title>
-  <style>
-    body{font-family:Inter,Arial,"Microsoft YaHei",sans-serif;margin:0;background:#f8fafc;color:#111827;}
-    main{max-width:1180px;margin:0 auto;padding:28px;}
-    section{background:#fff;border:1px solid #e5e7eb;border-radius:8px;padding:18px;margin:16px 0;}
-    h1{margin:0 0 8px;font-size:28px;} h2{margin:0 0 14px;font-size:20px;}
-    .muted{color:#6b7280;} .metrics{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;}
-    .metric{border:1px solid #e5e7eb;border-radius:8px;padding:12px;background:#fff;}
-    .metric span{display:block;color:#6b7280;font-size:13px;margin-bottom:6px;} .metric strong{font-size:16px;}
-    .warning{border-color:#fde68a;background:#fffbeb;color:#92400e;}
-    table{border-collapse:collapse;width:100%;font-size:13px;} th,td{border-bottom:1px solid #e5e7eb;text-align:left;padding:8px;vertical-align:top;}
-    th{background:#f9fafb;} .bar-row{display:grid;grid-template-columns:130px 1fr 120px;gap:10px;align-items:center;margin:9px 0;}
-    .bar-track{height:12px;background:#eef2f7;border-radius:6px;overflow:hidden;} .bar{height:12px;border-radius:6px;}
-    .bar-value{text-align:right;font-variant-numeric:tabular-nums;}
-  </style>
-</head>
-<body>
-  <main>
-    <h1>储能优化结果分析报告</h1>
-    <p class="muted">项目：${htmlEscape(input.projectId)}；节点：${htmlEscape(input.selectedCase)}；任务：${htmlEscape(input.latestTask?.task_id)}；导出时间：${htmlEscape(generatedAt)}</p>
-    ${warnings}
-    <section><h2>推荐方案摘要</h2><div class="metrics">${keyMetricHtml}</div></section>
-    ${targetPolicySection}
-    <section>
-      <h2>可行性诊断</h2>
-      <div class="metrics">
-        <div class="metric"><span>推荐方案状态</span><strong>${htmlEscape(feasibilityStatusText(input.feasibilitySummary))}</strong></div>
-        <div class="metric"><span>可行解数量</span><strong>${reportValue(input.feasibilitySummary.feasibleCount)} / ${reportValue(input.feasibilitySummary.populationSize)}</strong></div>
-        <div class="metric"><span>总违反量</span><strong>${reportValue(input.feasibilitySummary.bestTotalViolation)}</strong></div>
-        <div class="metric"><span>循环次数超限</span><strong>${reportValue(input.feasibilitySummary.bestCycleViolation, ' 次')}</strong></div>
-      </div>
-      <p class="muted">${htmlEscape(input.feasibilitySummary.message)}</p>
-    </section>
-    ${reportBars('约束违反项', input.feasibilityViolations, 'name', 'value')}
-    ${reportBars('月度净现金流', input.monthlyRevenue, 'month', 'netCashflowWan', ' 万元')}
-    ${reportBars('全寿命期累计折现现金流', input.cashflow, 'year', 'cumulativeDiscountedWan', ' 万元')}
-    ${reportTable('配电网承载能力摘要', topologySummary)}
-    ${reportTable('代表日储能接入影响', input.storageImpact)}
-    ${reportTable('网侧约束日趋势', input.networkConstraintDaily)}
-    ${reportTable('线路容量配置', input.lineCapacity)}
-    ${reportTable('关键财务与运行指标', input.financialMetrics)}
-    ${reportTable('候选方案明细', input.pareto)}
-    ${reportTable('优化收敛记录', input.history)}
-    ${reportTable('summary_rows', input.summaryRows)}
-  </main>
-</body>
-</html>`;
-}
 
 export default function ResultsPage() {
   const { projectId = '' } = useParams();
@@ -433,6 +300,7 @@ export default function ResultsPage() {
   const [loading, setLoading] = useState(false);
   const [previewLoading, setPreviewLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [exporting, setExporting] = useState(false);
   const [serviceLineFilter, setServiceLineFilter] = useState<'all' | 'large' | 'small'>('all');
   const [tasks, setTasks] = useState<SolverTask[]>([]);
   const [selectedTaskId, setSelectedTaskId] = useState('');
@@ -535,6 +403,7 @@ export default function ResultsPage() {
     setPreview(null);
     setLastUpdatedAt(null);
     loadTaskOptions();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [projectId]);
 
   useEffect(() => {
@@ -553,6 +422,7 @@ export default function ResultsPage() {
       }
     }, 8000);
     return () => window.clearInterval(intervalId);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [projectId, selectedTaskId, manualTaskSelection]);
 
   const summaryRows = summary?.summary_rows ?? [];
@@ -614,36 +484,34 @@ export default function ResultsPage() {
     [files],
   );
 
-  function handleExportReport() {
-    const html = buildReportHtml({
-      projectId,
-      selectedCase: charts?.selected_case ?? null,
-      latestTask: charts?.latest_task ?? null,
-      warnings: charts?.warnings ?? [],
-      primary,
-      feasibilitySummary,
-      feasibilityViolations,
-      monthlyRevenue,
-      financialMetrics,
-      cashflow,
-      pareto,
-      history,
-      storageImpact,
-      networkConstraintDaily,
-      lineCapacity,
-      networkTopology: networkTopology ?? null,
-      deliverables,
-      summaryRows,
-    });
-    const blob = new Blob([html], { type: 'text/html;charset=utf-8' });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = `storage-result-report-${projectId || 'project'}-${new Date().toISOString().slice(0, 10)}.html`;
-    document.body.appendChild(link);
-    link.click();
-    link.remove();
-    URL.revokeObjectURL(url);
+  function sanitizeFilename(name: string): string {
+    const cleaned = name.replace(/[<>:"/\\|?*]/g, '_');
+    /* eslint-disable-next-line no-control-regex */
+    return cleaned.replace(/[\x00-\x1f]/g, '').trim().slice(0, 100) || '未命名项目';
+  }
+
+  async function handleExportReport() {
+    if (exporting) return;
+    setExporting(true);
+    setError(null);
+    try {
+      const payload = await fetchReportData(projectId, selectedTaskId || undefined);
+      const html = buildProposalHtml(payload);
+      const blob = new Blob([html], { type: 'text/html;charset=utf-8' });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      const rawName = payload.project_meta?.project_name || projectId;
+      link.download = `储能配置方案_${sanitizeFilename(rawName)}_${new Date().toISOString().slice(0, 10)}.html`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setExporting(false);
+    }
   }
 
   return (
@@ -674,8 +542,16 @@ export default function ResultsPage() {
           <span style={{ color: '#6b7280', fontSize: 11, marginLeft: 'auto' }}>
             {lastUpdatedAt ? `自动刷新：${lastUpdatedAt}` : ''}
           </span>
-          <button onClick={handleExportReport} disabled={!summary && !charts} style={btnStyle}>
-            导出分析报告
+          <button
+            onClick={handleExportReport}
+            style={{
+              ...btnStyle,
+              opacity: exporting ? 0.6 : 1,
+              cursor: exporting ? 'not-allowed' : 'pointer',
+            }}
+            disabled={exporting}
+          >
+            {exporting ? '正在生成报告...' : '导出储能配置方案'}
           </button>
         </div>
 
@@ -1271,10 +1147,14 @@ function YearlySocChart(props: { data: ResultChartPoint[] }) {
   const [endIndex, setEndIndex] = useState(Math.max(0, dataLen - 1));
   const containerRef = useRef<HTMLDivElement>(null);
   const rangeRef = useRef({ start: startIndex, end: endIndex });
-  rangeRef.current = { start: startIndex, end: endIndex };
+
+  useEffect(() => {
+    rangeRef.current = { start: startIndex, end: endIndex };
+  }, [startIndex, endIndex]);
 
   useEffect(() => {
     const max = Math.max(0, dataLen - 1);
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- intentional reset on data change
     setStartIndex(0);
     setEndIndex(max);
   }, [dataLen]);
@@ -1625,7 +1505,6 @@ function NetworkTopologyPanel(props: { data: NetworkTopologyChart | null }) {
     element.addEventListener('wheel', onWheel, { passive: false });
     return () => element.removeEventListener('wheel', onWheel);
   });
-  if (!nodes.length) return <EmptyChart />;
 
   const nodeById = new Map(nodes.map((node) => [String(node.id ?? ''), node]));
   const xs = nodes.map((node) => toFiniteNumber(node.x) ?? 0);
@@ -1636,7 +1515,12 @@ function NetworkTopologyPanel(props: { data: NetworkTopologyChart | null }) {
   const maxY = Math.max(...ys, 520) + 120;
   const baseWidth = Math.max(600, maxX - minX);
   const baseHeight = Math.max(420, maxY - minY);
-  topologyStateRef.current = { zoom, pan, minX, minY, baseWidth, baseHeight };
+  useEffect(() => {
+    topologyStateRef.current = { zoom, pan, minX, minY, baseWidth, baseHeight };
+  }, [zoom, pan, minX, minY, baseWidth, baseHeight]);
+
+  if (!nodes.length) return <EmptyChart />;
+
   const zoomedWidth = baseWidth / zoom;
   const zoomedHeight = baseHeight / zoom;
   const viewBox = `${minX + pan.x} ${minY + pan.y} ${zoomedWidth} ${zoomedHeight}`;

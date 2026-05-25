@@ -227,7 +227,7 @@ def _build_network_oracle(args: argparse.Namespace):
 def _build_evaluator(args: argparse.Namespace) -> StorageFitnessEvaluator:
     scheduler = DayAheadScheduler(
         config=DayAheadSchedulerConfig(
-            preferred_solvers=("ECOS", "SCS"),
+            preferred_solvers=("OSQP", "ECOS", "SCS"),
             allow_fallback_rule=True,
             validate_candidate_before_solve=True,
             enable_plan_cache=True,

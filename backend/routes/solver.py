@@ -8,10 +8,18 @@ from pydantic import BaseModel, Field
 
 from services.solver_execution_service import SolverExecutionService
 from services.project_model_service import ProjectModelService
+from services.report_data_service import ReportDataService
+from services.build_inference_service import BuildInferenceService
 
 router = APIRouter(prefix="/api/solver", tags=["project-solver"])
 project_service = ProjectModelService()
 solver_service = SolverExecutionService(project_service=project_service)
+inference_service = BuildInferenceService()
+report_data_service = ReportDataService(
+    project_service=project_service,
+    solver_service=solver_service,
+    inference_service=inference_service,
+)
 
 
 class SolverConfigureRequest(BaseModel):
@@ -127,6 +135,17 @@ def get_latest_task(project_id: str) -> dict[str, Any]:
 def list_solver_tasks(project_id: str) -> dict[str, Any]:
     try:
         return {"success": True, **solver_service.list_tasks(project_id)}
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/project/{project_id}/report-data")
+def get_report_data(project_id: str, task_id: str | None = Query(default=None)) -> dict[str, Any]:
+    try:
+        payload = report_data_service.assemble(project_id, task_id=task_id)
+        return {"success": True, "project_id": project_id, "payload": payload}
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except Exception as exc:

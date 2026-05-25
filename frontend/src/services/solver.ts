@@ -1,5 +1,6 @@
 import { http, API_BASE } from './http';
 import type {
+  ReportPayload,
   ResultChartsResponse,
   ResultFilePreviewResponse,
   ResultFilesResponse,
@@ -56,6 +57,13 @@ function taskQuery(taskId?: string) {
 
 export async function fetchSolverSummary(projectId: string, taskId?: string) {
   return http<SolverSummaryResponse>(`/api/solver/project/${projectId}/summary${taskQuery(taskId)}`);
+}
+
+export async function fetchReportData(projectId: string, taskId?: string): Promise<ReportPayload> {
+  const data = await http<{ success: boolean; project_id: string; payload: ReportPayload }>(
+    `/api/solver/project/${projectId}/report-data${taskQuery(taskId)}`,
+  );
+  return data.payload;
 }
 
 export async function fetchResultCharts(projectId: string, taskId?: string) {

@@ -160,10 +160,12 @@ function AssetsPage() {
 
   useEffect(() => {
     loadDashboard();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [projectId]);
 
   useEffect(() => {
     if (projectId) refreshUploadedNodes();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [projectId, loadNodes]);
 
   useEffect(() => {
@@ -212,7 +214,7 @@ function AssetsPage() {
       const data = await listUploadedNodes(projectId);
       setUploadedNodeIds(data.uploaded_nodes);
       setProcessedNodeIds(data.processed_nodes);
-    } catch {}
+    } catch { /* network or parse failure, surfaced via error state */ }
   }
 
   async function onUploadRawData() {

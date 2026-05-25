@@ -77,6 +77,7 @@ export default function BuildPage() {
 
   useEffect(() => {
     void loadAll();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [projectId]);
 
   const workspace = manifest?.solver_workspace;

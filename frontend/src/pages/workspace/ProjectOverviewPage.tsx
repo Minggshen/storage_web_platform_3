@@ -55,6 +55,7 @@ export default function ProjectOverviewPage() {
 
   useEffect(() => {
     loadDashboard();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [projectId]);
 
   const latestSummary = dashboard?.latest_summary;

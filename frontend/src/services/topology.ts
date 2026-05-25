@@ -6,6 +6,7 @@ export type ProjectTopology = {
   economic_parameters?: Record<string, unknown>;
 };
 
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 function normalizeTopology(data: any): ProjectTopology {
   if (data?.project?.network) {
     return {
@@ -44,6 +45,7 @@ function normalizeTopology(data: any): ProjectTopology {
 }
 
 export async function fetchProjectTopology(projectId: string): Promise<ProjectTopology> {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const data = await http<any>(`/api/topology/project/${projectId}`);
   return normalizeTopology(data);
 }

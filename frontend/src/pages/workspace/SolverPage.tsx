@@ -143,6 +143,12 @@ export default function SolverPage() {
         safety_economy_tradeoff: safetyTradeoff / 100,
       });
       await refreshTask(true);
+      // 重新执行后恢复轮询（此前可能因上一任务终态已停止）
+      if (pollingRef.current === null) {
+        pollingRef.current = window.setInterval(() => {
+          refreshTask(true);
+        }, 3000);
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -166,6 +172,20 @@ export default function SolverPage() {
       setCancelling(false);
     }
   }
+
+  const stdoutText = useMemo(() => logsTask?.stdout_text ?? '', [logsTask]);
+  const stderrText = useMemo(() => logsTask?.stderr_text ?? '', [logsTask]);
+  const rawProgress = useMemo(() => {
+    const hinted = normalizeProgressHint(logsTask?.progress_hint ?? latestTask?.progress_hint);
+    if (hinted) return hinted;
+    return estimateSolverProgress(latestTask, stdoutText, Math.max(Number(generations) || 0, 0));
+  }, [latestTask, logsTask?.progress_hint, stdoutText, generations]);
+  const mustChooseTarget = targetOptions.length > 1 && !targetId;
+  const hasNoTargetOptions = targetOptions.length === 0;
+  const pollingRef = useRef<number | null>(null);
+  const taskStatus = String(latestTask?.status ?? '').toLowerCase();
+  const taskIsActive = taskStatus === 'running' || taskStatus === 'cancelling' || taskStatus === 'canceling';
+  const taskIsTerminal = taskStatus === 'completed' || taskStatus === 'failed' || taskStatus === 'cancelled' || taskStatus === 'canceled';
 
   // 任务结束后自动停止轮询
   useEffect(() => {
@@ -193,21 +213,8 @@ export default function SolverPage() {
         pollingRef.current = null;
       }
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [projectId]);
-
-  const stdoutText = useMemo(() => logsTask?.stdout_text ?? '', [logsTask]);
-  const stderrText = useMemo(() => logsTask?.stderr_text ?? '', [logsTask]);
-  const rawProgress = useMemo(() => {
-    const hinted = normalizeProgressHint(logsTask?.progress_hint ?? latestTask?.progress_hint);
-    if (hinted) return hinted;
-    return estimateSolverProgress(latestTask, stdoutText, Math.max(Number(generations) || 0, 0));
-  }, [latestTask, logsTask?.progress_hint, stdoutText, generations]);
-  const mustChooseTarget = targetOptions.length > 1 && !targetId;
-  const hasNoTargetOptions = targetOptions.length === 0;
-  const pollingRef = useRef<number | null>(null);
-  const taskStatus = String(latestTask?.status ?? '').toLowerCase();
-  const taskIsActive = taskStatus === 'running' || taskStatus === 'cancelling' || taskStatus === 'canceling';
-  const taskIsTerminal = taskStatus === 'completed' || taskStatus === 'failed';
   const stopDisabled = !activeTaskId || !taskIsActive || cancelling;
   const latestRunRequest = toRecord(logsTask?.metadata?.run_request ?? latestTask?.metadata?.run_request);
   const latestTaskTargetId = String(latestRunRequest?.target_id ?? '').trim();

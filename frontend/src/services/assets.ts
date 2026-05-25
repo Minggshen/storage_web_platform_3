@@ -89,7 +89,7 @@ export async function uploadRuntimeFile(
 }
 
 export async function listProjectAssets(projectId: string): Promise<ProjectAsset[]> {
-  const data = await http<any>(`/api/assets/project/${projectId}`);
+  const data = await http<{ assets?: ProjectAsset[] }>(`/api/assets/project/${projectId}`);
   return Array.isArray(data?.assets) ? (data.assets as ProjectAsset[]) : [];
 }
 
@@ -149,7 +149,7 @@ export function processRuntime(
       buffer = lines.pop() || '';
       for (const line of lines) {
         if (line.startsWith('data: ')) {
-          try { onEvent(JSON.parse(line.slice(6))); } catch {}
+          try { onEvent(JSON.parse(line.slice(6))); } catch { /* malformed SSE line, skip */ }
         }
       }
     }

@@ -251,3 +251,332 @@ export type ResultFilePreviewResponse = {
   content?: string;
   encoding?: string | null;
 };
+
+// ---- Report Payload types ----
+
+export type ReportTaskMeta = {
+  task_id?: string | null;
+  status?: string | null;
+  started_at?: string | number | null;
+  completed_at?: string | number | null;
+  selected_case?: string | null;
+};
+
+export type ReportSourceFile = {
+  relative_path: string;
+  group?: string | null;
+};
+
+export type ReportAssumptions = {
+  tariff_year?: number | null;
+  discount_rate?: number | null;
+  project_life_years?: number | null;
+  soc_min?: number | null;
+  soc_max?: number | null;
+  opendss_enabled?: boolean | null;
+  opendss_coverage_hours?: number | null;
+  initial_soc?: number | null;
+  terminal_soc_mode?: string | null;
+  safety_economy_tradeoff?: number | null;
+};
+
+export type ReportLoadProfile = {
+  peak_kw?: number | null;
+  valley_kw?: number | null;
+  annual_mean_kw?: number | null;
+  mean_daily_energy_kwh?: number | null;
+  load_factor?: number | null;
+  target_node_name?: string | null;
+  target_node_id?: string | null;
+};
+
+export type ReportMonthlyRevenuePoint = {
+  month?: number;
+  arbitrageRevenueWan?: number | null;
+  demandSavingWan?: number | null;
+  serviceNetRevenueWan?: number | null;
+  capacityRevenueWan?: number | null;
+  lossReductionRevenueWan?: number | null;
+  penaltyCostWan?: number | null;
+  netCashflowWan?: number | null;
+};
+
+export type ReportRepresentativeDayChart = {
+  dayIndex?: number | null;
+  rows?: Record<string, unknown>[];
+};
+
+export type ReportCashflowChartPoint = {
+  year?: number;
+  revenueWan?: number | null;
+  operatingRevenueWan?: number | null;
+  arbitrageRevenueWan?: number | null;
+  demandSavingWan?: number | null;
+  auxiliaryServiceRevenueWan?: number | null;
+  capacityRevenueWan?: number | null;
+  lossReductionRevenueWan?: number | null;
+  operatingCostWan?: number | null;
+  degradationCostWan?: number | null;
+  omCostWan?: number | null;
+  replacementCostWan?: number | null;
+  salvageValueWan?: number | null;
+  netCashflowWan?: number | null;
+  discountedNetCashflowWan?: number | null;
+  cumulativeDiscountedWan?: number | null;
+};
+
+export type ReportCapitalBreakdownItem = {
+  name: string;
+  valueWan?: number | null;
+};
+
+export type ReportAnnualValueBreakdownItem = {
+  name: string;
+  valueWan?: number | null;
+};
+
+export type ReportFinancialMetricItem = {
+  name: string;
+  value?: number | null;
+  unit?: string | null;
+};
+
+export type ReportParetoCandidate = {
+  index?: number;
+  strategyId?: string | null;
+  ratedPowerKw?: number | null;
+  ratedEnergyKwh?: number | null;
+  durationH?: number | null;
+  npvWan?: number | null;
+  initialInvestmentWan?: number | null;
+  paybackYears?: number | null;
+  annualCycles?: number | null;
+  feasible?: boolean | null;
+  totalViolation?: number | null;
+};
+
+export type ReportOptimizationHistoryChart = {
+  total_generations?: number;
+  best_npv_wan?: number | null;
+  best_generation?: number | null;
+  final_feasible_count?: number | null;
+  final_population_size?: number | null;
+  sampled_points?: Record<string, unknown>[];
+};
+
+export type ReportNetworkConstraintsChart = {
+  monthly?: Record<string, unknown>[];
+  summary?: Record<string, unknown>[];
+};
+
+export type ReportFeasibilityDiagnosticsChart = {
+  summary?: Record<string, unknown> | null;
+  violations?: Record<string, unknown>[];
+  candidate_status?: Record<string, unknown>[];
+  candidate_violations?: Record<string, unknown>[];
+};
+
+export type ReportCharts = {
+  monthly_revenue?: ReportMonthlyRevenuePoint[];
+  representative_day?: ReportRepresentativeDayChart | null;
+  cashflow?: ReportCashflowChartPoint[];
+  capital_breakdown?: ReportCapitalBreakdownItem[];
+  annual_value_breakdown?: ReportAnnualValueBreakdownItem[];
+  financial_metrics?: ReportFinancialMetricItem[];
+  pareto?: ReportParetoCandidate[];
+  optimization_history?: ReportOptimizationHistoryChart | null;
+  network_constraints?: ReportNetworkConstraintsChart | null;
+  feasibility_diagnostics?: ReportFeasibilityDiagnosticsChart | null;
+};
+
+export type ReportCandidateComparison = {
+  recommended?: Record<string, unknown> | null;
+  alternatives?: Record<string, unknown>[];
+};
+
+export type ReportDataQuality = {
+  missing_data_flags?: string[];
+  degraded_calculations?: string[];
+  opendss_enabled?: boolean;
+  trace_completeness?: string | null;
+};
+
+export type ReportProjectMeta = {
+  project_name: string;
+  description?: string | null;
+  created_at?: string | null;
+  version?: string;
+  node_count?: number;
+  edge_count?: number;
+  load_node_count?: number;
+  has_tariff?: boolean;
+  tariff_year?: number | null;
+};
+
+export type ReportDeviceSpec = {
+  vendor?: string | null;
+  model?: string | null;
+  series_name?: string | null;
+  device_family?: string | null;
+  battery_chemistry?: string | null;
+  rated_power_kw?: number | null;
+  rated_energy_kwh?: number | null;
+  usable_energy_kwh_at_fat?: number | null;
+  duration_hour?: number | null;
+  dc_voltage_range_v?: string | null;
+  ac_grid_voltage_v?: string | null;
+  cooling_type?: string | null;
+  fire_detection?: string | null;
+  fire_suppression?: string | null;
+  safety_level?: string | null;
+  cycle_life?: number | null;
+  soc_min?: number | null;
+  soc_max?: number | null;
+  efficiency_pct?: number | null;
+  ip_system?: string | null;
+  corrosion_grade?: string | null;
+  install_mode?: string | null;
+  dimension_w_mm?: number | null;
+  dimension_d_mm?: number | null;
+  dimension_h_mm?: number | null;
+  weight_kg?: number | null;
+  price_yuan_per_wh?: number | null;
+  energy_unit_price_yuan_per_kwh?: number | null;
+  power_related_capex_yuan_per_kw?: number | null;
+  communication_protocol?: string | null;
+  supports_black_start?: boolean | null;
+  supports_offgrid_microgrid?: boolean | null;
+};
+
+export type ReportConfiguration = {
+  target_id?: string | null;
+  target_bus?: string | null;
+  strategy_id?: string | null;
+  strategy_name?: string | null;
+  rated_power_kw?: number | null;
+  rated_energy_kwh?: number | null;
+  duration_h?: number | null;
+  capacity_factor?: number | null;
+  background_load_policy?: string | null;
+};
+
+export type ReportOperation = {
+  annual_equivalent_full_cycles?: number | null;
+  annual_battery_throughput_kwh?: number | null;
+  capacity_factor?: number | null;
+};
+
+export type ReportRevenueBreakdown = {
+  arbitrage?: number | null;
+  demand_saving?: number | null;
+  capacity?: number | null;
+  loss_reduction?: number | null;
+  auxiliary_service?: number | null;
+};
+
+export type ReportCostBreakdown = {
+  degradation?: number | null;
+  o_and_m?: number | null;
+  replacement?: number | null;
+  transformer_penalty?: number | null;
+  voltage_penalty?: number | null;
+};
+
+export type ReportFinancialCore = {
+  npv_yuan?: number | null;
+  irr?: number | null;
+  simple_payback_years?: number | null;
+  discounted_payback_years?: number | null;
+  initial_investment_yuan?: number | null;
+  annualized_net_cashflow_yuan?: number | null;
+  lcoe_yuan_per_kwh?: number | null;
+  roi_pct?: number | null;
+  revenue_breakdown?: ReportRevenueBreakdown | null;
+  cost_breakdown?: ReportCostBreakdown | null;
+};
+
+export type ReportAuditLedgerItem = {
+  name: string;
+  category: string;
+  amount_yuan?: number | null;
+  quantity?: number | null;
+  unit_price?: number | null;
+  anomaly?: string | null;
+};
+
+export type ReportAuditAnomaly = {
+  item: string;
+  field: string;
+  level: string;
+  message: string;
+};
+
+export type ReportCashflowRow = {
+  year?: number | null;
+  revenue_yuan?: number | null;
+  op_cost_yuan?: number | null;
+  net_cashflow_yuan?: number | null;
+  cumulative_undiscounted_yuan?: number | null;
+  discounted_net_yuan?: number | null;
+  cumulative_discounted_yuan?: number | null;
+};
+
+export type ReportFinancial = {
+  core?: ReportFinancialCore | null;
+  audit_ledger_items?: ReportAuditLedgerItem[];
+  audit_ledger_anomalies?: ReportAuditAnomaly[];
+  audit_ledger_item_count?: number;
+  audit_ledger_anomaly_count?: number;
+  cashflow_table?: ReportCashflowRow[];
+};
+
+export type ReportNetworkImpact = {
+  target_area_conclusion?: Record<string, unknown> | null;
+  attribution_summary?: Record<string, unknown> | null;
+  risk_classification?: Record<string, unknown>[];
+  voltage_top_risks?: Record<string, unknown>[];
+  line_top_risks?: Record<string, unknown>[];
+  transformer_top_risks?: Record<string, unknown>[];
+  data_quality?: Record<string, unknown> | null;
+  baseline?: Record<string, unknown> | null;
+  with_storage?: Record<string, unknown> | null;
+  delta?: Record<string, unknown> | null;
+};
+
+export type ReportHealthIssue = {
+  code?: string;
+  message?: string;
+  severity?: string;
+  level?: string;
+  reason?: string;
+  impact?: string;
+  suggestion?: string;
+  related_section?: string;
+};
+
+export type ReportRunHealth = {
+  status?: string;
+  total_issues?: number;
+  warning_count?: number;
+  critical_count?: number;
+  issues?: ReportHealthIssue[];
+};
+
+export type ReportPayload = {
+  project_meta: ReportProjectMeta;
+  devices: ReportDeviceSpec[];
+  configuration?: ReportConfiguration | null;
+  operation?: ReportOperation | null;
+  financial?: ReportFinancial | null;
+  network_impact?: ReportNetworkImpact | null;
+  run_health?: ReportRunHealth | null;
+  warnings?: string[];
+  task_meta?: ReportTaskMeta | null;
+  source_files?: ReportSourceFile[];
+  assumptions?: ReportAssumptions | null;
+  load_profile?: ReportLoadProfile | null;
+  charts?: ReportCharts | null;
+  candidate_comparison?: ReportCandidateComparison | null;
+  data_quality?: ReportDataQuality | null;
+  generated_at?: string;
+};
