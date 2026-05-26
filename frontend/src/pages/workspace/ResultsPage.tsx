@@ -514,6 +514,43 @@ export default function ResultsPage() {
     }
   }
 
+  const [pdfExporting, setPdfExporting] = useState(false);
+
+  async function handleExportPdf() {
+    if (pdfExporting) return;
+    setPdfExporting(true);
+    setError(null);
+    let printWindow: Window | null = null;
+    try {
+      const payload = await fetchReportData(projectId, selectedTaskId || undefined);
+      const html = buildProposalHtml(payload);
+      printWindow = window.open('', '_blank');
+      if (!printWindow) {
+        setError('弹窗被浏览器拦截，请允许本站弹窗后重试');
+        return;
+      }
+      printWindow.document.write(html);
+      printWindow.document.close();
+      // wait for fonts/styles to settle before printing
+      await new Promise<void>((resolve) => {
+        printWindow!.addEventListener('load', () => resolve(), { once: true });
+        // fallback if load already fired
+        if (printWindow!.document.readyState === 'complete') resolve();
+      });
+      printWindow.print();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setPdfExporting(false);
+      // close the print window after a delay so user can interact with print dialog
+      if (printWindow) {
+        printWindow.addEventListener('afterprint', () => {
+          printWindow?.close();
+        }, { once: true });
+      }
+    }
+  }
+
   return (
     <div style={{ padding: 24, background: '#f8fafc', minHeight: '100vh' }}>
       <div style={{ maxWidth: 1360, margin: '0 auto' }} aria-live="polite">
@@ -551,7 +588,18 @@ export default function ResultsPage() {
             }}
             disabled={exporting}
           >
-            {exporting ? '正在生成报告...' : '导出储能配置方案'}
+            {exporting ? '正在生成报告...' : '导出HTML报告'}
+          </button>
+          <button
+            onClick={handleExportPdf}
+            style={{
+              ...btnStyle,
+              opacity: pdfExporting ? 0.6 : 1,
+              cursor: pdfExporting ? 'not-allowed' : 'pointer',
+            }}
+            disabled={pdfExporting}
+          >
+            {pdfExporting ? '正在生成报告...' : '导出PDF报告'}
           </button>
         </div>
 

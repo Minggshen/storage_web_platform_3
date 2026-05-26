@@ -461,20 +461,23 @@ const CSS = /* css */ `
   .conclusion-box.worsened { background: #fef2f2; border-left: 4px solid var(--c-danger); color: #991b1b; }
 
   /* ===== Key-Value Spec Table ===== */
-  .spec-table { width: 100%; border-collapse: separate; border-spacing: 0; margin: 10pt 0; border: 1px solid var(--c-gray-200); border-radius: 4px; overflow: hidden; }
-  .spec-table th, .spec-table td { border-bottom: 1px solid var(--c-gray-100); padding: 6pt 10pt; text-align: left; font-size: 9pt; }
+  .spec-table { width: 100%; border-collapse: separate; border-spacing: 0; margin: 8pt 0; border: 1px solid var(--c-gray-200); border-radius: 4px; overflow: hidden; }
+  .spec-table th, .spec-table td { border-bottom: 1px solid var(--c-gray-100); padding: 4pt 8pt; text-align: left; font-size: 8.5pt; }
   .spec-table tr:last-child th, .spec-table tr:last-child td { border-bottom: none; }
   .spec-table th { background: var(--c-primary-100); color: var(--c-primary-900); font-weight: 600; width: 35%; }
   .spec-table td { background: #fff; }
+  .spec-table tr { break-inside: avoid; page-break-inside: avoid; }
 
   /* ===== Data Table ===== */
-  table { width: 100%; border-collapse: separate; border-spacing: 0; margin: 10pt 0; font-size: 9pt; page-break-inside: avoid; border: 1px solid var(--c-gray-200); border-radius: 4px; overflow: hidden; }
-  th { background: var(--c-primary-700); color: #fff; font-weight: 600; font-size: 8.5pt; letter-spacing: 0.5px; padding: 7pt 8pt; }
-  td { padding: 5pt 8pt; border-bottom: 1px solid var(--c-gray-100); }
+  table { width: 100%; border-collapse: separate; border-spacing: 0; margin: 8pt 0; font-size: 8.5pt; border: 1px solid var(--c-gray-200); border-radius: 4px; overflow: hidden; }
+  th { background: var(--c-primary-700); color: #fff; font-weight: 600; font-size: 8pt; letter-spacing: 0.5px; padding: 5pt 6pt; }
+  td { padding: 4pt 6pt; border-bottom: 1px solid var(--c-gray-100); }
   td.left { text-align: left; }
   td { text-align: right; }
   tr:last-child td { border-bottom: none; }
   tr:nth-child(even) td { background: var(--c-primary-50); }
+  thead { display: table-header-group; }
+  tr { break-inside: avoid; page-break-inside: avoid; }
 
   /* ===== Utility ===== */
   .no-data { color: #9ca3af; font-style: italic; text-indent: 0; }
@@ -500,12 +503,13 @@ const CSS = /* css */ `
 
   /* ===== Print ===== */
   @media print {
-    @page { size: A4; margin: 18mm 16mm; }
-    body { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+    @page { size: A4; margin: 16mm 14mm; }
+    body { -webkit-print-color-adjust: exact; print-color-adjust: exact; font-size: 10.5pt; line-height: 1.6; }
     .cover { height: 100vh; }
     .section { page-break-before: always; }
+    .section h3, .section h4, .section p, .section ul, .section ol { orphans: 3; widows: 3; }
     .chart-figure { break-inside: avoid; page-break-inside: avoid; }
-    table { break-inside: avoid; page-break-inside: avoid; }
+    tr { break-inside: avoid; page-break-inside: avoid; }
   }
 `;
 
