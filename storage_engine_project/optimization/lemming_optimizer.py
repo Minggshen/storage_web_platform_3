@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass
 from typing import Any
 
@@ -74,6 +75,7 @@ class LemmingOptimizer:
         all_eval_count = 0
 
         for gen in range(cfg.generations):
+            _gen_t0 = time.perf_counter()
             results = self.bridge.evaluate_population(
                 ctx=ctx,
                 population=population,
@@ -82,6 +84,7 @@ class LemmingOptimizer:
                 network_oracle=network_oracle,
             )
             all_eval_count += len(results)
+            _gen_elapsed = time.perf_counter() - _gen_t0
 
             archive = update_archive(archive, results)
             best_compromise = select_best_compromise(archive, safety_economy_tradeoff=self.safety_economy_tradeoff)
@@ -91,6 +94,8 @@ class LemmingOptimizer:
                 results=results,
                 archive=archive,
                 best_compromise=best_compromise,
+                generation_wall_time_s=_gen_elapsed,
+                evaluator_eval_count=all_eval_count,
             )
             history.append(gen_record)
 
@@ -257,6 +262,8 @@ class LemmingOptimizer:
         results: list[FitnessEvaluationResult],
         archive: list[FitnessEvaluationResult],
         best_compromise: FitnessEvaluationResult | None,
+        generation_wall_time_s: float = 0.0,
+        evaluator_eval_count: int = 0,
     ) -> dict[str, Any]:
         feasible = [r for r in results if r.feasible]
 
@@ -265,6 +272,8 @@ class LemmingOptimizer:
             "population_size": len(results),
             "feasible_count": len(feasible),
             "archive_size": len(archive),
+            "generation_wall_time_s": generation_wall_time_s,
+            "evaluator_eval_count": evaluator_eval_count,
         }
 
         if feasible:

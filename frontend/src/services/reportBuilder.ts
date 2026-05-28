@@ -1,4 +1,5 @@
 import type { ReportPayload, ReportFinancial } from '../types/api';
+import { SEMANTIC_COLORS } from '@/constants/chartStyles';
 
 // ====================================================================
 // formatting helpers
@@ -487,7 +488,7 @@ const CSS = /* css */ `
   /* ===== Recommendation Card ===== */
   .recommendation-card { border: 2px solid var(--c-primary-700); border-radius: 8px; padding: 16pt 20pt; margin: 14pt 0; background: linear-gradient(135deg, #f8fafc 0%, var(--c-primary-100) 100%); box-shadow: 0 2px 8px rgba(15,35,64,0.08); }
   .recommendation-card h3 { font-size: 13pt; color: var(--c-primary-900); margin: 0 0 10pt; border-left: none; padding-left: 0; }
-  .rec-status { display: inline-block; padding: 5px 16px; border-radius: 4px; font-weight: 700; font-size: 12pt; letter-spacing: 1px; }
+  .rec-status { display: inline-block; padding: 6px 18px; border-radius: 4px; font-weight: 700; font-size: 12pt; letter-spacing: 1px; text-align: center; }
   .rec-status.recommended { background: #ecfdf5; color: #065f46; border: 1px solid var(--c-success); }
   .rec-status.conditional { background: #fffbeb; color: #92400e; border: 1px solid var(--c-warning); }
   .rec-status.not-recommended { background: #fef2f2; color: #991b1b; border: 1px solid var(--c-danger); }
@@ -557,44 +558,93 @@ function dataTable(columns: string[], rows: string[][], colAligns?: ('left' | 'r
 // SVG chart generators (self-contained, no external dependencies)
 // ====================================================================
 
+type SvgRefLine = { value: number; label?: string; color?: string; dashArray?: string };
+
+function buildReferenceLines(
+  refs: SvgRefLine[],
+  margin: { left: number; right: number; top: number },
+  plotW: number,
+  yToSvg: (v: number) => number,
+): string {
+  return refs.map((r) => {
+    const y = yToSvg(r.value);
+    const color = r.color || SEMANTIC_COLORS.constraint;
+    const dash = r.dashArray ? ` stroke-dasharray="${r.dashArray}"` : '';
+    const labelSvg = r.label
+      ? `<text x="${margin.left + plotW - 4}" y="${y - 4}" text-anchor="end" font-size="9" fill="${color}">${esc(r.label)}</text>`
+      : '';
+    return `<line x1="${margin.left}" x2="${margin.left + plotW}" y1="${y}" y2="${y}" stroke="${color}" stroke-width="1"${dash} />${labelSvg}`;
+  }).join('');
+}
+
 function svgBarChart(
   data: { label: string; value: number }[],
   width = 600,
   height = 350,
-  cfg: { xLabel?: string; yLabel?: string; color?: string; valueFormatter?: (v: number) => string } = {},
+  cfg: {
+    xLabel?: string; yLabel?: string;
+    color?: string; negativeColor?: string;
+    valueFormatter?: (v: number) => string;
+    referenceLines?: SvgRefLine[];
+    caption?: string;
+  } = {},
 ): string {
   const margin = { top: 30, right: 30, bottom: 70, left: 70 };
   const plotW = width - margin.left - margin.right;
   const plotH = height - margin.top - margin.bottom;
-  const maxVal = Math.max(...data.map(d => d.value), 0) * 1.1 || 1;
+  const allVals = data.map(d => d.value);
+  const maxVal = Math.max(...allVals, 0) * 1.1 || 1;
+  const minVal = Math.min(...allVals, 0);
+  const range = maxVal - minVal || 1;
   const barW = Math.max(6, (plotW / data.length) * 0.65);
   const gap = plotW / data.length;
-  const color = cfg.color || '#1e3a5f';
+  const color = cfg.color || SEMANTIC_COLORS.optimized;
+  const negColor = cfg.negativeColor || SEMANTIC_COLORS.charge;
   const fmt = cfg.valueFormatter || ((v: number) => v.toLocaleString('zh-CN', { maximumFractionDigits: 0 }));
+  const zeroY = margin.top + plotH - ((0 - minVal) / range) * plotH;
 
+  const toY = (v: number) => margin.top + plotH - ((v - minVal) / range) * plotH;
+
+  // y-axis grid & ticks
   const yTicks = 5;
-  const yStep = maxVal / yTicks;
+  const yStep = range / yTicks;
   const yGrid = Array.from({ length: yTicks + 1 }, (_, i) => {
-    const val = yStep * i;
-    const y = margin.top + plotH - (val / maxVal) * plotH;
-    return `<line x1="${margin.left}" x2="${width - margin.right}" y1="${y}" y2="${y}" stroke="#e5e7eb" stroke-width="0.5" />
-      <text x="${margin.left - 8}" y="${y + 4}" text-anchor="end" font-size="9" fill="#6b7280">${fmt(val)}</text>`;
+    const val = minVal + yStep * i;
+    const y = toY(val);
+    return `<line x1="${margin.left}" x2="${width - margin.right}" y1="${y.toFixed(1)}" y2="${y.toFixed(1)}" stroke="${SEMANTIC_COLORS.grid}" stroke-width="0.5" />
+      <text x="${margin.left - 8}" y="${(y + 4).toFixed(1)}" text-anchor="end" font-size="9" fill="${SEMANTIC_COLORS.neutral}">${fmt(val)}</text>`;
   }).join('');
 
+  // zero baseline (always visible when there are negatives)
+  const zeroLine = minVal < 0
+    ? `<line x1="${margin.left}" x2="${margin.left + plotW}" y1="${zeroY.toFixed(1)}" y2="${zeroY.toFixed(1)}" stroke="${SEMANTIC_COLORS.zeroLine}" stroke-width="1" />`
+    : '';
+
+  // bars
   const bars = data.map((d, i) => {
     const x = margin.left + gap * i + (gap - barW) / 2;
-    const h = Math.max(0, (d.value / maxVal) * plotH);
-    const y = margin.top + plotH - h;
-    return `<rect x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${barW.toFixed(1)}" height="${h.toFixed(1)}" fill="${color}" rx="2" />
-      <text x="${(x + barW / 2).toFixed(1)}" y="${(y - 6).toFixed(1)}" text-anchor="middle" font-size="9" fill="#374151">${fmt(d.value)}</text>
-      <text x="${(x + barW / 2).toFixed(1)}" y="${margin.top + plotH + 16}" text-anchor="end" font-size="9" fill="#6b7280" transform="rotate(-35, ${(x + barW / 2).toFixed(1)}, ${margin.top + plotH + 16})">${esc(d.label)}</text>`;
+    const v = d.value;
+    const h = Math.max(0.5, (Math.abs(v) / range) * plotH);
+    const isNeg = v < 0;
+    const y = isNeg ? zeroY : zeroY - h;
+    const barFill = isNeg ? negColor : color;
+    const labelY = isNeg ? y + h + 14 : y - 6;
+    return `<rect x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${barW.toFixed(1)}" height="${h.toFixed(1)}" fill="${barFill}" rx="2" />
+      <text x="${(x + barW / 2).toFixed(1)}" y="${labelY.toFixed(1)}" text-anchor="middle" font-size="9" fill="${SEMANTIC_COLORS.zeroLine}">${fmt(v)}</text>
+      <text x="${(x + barW / 2).toFixed(1)}" y="${margin.top + plotH + 16}" text-anchor="end" font-size="9" fill="${SEMANTIC_COLORS.neutral}" transform="rotate(-35, ${(x + barW / 2).toFixed(1)}, ${margin.top + plotH + 16})">${esc(d.label)}</text>`;
   }).join('');
 
-  const yLabel = cfg.yLabel ? `<text x="${margin.left - 55}" y="${margin.top + plotH / 2}" text-anchor="middle" font-size="10" fill="#374151" transform="rotate(-90, ${margin.left - 55}, ${margin.top + plotH / 2})">${esc(cfg.yLabel)}</text>` : '';
-  const xLabel = cfg.xLabel ? `<text x="${margin.left + plotW / 2}" y="${height - 6}" text-anchor="middle" font-size="10" fill="#374151">${esc(cfg.xLabel)}</text>` : '';
+  // reference lines
+  const refLines = cfg.referenceLines
+    ? buildReferenceLines(cfg.referenceLines, margin, plotW, toY)
+    : '';
+
+  const yLabel = cfg.yLabel ? `<text x="${margin.left - 55}" y="${margin.top + plotH / 2}" text-anchor="middle" font-size="10" fill="${SEMANTIC_COLORS.zeroLine}" transform="rotate(-90, ${margin.left - 55}, ${margin.top + plotH / 2})">${esc(cfg.yLabel)}</text>` : '';
+  const xLabel = cfg.xLabel ? `<text x="${margin.left + plotW / 2}" y="${height - 6}" text-anchor="middle" font-size="10" fill="${SEMANTIC_COLORS.zeroLine}">${esc(cfg.xLabel)}</text>` : '';
+  const caption = cfg.caption ? `<text x="${margin.left + plotW / 2}" y="${height - 2}" text-anchor="middle" font-size="9" fill="${SEMANTIC_COLORS.neutral}">${esc(cfg.caption)}</text>` : '';
 
   return `<div class="chart-figure"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${width} ${height}" preserveAspectRatio="xMidYMid meet" class="report-chart" style="font-family:'PingFang SC','Microsoft YaHei',sans-serif;max-width:100%;">
-    ${yLabel}${xLabel}${yGrid}${bars}
+    ${yLabel}${xLabel}${yGrid}${zeroLine}${refLines}${bars}${caption}
   </svg></div>`;
 }
 
@@ -602,11 +652,20 @@ function svgLineChart(
   data: { label: string; value: number }[],
   width = 600,
   height = 350,
-  cfg: { xLabel?: string; yLabel?: string; color?: string; showDots?: boolean; series?: { key: string; color: string; label: string }[]; multiData?: Record<string, number>[] } = {},
+  cfg: {
+    xLabel?: string; yLabel?: string; color?: string;
+    series?: { key: string; color: string; label: string; lineStyle?: 'solid' | 'dashed' | 'dashDot' }[];
+    multiData?: Record<string, number | string | null | undefined>[];
+    referenceLines?: SvgRefLine[];
+    caption?: string;
+  } = {},
 ): string {
   const margin = { top: 30, right: 50, bottom: 70, left: 70 };
   const plotW = width - margin.left - margin.right;
   const plotH = height - margin.top - margin.bottom;
+
+  // ── resolve dash arrays ──
+  const dashMap: Record<string, string> = { solid: '', dashed: '5,5', dashDot: '8,4,2,4' };
 
   let allValues: number[] = [];
   if (cfg.multiData && cfg.series) {
@@ -623,30 +682,30 @@ function svgLineChart(
   const minVal = Math.min(...allValues, 0);
   const range = maxVal - minVal || 1;
 
+  const toY = (v: number) => margin.top + plotH - ((v - minVal) / range) * plotH;
+
   const yTicks = 5;
   const yStep = range / yTicks;
   const yGrid = Array.from({ length: yTicks + 1 }, (_, i) => {
     const val = minVal + yStep * i;
-    const y = margin.top + plotH - ((val - minVal) / range) * plotH;
-    return `<line x1="${margin.left}" x2="${width - margin.right}" y1="${y}" y2="${y}" stroke="#e5e7eb" stroke-width="0.5" />
-      <text x="${margin.left - 8}" y="${y + 4}" text-anchor="end" font-size="9" fill="#6b7280">${num(val, 0)}</text>`;
+    const y = toY(val);
+    return `<line x1="${margin.left}" x2="${width - margin.right}" y1="${y.toFixed(1)}" y2="${y.toFixed(1)}" stroke="${SEMANTIC_COLORS.grid}" stroke-width="0.5" />
+      <text x="${margin.left - 8}" y="${(y + 4).toFixed(1)}" text-anchor="end" font-size="9" fill="${SEMANTIC_COLORS.neutral}">${num(val, 0)}</text>`;
   }).join('');
+
+  // zero line when data spans negative & positive
+  const zeroLine = minVal < 0 && maxVal > 0
+    ? `<line x1="${margin.left}" x2="${margin.left + plotW}" y1="${toY(0).toFixed(1)}" y2="${toY(0).toFixed(1)}" stroke="${SEMANTIC_COLORS.zeroLine}" stroke-width="0.8" />`
+    : '';
 
   const buildPath = (values: number[]) => {
     if (values.length === 0) return '';
     return values.map((v, i) => {
       const x = margin.left + (i / Math.max(values.length - 1, 1)) * plotW;
-      const y = margin.top + plotH - ((v - minVal) / range) * plotH;
+      const y = toY(v);
       return `${i === 0 ? 'M' : 'L'}${x.toFixed(1)},${y.toFixed(1)}`;
     }).join(' ');
   };
-
-  const buildDots = (values: number[]) =>
-    values.map((v, i) => {
-      const x = margin.left + (i / Math.max(values.length - 1, 1)) * plotW;
-      const y = margin.top + plotH - ((v - minVal) / range) * plotH;
-      return `<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="3" fill="${cfg.color || '#2563eb'}" />`;
-    }).join('');
 
   let paths = '';
   let dots = '';
@@ -656,31 +715,44 @@ function svgLineChart(
     const labels = cfg.multiData.map(d => String(d.label ?? ''));
     const xLabels = labels.map((l, i) => {
       const x = margin.left + (i / Math.max(labels.length - 1, 1)) * plotW;
-      return `<text x="${x.toFixed(1)}" y="${margin.top + plotH + 16}" text-anchor="end" font-size="9" fill="#6b7280" transform="rotate(-35, ${x.toFixed(1)}, ${margin.top + plotH + 16})">${esc(l)}</text>`;
+      return `<text x="${x.toFixed(1)}" y="${margin.top + plotH + 16}" text-anchor="end" font-size="9" fill="${SEMANTIC_COLORS.neutral}" transform="rotate(-35, ${x.toFixed(1)}, ${margin.top + plotH + 16})">${esc(l)}</text>`;
     }).join('');
     paths = cfg.series.map(s => {
       const vals = cfg.multiData!.map(d => (typeof d[s.key] === 'number' ? d[s.key] as number : 0));
-      return `<path d="${buildPath(vals)}" fill="none" stroke="${s.color}" stroke-width="2" />`;
+      const dashStr = dashMap[s.lineStyle || 'solid'];
+      const dashAttr = dashStr ? ` stroke-dasharray="${dashStr}"` : '';
+      return `<path d="${buildPath(vals)}" fill="none" stroke="${s.color}" stroke-width="2"${dashAttr} />`;
     }).join('');
     legend = cfg.series.map((s, i) =>
-      `<rect x="${width - margin.right - 120 + i * 80}" y="6" width="12" height="12" fill="${s.color}" rx="2" />
-       <text x="${width - margin.right - 104 + i * 80}" y="16" font-size="9" fill="#374151">${esc(s.label)}</text>`
+      `<rect x="${width - margin.right - 140 + i * 90}" y="6" width="12" height="12" fill="${s.color}" rx="2" />
+       <text x="${width - margin.right - 124 + i * 90}" y="16" font-size="9" fill="${SEMANTIC_COLORS.zeroLine}">${esc(s.label)}</text>`
     ).join('');
     dots = xLabels;
   } else {
-    paths = `<path d="${buildPath(data.map(d => d.value))}" fill="none" stroke="${cfg.color || '#2563eb'}" stroke-width="2" />`;
-    dots = buildDots(data.map(d => d.value));
-    const labelDots = data.map((d, i) => {
+    const dashStr = dashMap.solid;
+    paths = `<path d="${buildPath(data.map(d => d.value))}" fill="none" stroke="${cfg.color || SEMANTIC_COLORS.revenue.primary}" stroke-width="2"${dashStr ? ` stroke-dasharray="${dashStr}"` : ''} />`;
+    // dots at each data point
+    dots = data.map((_, i) => {
       const x = margin.left + (i / Math.max(data.length - 1, 1)) * plotW;
-      return `<text x="${x.toFixed(1)}" y="${margin.top + plotH + 16}" text-anchor="end" font-size="9" fill="#6b7280" transform="rotate(-35, ${x.toFixed(1)}, ${margin.top + plotH + 16})">${esc(d.label)}</text>`;
+      const y = toY(data[i].value);
+      return `<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="3" fill="${cfg.color || SEMANTIC_COLORS.revenue.primary}" />`;
     }).join('');
-    dots += labelDots;
+    dots += data.map((d, i) => {
+      const x = margin.left + (i / Math.max(data.length - 1, 1)) * plotW;
+      return `<text x="${x.toFixed(1)}" y="${margin.top + plotH + 16}" text-anchor="end" font-size="9" fill="${SEMANTIC_COLORS.neutral}" transform="rotate(-35, ${x.toFixed(1)}, ${margin.top + plotH + 16})">${esc(d.label)}</text>`;
+    }).join('');
   }
 
-  const yLabel = cfg.yLabel ? `<text x="${margin.left - 55}" y="${margin.top + plotH / 2}" text-anchor="middle" font-size="10" fill="#374151" transform="rotate(-90, ${margin.left - 55}, ${margin.top + plotH / 2})">${esc(cfg.yLabel)}</text>` : '';
+  // reference lines
+  const refLines = cfg.referenceLines
+    ? buildReferenceLines(cfg.referenceLines, margin, plotW, toY)
+    : '';
+
+  const yLabel = cfg.yLabel ? `<text x="${margin.left - 55}" y="${margin.top + plotH / 2}" text-anchor="middle" font-size="10" fill="${SEMANTIC_COLORS.zeroLine}" transform="rotate(-90, ${margin.left - 55}, ${margin.top + plotH / 2})">${esc(cfg.yLabel)}</text>` : '';
+  const caption = cfg.caption ? `<text x="${margin.left + plotW / 2}" y="${height - 2}" text-anchor="middle" font-size="9" fill="${SEMANTIC_COLORS.neutral}">${esc(cfg.caption)}</text>` : '';
 
   return `<div class="chart-figure"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${width} ${height}" preserveAspectRatio="xMidYMid meet" class="report-chart" style="font-family:'PingFang SC','Microsoft YaHei',sans-serif;max-width:100%;">
-    ${yLabel}${yGrid}${legend}${paths}${dots}
+    ${yLabel}${yGrid}${zeroLine}${refLines}${legend}${paths}${dots}${caption}
   </svg></div>`;
 }
 
@@ -688,40 +760,79 @@ function svgStackedBarChart(
   data: { label: string; segments: { key: string; value: number; color: string }[] }[],
   width = 600,
   height = 380,
-  cfg: { xLabel?: string; yLabel?: string } = {},
+  cfg: { xLabel?: string; yLabel?: string; referenceLines?: SvgRefLine[]; caption?: string } = {},
 ): string {
   const margin = { top: 30, right: 30, bottom: 80, left: 70 };
   const plotW = width - margin.left - margin.right;
   const plotH = height - margin.top - margin.bottom;
 
-  const totals = data.map(d => d.segments.reduce((s, seg) => s + seg.value, 0));
-  const maxTotal = Math.max(...totals, 0) * 1.15 || 1;
+  // signed domain: positive totals → maxPos, negative totals → maxNeg (abs)
+  const posTotals = data.map(d => d.segments.filter(s => s.value >= 0).reduce((sum, s) => sum + s.value, 0));
+  const negTotals = data.map(d => d.segments.filter(s => s.value < 0).reduce((sum, s) => sum + Math.abs(s.value), 0));
+  const maxPos = Math.max(...posTotals, 1) * 1.15;
+  const maxNeg = Math.max(...negTotals, 1) * 1.15;
+  const range = maxPos + maxNeg; // full signed range
   const barW = Math.max(8, (plotW / data.length) * 0.6);
   const gap = plotW / data.length;
 
-  const yTicks = 5;
-  const yStep = maxTotal / yTicks;
-  const yGrid = Array.from({ length: yTicks + 1 }, (_, i) => {
-    const val = yStep * i;
-    const y = margin.top + plotH - (val / maxTotal) * plotH;
-    return `<line x1="${margin.left}" x2="${width - margin.right}" y1="${y}" y2="${y}" stroke="#e5e7eb" stroke-width="0.5" />
-      <text x="${margin.left - 8}" y="${y + 4}" text-anchor="end" font-size="9" fill="#6b7280">${num(val, 0)}</text>`;
+  // zero Y: proportion of negative range from the bottom
+  const zeroY = margin.top + plotH - (maxNeg / range) * plotH;
+
+  const toY = (v: number) => {
+    // v is positive-only; maps to absolute pixel distance from zero
+    return (v / range) * plotH;
+  };
+
+  // y-axis ticks (signed: -maxNeg … 0 … +maxPos)
+  const yTicks = 6;
+  const yStep = range / (yTicks - 1);
+  const yGrid = Array.from({ length: yTicks }, (_, i) => {
+    const val = -maxNeg + yStep * i;
+    const y = zeroY - (val / range) * plotH;
+    return `<line x1="${margin.left}" x2="${width - margin.right}" y1="${y.toFixed(1)}" y2="${y.toFixed(1)}" stroke="${SEMANTIC_COLORS.grid}" stroke-width="0.5" />
+      <text x="${margin.left - 8}" y="${(y + 4).toFixed(1)}" text-anchor="end" font-size="9" fill="${SEMANTIC_COLORS.neutral}">${num(val, 0)}</text>`;
   }).join('');
+
+  // zero baseline
+  const zeroLine = negTotals.some(n => n > 0)
+    ? `<line x1="${margin.left}" x2="${margin.left + plotW}" y1="${zeroY.toFixed(1)}" y2="${zeroY.toFixed(1)}" stroke="${SEMANTIC_COLORS.zeroLine}" stroke-width="1" />`
+    : '';
 
   const bars = data.map((d, i) => {
     const x = margin.left + gap * i + (gap - barW) / 2;
-    let cumY = margin.top + plotH;
-    const segments = d.segments.map(seg => {
-      const h = Math.max(0, (seg.value / maxTotal) * plotH);
-      cumY -= h;
-      return `<rect x="${x.toFixed(1)}" y="${cumY.toFixed(1)}" width="${barW.toFixed(1)}" height="${h.toFixed(1)}" fill="${seg.color}" />`;
-    }).join('');
-    const totalLabel = `<text x="${(x + barW / 2).toFixed(1)}" y="${(cumY - 6).toFixed(1)}" text-anchor="middle" font-size="8" fill="#374151">${num(totals[i], 0)}</text>`;
-    const xLabel = `<text x="${(x + barW / 2).toFixed(1)}" y="${margin.top + plotH + 16}" text-anchor="end" font-size="9" fill="#6b7280" transform="rotate(-35, ${(x + barW / 2).toFixed(1)}, ${margin.top + plotH + 16})">${esc(d.label)}</text>`;
-    return segments + totalLabel + xLabel;
+    let html = '';
+    // positive segments — stack upward from zeroY
+    let posCumPx = 0;
+    for (const seg of d.segments.filter(s => s.value >= 0)) {
+      const h = Math.max(0.5, toY(seg.value));
+      const y = zeroY - posCumPx - h;
+      html += `<rect x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${barW.toFixed(1)}" height="${h.toFixed(1)}" fill="${seg.color}" />`;
+      posCumPx += h;
+    }
+    // negative segments — stack downward from zeroY
+    let negCumPx = 0;
+    for (const seg of d.segments.filter(s => s.value < 0)) {
+      const h = Math.max(0.5, toY(Math.abs(seg.value)));
+      const y = zeroY + negCumPx;
+      html += `<rect x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${barW.toFixed(1)}" height="${h.toFixed(1)}" fill="${seg.color}" />`;
+      negCumPx += h;
+    }
+    const netTotal = posTotals[i] - negTotals[i];
+    // label position: above positive stack if it's taller, below negative stack otherwise
+    const labelY = posCumPx >= negCumPx ? zeroY - posCumPx - 6 : zeroY + negCumPx + 14;
+    html += `<text x="${(x + barW / 2).toFixed(1)}" y="${labelY.toFixed(1)}" text-anchor="middle" font-size="8" fill="${SEMANTIC_COLORS.zeroLine}">${num(netTotal, 0)}</text>`;
+    html += `<text x="${(x + barW / 2).toFixed(1)}" y="${margin.top + plotH + 16}" text-anchor="end" font-size="9" fill="${SEMANTIC_COLORS.neutral}" transform="rotate(-35, ${(x + barW / 2).toFixed(1)}, ${margin.top + plotH + 16})">${esc(d.label)}</text>`;
+    return html;
   }).join('');
 
-  const yLabel = cfg.yLabel ? `<text x="${margin.left - 55}" y="${margin.top + plotH / 2}" text-anchor="middle" font-size="10" fill="#374151" transform="rotate(-90, ${margin.left - 55}, ${margin.top + plotH / 2})">${esc(cfg.yLabel)}</text>` : '';
+  // reference lines use signed toY
+  const signedToY = (v: number) => zeroY - (v / range) * plotH;
+  const refLines = cfg.referenceLines
+    ? buildReferenceLines(cfg.referenceLines, margin, plotW, signedToY)
+    : '';
+
+  const yLabel = cfg.yLabel ? `<text x="${margin.left - 55}" y="${margin.top + plotH / 2}" text-anchor="middle" font-size="10" fill="${SEMANTIC_COLORS.zeroLine}" transform="rotate(-90, ${margin.left - 55}, ${margin.top + plotH / 2})">${esc(cfg.yLabel)}</text>` : '';
+  const caption = cfg.caption ? `<text x="${margin.left + plotW / 2}" y="${height - 2}" text-anchor="middle" font-size="9" fill="${SEMANTIC_COLORS.neutral}">${esc(cfg.caption)}</text>` : '';
 
   // legend — multi-row, wrap within plot width
   const legendItemW = 110;
@@ -733,11 +844,11 @@ function svgStackedBarChart(
     const lx = margin.left + col * legendItemW;
     const ly = height - 12 - row * 16;
     return `<rect x="${lx}" y="${ly}" width="10" height="10" fill="${seg.color}" rx="2" />
-     <text x="${lx + 14}" y="${ly + 10}" font-size="9" fill="#374151">${esc(seg.key)}</text>`;
+     <text x="${lx + 14}" y="${ly + 10}" font-size="9" fill="${SEMANTIC_COLORS.zeroLine}">${esc(seg.key)}</text>`;
   }).join('');
 
   return `<div class="chart-figure"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${width} ${height}" preserveAspectRatio="xMidYMid meet" class="report-chart" style="font-family:'PingFang SC','Microsoft YaHei',sans-serif;max-width:100%;">
-    ${yLabel}${yGrid}${bars}${legend}
+    ${yLabel}${yGrid}${zeroLine}${refLines}${bars}${legend}${caption}
   </svg></div>`;
 }
 
@@ -745,7 +856,12 @@ function svgScatterChart(
   data: { x: number; y: number; label?: string; feasible?: boolean; recommended?: boolean }[],
   width = 600,
   height = 400,
-  cfg: { xLabel: string; yLabel: string },
+  cfg: {
+    xLabel: string; yLabel: string;
+    referenceLines?: SvgRefLine[];
+    frontierData?: { x: number; y: number }[];
+    caption?: string;
+  },
 ): string {
   const margin = { top: 30, right: 30, bottom: 70, left: 70 };
   const plotW = width - margin.left - margin.right;
@@ -767,8 +883,8 @@ function svgScatterChart(
   const yAxis = Array.from({ length: yTicks + 1 }, (_, i) => {
     const val = yMin + yStep * i;
     const y = toY(val);
-    return `<line x1="${margin.left}" x2="${width - margin.right}" y1="${y.toFixed(1)}" y2="${y.toFixed(1)}" stroke="#e5e7eb" stroke-width="0.5" />
-      <text x="${margin.left - 8}" y="${(y + 4).toFixed(1)}" text-anchor="end" font-size="9" fill="#6b7280">${num(val, 0)}</text>`;
+    return `<line x1="${margin.left}" x2="${width - margin.right}" y1="${y.toFixed(1)}" y2="${y.toFixed(1)}" stroke="${SEMANTIC_COLORS.grid}" stroke-width="0.5" />
+      <text x="${margin.left - 8}" y="${(y + 4).toFixed(1)}" text-anchor="end" font-size="9" fill="${SEMANTIC_COLORS.neutral}">${num(val, 0)}</text>`;
   }).join('');
 
   // x-axis ticks and grid
@@ -777,34 +893,44 @@ function svgScatterChart(
   const xAxis = Array.from({ length: xTicks + 1 }, (_, i) => {
     const val = xMin + xStep * i;
     const x = toX(val);
-    return `<line x1="${x.toFixed(1)}" x2="${x.toFixed(1)}" y1="${margin.top}" y2="${margin.top + plotH}" stroke="#e5e7eb" stroke-width="0.5" />
-      <text x="${x.toFixed(1)}" y="${margin.top + plotH + 16}" text-anchor="middle" font-size="9" fill="#6b7280">${num(val, 0)}</text>`;
+    return `<line x1="${x.toFixed(1)}" x2="${x.toFixed(1)}" y1="${margin.top}" y2="${margin.top + plotH}" stroke="${SEMANTIC_COLORS.grid}" stroke-width="0.5" />
+      <text x="${x.toFixed(1)}" y="${margin.top + plotH + 16}" text-anchor="middle" font-size="9" fill="${SEMANTIC_COLORS.neutral}">${num(val, 0)}</text>`;
   }).join('');
 
   // axis lines
-  const axisLines = `<line x1="${margin.left}" x2="${margin.left}" y1="${margin.top}" y2="${margin.top + plotH}" stroke="#374151" stroke-width="1" />
-    <line x1="${margin.left}" x2="${margin.left + plotW}" y1="${margin.top + plotH}" y2="${margin.top + plotH}" stroke="#374151" stroke-width="1" />`;
+  const axisLines = `<line x1="${margin.left}" x2="${margin.left}" y1="${margin.top}" y2="${margin.top + plotH}" stroke="${SEMANTIC_COLORS.zeroLine}" stroke-width="1" />
+    <line x1="${margin.left}" x2="${margin.left + plotW}" y1="${margin.top + plotH}" y2="${margin.top + plotH}" stroke="${SEMANTIC_COLORS.zeroLine}" stroke-width="1" />`;
+
+  // reference lines
+  const refLines = cfg.referenceLines
+    ? buildReferenceLines(cfg.referenceLines, margin, plotW, toY)
+    : '';
+  const frontierLine = cfg.frontierData && cfg.frontierData.length >= 2
+    ? `<path d="${cfg.frontierData.map((d, i) => `${i === 0 ? 'M' : 'L'}${toX(d.x).toFixed(1)},${toY(d.y).toFixed(1)}`).join(' ')}" fill="none" stroke="${SEMANTIC_COLORS.recommended}" stroke-width="2" stroke-dasharray="8,4,2,4" />`
+    : '';
 
   const dots = data.map(d => {
     const cx = toX(d.x);
     const cy = toY(d.y);
     const r = d.recommended ? 8 : 5;
-    const fill = d.recommended ? '#dc2626' : d.feasible ? '#059669' : '#9ca3af';
-    const stroke = d.recommended ? '#991b1b' : 'none';
-    return `<circle cx="${cx.toFixed(1)}" cy="${cy.toFixed(1)}" r="${r}" fill="${fill}" stroke="${stroke}" stroke-width="${d.recommended ? 2 : 0}" opacity="0.8" />`;
+    const fill = d.recommended ? SEMANTIC_COLORS.recommended : d.feasible ? SEMANTIC_COLORS.feasible : SEMANTIC_COLORS.infeasible;
+    const stroke = d.recommended ? SEMANTIC_COLORS.constraint : 'none';
+    const labelSvg = d.label ? `<text x="${cx.toFixed(1)}" y="${(cy - 10).toFixed(1)}" text-anchor="middle" font-size="8" fill="${SEMANTIC_COLORS.zeroLine}">${esc(d.label)}</text>` : '';
+    return `<circle cx="${cx.toFixed(1)}" cy="${cy.toFixed(1)}" r="${r}" fill="${fill}" stroke="${stroke}" stroke-width="${d.recommended ? 2 : 0}" opacity="0.8" />${labelSvg}`;
   }).join('');
 
-  const xLabel = cfg.xLabel ? `<text x="${margin.left + plotW / 2}" y="${height - 6}" text-anchor="middle" font-size="10" fill="#374151">${esc(cfg.xLabel)}</text>` : '';
-  const yLabel = cfg.yLabel ? `<text x="${margin.left - 55}" y="${margin.top + plotH / 2}" text-anchor="middle" font-size="10" fill="#374151" transform="rotate(-90, ${margin.left - 55}, ${margin.top + plotH / 2})">${esc(cfg.yLabel)}</text>` : '';
+  const xLabel = cfg.xLabel ? `<text x="${margin.left + plotW / 2}" y="${height - 6}" text-anchor="middle" font-size="10" fill="${SEMANTIC_COLORS.zeroLine}">${esc(cfg.xLabel)}</text>` : '';
+  const yLabel = cfg.yLabel ? `<text x="${margin.left - 55}" y="${margin.top + plotH / 2}" text-anchor="middle" font-size="10" fill="${SEMANTIC_COLORS.zeroLine}" transform="rotate(-90, ${margin.left - 55}, ${margin.top + plotH / 2})">${esc(cfg.yLabel)}</text>` : '';
+  const caption = cfg.caption ? `<text x="${margin.left + plotW / 2}" y="${height - 2}" text-anchor="middle" font-size="9" fill="${SEMANTIC_COLORS.neutral}">${esc(cfg.caption)}</text>` : '';
 
   // legend
-  const legend = `<rect x="${width - 180}" y="8" width="10" height="10" fill="#059669" rx="2" opacity="0.8" />
-    <text x="${width - 166}" y="18" font-size="9" fill="#374151">可行方案</text>
-    <rect x="${width - 100}" y="8" width="10" height="10" fill="#9ca3af" rx="2" opacity="0.8" />
-    <text x="${width - 86}" y="18" font-size="9" fill="#374151">不可行</text>`;
+  const legend = `<rect x="${width - 180}" y="8" width="10" height="10" fill="${SEMANTIC_COLORS.feasible}" rx="2" opacity="0.8" />
+    <text x="${width - 166}" y="18" font-size="9" fill="${SEMANTIC_COLORS.zeroLine}">可行方案</text>
+    <rect x="${width - 100}" y="8" width="10" height="10" fill="${SEMANTIC_COLORS.infeasible}" rx="2" opacity="0.8" />
+    <text x="${width - 86}" y="18" font-size="9" fill="${SEMANTIC_COLORS.zeroLine}">不可行</text>`;
 
   return `<div class="chart-figure"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${width} ${height}" preserveAspectRatio="xMidYMid meet" class="report-chart" style="font-family:'PingFang SC','Microsoft YaHei',sans-serif;max-width:100%;">
-    ${yLabel}${xLabel}${yAxis}${xAxis}${axisLines}${dots}${legend}
+    ${yLabel}${xLabel}${yAxis}${xAxis}${axisLines}${refLines}${frontierLine}${dots}${legend}${caption}
   </svg></div>`;
 }
 
@@ -812,74 +938,97 @@ function svgDualAxisChart(
   data: { label: string; leftValue: number; rightValue: number }[],
   width = 600,
   height = 350,
-  cfg: { leftLabel: string; rightLabel: string; leftColor?: string; rightColor?: string },
+  cfg: {
+    leftLabel: string; rightLabel: string;
+    leftColor?: string; rightColor?: string;
+    leftReferenceLines?: SvgRefLine[];
+    rightReferenceLines?: SvgRefLine[];
+    caption?: string;
+  },
 ): string {
   const margin = { top: 30, right: 60, bottom: 55, left: 60 };
   const plotW = width - margin.left - margin.right;
   const plotH = height - margin.top - margin.bottom;
 
   const leftMax = Math.max(...data.map(d => d.leftValue), 0) * 1.15 || 1;
+  const leftMin = Math.min(...data.map(d => d.leftValue), 0);
+  const leftRange = (leftMax - leftMin) || 1;
+
   const rightMax = Math.max(...data.map(d => d.rightValue), 0) * 1.15 || 1;
   const rightMin = Math.min(...data.map(d => d.rightValue), 0);
   const rightRange = (rightMax - rightMin) || 1;
 
-  const leftColor = cfg.leftColor || '#2563eb';
-  const rightColor = cfg.rightColor || '#059669';
+  const leftColor = cfg.leftColor || SEMANTIC_COLORS.revenue.primary;
+  const rightColor = cfg.rightColor || SEMANTIC_COLORS.feasible;
 
-  // left axis (SOC %)
+  const toLeftY = (v: number) => margin.top + plotH - ((v - leftMin) / leftRange) * plotH;
+  const toRightY = (v: number) => margin.top + plotH - ((v - rightMin) / rightRange) * plotH;
+
+  // left axis ticks
   const leftTicks = Array.from({ length: 5 }, (_, i) => {
-    const val = (leftMax / 4) * i;
-    const y = margin.top + plotH - (val / leftMax) * plotH;
-    return `<text x="${margin.left - 8}" y="${y + 4}" text-anchor="end" font-size="9" fill="${leftColor}">${num(val, 0)}</text>`;
+    const val = leftMin + (leftRange / 4) * i;
+    const y = toLeftY(val);
+    return `<text x="${margin.left - 8}" y="${(y + 4).toFixed(1)}" text-anchor="end" font-size="9" fill="${leftColor}">${num(val, 0)}</text>`;
   }).join('');
 
-  // right axis (kW)
+  // right axis ticks
   const rightTicks = Array.from({ length: 5 }, (_, i) => {
     const val = rightMin + (rightRange / 4) * i;
-    const y = margin.top + plotH - ((val - rightMin) / rightRange) * plotH;
-    return `<text x="${width - margin.right + 8}" y="${y + 4}" text-anchor="start" font-size="9" fill="${rightColor}">${num(val, 0)}</text>`;
+    const y = toRightY(val);
+    return `<text x="${width - margin.right + 8}" y="${(y + 4).toFixed(1)}" text-anchor="start" font-size="9" fill="${rightColor}">${num(val, 0)}</text>`;
   }).join('');
 
-  // left line (SOC)
+  // left line
   const leftPath = data.map((d, i) => {
     const x = margin.left + (i / Math.max(data.length - 1, 1)) * plotW;
-    const y = margin.top + plotH - (d.leftValue / leftMax) * plotH;
+    const y = toLeftY(d.leftValue);
     return `${i === 0 ? 'M' : 'L'}${x.toFixed(1)},${y.toFixed(1)}`;
   }).join(' ');
 
-  // right bars (power) — zero baseline
-  const zeroY = margin.top + plotH - ((0 - rightMin) / rightRange) * plotH;
+  // right bars — zero baseline
+  const zeroY = toRightY(0);
   const barW = Math.max(6, (plotW / data.length) * 0.7);
   const gap = plotW / data.length;
   const bars = data.map((d, i) => {
     const x = margin.left + gap * i + (gap - barW) / 2;
     const barH = Math.max(0.5, Math.abs((d.rightValue - 0) / rightRange) * plotH);
     const barTop = d.rightValue >= 0 ? zeroY - barH : zeroY;
-    const fill = d.rightValue >= 0 ? rightColor : '#ef4444';
+    const fill = d.rightValue >= 0 ? rightColor : SEMANTIC_COLORS.charge;
     return `<rect x="${x.toFixed(1)}" y="${barTop.toFixed(1)}" width="${barW.toFixed(1)}" height="${barH.toFixed(1)}" fill="${fill}" opacity="0.6" rx="1" />`;
   }).join('');
 
-  // x labels (every few hours)
-  const xLabels = data.filter((_, i) => data.length <= 24 || i % Math.ceil(data.length / 12) === 0).map(d => {
+  // x labels (thinned for large datasets)
+  const step = Math.max(1, Math.ceil(data.length / 12));
+  const xLabels = data.filter((_, i) => i % step === 0).map(d => {
     const i = data.indexOf(d);
     const x = margin.left + (i / Math.max(data.length - 1, 1)) * plotW;
-    return `<text x="${x.toFixed(1)}" y="${margin.top + plotH + 14}" text-anchor="middle" font-size="9" fill="#6b7280">${esc(d.label)}</text>`;
+    return `<text x="${x.toFixed(1)}" y="${margin.top + plotH + 14}" text-anchor="middle" font-size="9" fill="${SEMANTIC_COLORS.neutral}">${esc(d.label)}</text>`;
   }).join('');
 
   // axis labels
   const leftLabel = `<text x="${margin.left - 48}" y="${margin.top + plotH / 2}" text-anchor="middle" font-size="10" fill="${leftColor}" transform="rotate(-90, ${margin.left - 48}, ${margin.top + plotH / 2})">${esc(cfg.leftLabel)}</text>`;
   const rightLabel = `<text x="${width - margin.right + 48}" y="${margin.top + plotH / 2}" text-anchor="middle" font-size="10" fill="${rightColor}" transform="rotate(90, ${width - margin.right + 48}, ${margin.top + plotH / 2})">${esc(cfg.rightLabel)}</text>`;
 
+  // reference lines (left axis)
+  const leftRefLines = cfg.leftReferenceLines
+    ? buildReferenceLines(cfg.leftReferenceLines, margin, plotW, toLeftY)
+    : '';
+  const rightRefLines = cfg.rightReferenceLines
+    ? buildReferenceLines(cfg.rightReferenceLines, margin, plotW, toRightY)
+    : '';
+
   // legend
   const legend = `<line x1="${margin.left}" y1="12" x2="${margin.left + 24}" y2="12" stroke="${leftColor}" stroke-width="2" />
-    <text x="${margin.left + 28}" y="16" font-size="9" fill="#374151">${esc(cfg.leftLabel)}</text>
+    <text x="${margin.left + 28}" y="16" font-size="9" fill="${SEMANTIC_COLORS.zeroLine}">${esc(cfg.leftLabel)}</text>
     <rect x="${margin.left + 120}" y="6" width="12" height="12" fill="${rightColor}" opacity="0.6" rx="1" />
-    <text x="${margin.left + 136}" y="16" font-size="9" fill="#374151">放电 (正)</text>
-    <rect x="${margin.left + 210}" y="6" width="12" height="12" fill="#ef4444" opacity="0.6" rx="1" />
-    <text x="${margin.left + 226}" y="16" font-size="9" fill="#374151">充电 (负)</text>`;
+    <text x="${margin.left + 136}" y="16" font-size="9" fill="${SEMANTIC_COLORS.zeroLine}">放电 (正)</text>
+    <rect x="${margin.left + 210}" y="6" width="12" height="12" fill="${SEMANTIC_COLORS.charge}" opacity="0.6" rx="1" />
+    <text x="${margin.left + 226}" y="16" font-size="9" fill="${SEMANTIC_COLORS.zeroLine}">充电 (负)</text>`;
+
+  const caption = cfg.caption ? `<text x="${margin.left + plotW / 2}" y="${height - 2}" text-anchor="middle" font-size="9" fill="${SEMANTIC_COLORS.neutral}">${esc(cfg.caption)}</text>` : '';
 
   return `<div class="chart-figure"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${width} ${height}" preserveAspectRatio="xMidYMid meet" class="report-chart" style="font-family:'PingFang SC','Microsoft YaHei',sans-serif;max-width:100%;">
-    ${leftLabel}${rightLabel}${leftTicks}${rightTicks}${xLabels}${legend}<path d="${leftPath}" fill="none" stroke="${leftColor}" stroke-width="2" />${bars}
+    ${leftLabel}${rightLabel}${leftTicks}${rightTicks}${leftRefLines}${rightRefLines}${xLabels}${legend}<path d="${leftPath}" fill="none" stroke="${leftColor}" stroke-width="2" />${bars}${caption}
   </svg></div>`;
 }
 
@@ -1017,8 +1166,8 @@ function buildExecutiveSummary(payload: ReportPayload): string {
   recRows.push(['实施前置条件', prerequisites.join('；') || '完成现场踏勘与接入方案批复']);
 
   const recCard = `<div class="recommendation-card">
-    <h3>推荐结论</h3>
-    <p style="margin:6pt 0;"><span class="rec-status ${recLevel}">${esc(recLabel)}</span></p>
+    <h3>结论</h3>
+    <div style="margin:6pt 0;"><span class="rec-status ${recLevel}">${esc(recLabel)}</span></div>
     ${kvTable(recRows, '30%', true)}
   </div>`;
 
@@ -1211,12 +1360,15 @@ function buildTechnicalSolution(payload: ReportPayload): string {
   const history = payload.charts?.optimization_history;
   if (pareto?.length) {
     const scatterData = pareto.map(p => ({
-      x: (p.ratedPowerKw ?? 0),
+      x: (p.initialInvestmentWan ?? 0),
       y: (p.npvWan ?? 0),
       label: p.index != null ? String(p.index) : undefined,
       feasible: p.feasible ?? false,
       recommended: false,
     }));
+    const frontierData = (payload.charts?.pareto_frontier || pareto.filter(p => p.paretoFrontier))
+      .map(p => ({ x: p.initialInvestmentWan ?? 0, y: p.npvWan ?? 0 }))
+      .filter(p => Number.isFinite(p.x) && Number.isFinite(p.y));
     // mark the highest NPV feasible as recommended
     const bestFeasible = scatterData.filter(d => d.feasible).sort((a, b) => b.y - a.y)[0];
     if (bestFeasible) bestFeasible.recommended = true;
@@ -1224,8 +1376,12 @@ function buildTechnicalSolution(payload: ReportPayload): string {
       ? `优化共运行 <strong>${history.total_generations}</strong> 代，最终种群 <strong>${history.final_population_size ?? '--'}</strong> 个个体，其中可行解 <strong>${history.final_feasible_count ?? '--'}</strong> 个。`
       : '';
     optimizationSection = subSection('2.5 优化过程与方案优选',
-      `<p>求解器采用多目标遗传算法（GA）在搜索空间中寻优。${genInfo}下图为候选方案 Pareto 分布（X=额定功率 kW，Y=NPV 万元，绿色可行/灰色不可行/红色为推荐方案）：</p>` +
-      svgScatterChart(scatterData, 600, 400, { xLabel: '额定功率 (kW)', yLabel: '净现值 (万元)' })
+      `<p>求解器采用多目标遗传算法（GA）在搜索空间中寻优。${genInfo}下图为候选方案 Pareto 分布（X=初始投资万元，Y=NPV 万元，绿色可行/灰色不可行/红色为推荐方案，金色点划线为非支配前沿）：</p>` +
+      svgScatterChart(scatterData, 600, 400, {
+        xLabel: '初始投资 (万元)', yLabel: '净现值 (万元)',
+        referenceLines: [{ value: 0, label: 'NPV=0', color: SEMANTIC_COLORS.constraint, dashArray: '5,5' }],
+        frontierData,
+      })
     );
   }
 
@@ -1348,8 +1504,8 @@ function buildControlStrategy(payload: ReportPayload): string {
       svgDualAxisChart(dualData, 600, 350, {
         leftLabel: '荷电状态 SOC (%)',
         rightLabel: '净放电功率 (kW)',
-        leftColor: '#2563eb',
-        rightColor: '#059669',
+        leftColor: SEMANTIC_COLORS.revenue.primary,
+        rightColor: SEMANTIC_COLORS.feasible,
       })
     );
   }
@@ -1487,39 +1643,85 @@ function buildFinancialCharts(payload: ReportPayload): string {
       value: d.valueWan ?? 0,
     }));
     parts += subSection('4.8 投资构成',
-      svgBarChart(barData, 600, 350, { yLabel: '万元', color: '#1e3a5f', valueFormatter: (v) => `${num(v, 0)} 万元` })
+      svgBarChart(barData, 600, 350, { yLabel: '万元', color: SEMANTIC_COLORS.optimized, valueFormatter: (v) => `${num(v, 0)} 万元` })
     );
   }
 
-  // annual value breakdown stacked chart
+  // annual value breakdown diverging stacked chart
   const valueData = charts.annual_value_breakdown;
   if (valueData?.length) {
-    const positives = valueData.filter(d => (d.valueWan ?? 0) >= 0);
-    const negatives = valueData.filter(d => (d.valueWan ?? 0) < 0);
-    const colors = ['#1e3a5f', '#2563eb', '#059669', '#d97706', '#8b5cf6', '#dc2626', '#0891b2', '#65a30d', '#7c3aed', '#e11d48'];
-    let ci = 0;
-    const posSegments = positives.map(d => ({ key: esc(String(d.name)), value: d.valueWan ?? 0, color: colors[ci++ % colors.length] }));
-    ci = 0;
-    const negSegments = negatives.map(d => ({ key: esc(String(d.name)), value: -(d.valueWan ?? 0), color: colors[ci++ % colors.length] }));
-    const stackedData = [];
-    if (posSegments.length) stackedData.push({ label: '收益项', segments: posSegments });
-    if (negSegments.length) stackedData.push({ label: '成本项', segments: negSegments });
-    if (stackedData.length) {
+    const colors = [SEMANTIC_COLORS.revenue.primary, SEMANTIC_COLORS.revenue.secondary, SEMANTIC_COLORS.revenue.tertiary, SEMANTIC_COLORS.revenue.quaternary, SEMANTIC_COLORS.cost.primary, SEMANTIC_COLORS.cost.secondary, SEMANTIC_COLORS.cost.tertiary];
+    const allSegments = valueData.map((d, i) => ({
+      key: String(d.name || ''),
+      value: d.valueWan ?? 0,
+      color: colors[i % colors.length],
+    }));
+    if (allSegments.length) {
       parts += subSection('4.9 年度收益与成本构成',
-        svgStackedBarChart(stackedData, 600, 380, { yLabel: '万元' })
+        `<p>收益项（正值）向上堆叠，成本项（负值）向下堆叠：</p>` +
+        svgStackedBarChart([{ label: '年度价值', segments: allSegments }], 600, 380, { yLabel: '万元' })
       );
     }
   }
 
-  // cumulative cashflow line chart
+  // LCOS cost composition
+  const lcosData = charts.lcos;
+  if (lcosData?.components?.length) {
+    const summary = lcosData.summary || {};
+    const lcosBars = lcosData.components.map(d => ({
+      label: String(d.name || ''),
+      value: d.valueWan ?? 0,
+    }));
+    const lcosText = summary.lcosYuanPerKwh != null
+      ? `<p>测算 LCOS 为 <strong>${num(summary.lcosYuanPerKwh, 3)} 元/kWh吞吐</strong>，生命周期总成本约 <strong>${num(summary.totalCostWan, 1)} 万元</strong>，对应总吞吐量约 <strong>${num(summary.totalThroughputMwh, 1)} MWh</strong>。</p>`
+      : '<p>LCOS 按生命周期成本与生命周期吞吐量口径测算，当前数据不足以形成单位成本。</p>';
+    parts += subSection('4.10 LCOS 成本构成',
+      lcosText +
+      svgBarChart(lcosBars, 600, 350, {
+        yLabel: '万元',
+        color: SEMANTIC_COLORS.cost.secondary,
+        negativeColor: SEMANTIC_COLORS.revenue.secondary,
+        valueFormatter: (v) => `${num(v, 0)} 万元`,
+      })
+    );
+  }
+
+  // cumulative cashflow line chart (dual cumulative lines)
   const cashflowData = charts.cashflow;
   if (cashflowData?.length) {
-    const lineData = cashflowData.map(d => ({
+    const multiData = cashflowData.map(d => ({ label: `Y${d.year ?? ''}`, cumulativeUndiscountedWan: d.cumulativeUndiscountedWan ?? 0, cumulativeDiscountedWan: d.cumulativeDiscountedWan ?? 0 }));
+    parts += subSection('4.11 累计现金流趋势',
+      `<p>下图为全生命周期累计未折现现金流（虚线）与累计折现现金流（实线）趋势：</p>` +
+      svgLineChart([], 600, 350, {
+        yLabel: '累计现金流（万元）',
+        series: [
+          { key: 'cumulativeUndiscountedWan', color: SEMANTIC_COLORS.baseline, label: '累计未折现', lineStyle: 'dashed' },
+          { key: 'cumulativeDiscountedWan', color: SEMANTIC_COLORS.optimized, label: '累计折现' },
+        ],
+        multiData,
+      })
+    );
+  }
+
+  // SOH / capacity factor lifecycle trend
+  const degradationSoh = charts.degradation_soh;
+  if (degradationSoh?.length) {
+    const multiData = degradationSoh.map(d => ({
       label: `Y${d.year ?? ''}`,
-      value: d.cumulativeDiscountedWan ?? 0,
+      batterySohPct: d.batterySohPct ?? 0,
+      capacityFactorPct: d.capacityFactorPct ?? 0,
     }));
-    parts += subSection('4.10 累计折现现金流趋势',
-      svgLineChart(lineData, 600, 350, { yLabel: '累计折现（万元）', color: '#1e3a5f' })
+    parts += subSection('4.12 SOH 与容量保持率',
+      `<p>下图展示生命周期内电池健康度（SOH）与可用容量保持率；若旧结果文件缺少逐年字段，则按财务摘要首末容量因子或 100% 默认值兼容展示。</p>` +
+      svgLineChart([], 600, 350, {
+        yLabel: '比例（%）',
+        series: [
+          { key: 'batterySohPct', color: SEMANTIC_COLORS.soc, label: 'SOH' },
+          { key: 'capacityFactorPct', color: SEMANTIC_COLORS.optimized, label: '容量保持率', lineStyle: 'dashed' },
+        ],
+        multiData,
+        referenceLines: [{ value: 70, label: '70% 更换阈值', color: SEMANTIC_COLORS.constraint, dashArray: '8,4,2,4' }],
+      })
     );
   }
 
@@ -1530,8 +1732,8 @@ function buildFinancialCharts(payload: ReportPayload): string {
       label: `${d.month ?? ''}月`,
       value: d.netCashflowWan ?? 0,
     }));
-    parts += subSection('4.11 月度净收益分布',
-      svgBarChart(monthlyBars, 600, 350, { yLabel: '万元', color: '#1e3a5f', valueFormatter: (v) => `${num(v, 0)} 万元` })
+    parts += subSection('4.13 月度净收益分布',
+      svgBarChart(monthlyBars, 600, 350, { yLabel: '万元', color: SEMANTIC_COLORS.optimized, valueFormatter: (v) => `${num(v, 0)} 万元` })
     );
     // also render monthly revenue as a table
     const monthCols = ['月份', '峰谷套利（万元）', '需量节约（万元）', '容量收益（万元）', '降损收益（万元）', '罚金（万元）', '净现金流（万元）'];

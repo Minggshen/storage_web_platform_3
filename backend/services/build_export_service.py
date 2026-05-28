@@ -500,7 +500,6 @@ class BuildExportService:
                     "annual_cycle_limit": self._safe_float(self._economic_param(params, economic_params, "annual_cycle_limit", 0.0), 0.0),
                     "calendar_life_years": self._safe_float(self._economic_param(params, economic_params, "calendar_life_years", 20.0), 20.0),
                     "calendar_fade_share": self._safe_float(self._economic_param(params, economic_params, "calendar_fade_share", 0.15), 0.15),
-                    "min_degradation_cost_ratio": self._safe_float(self._economic_param(params, economic_params, "min_degradation_cost_ratio", 0.0), 0.0),
                     "dispatch_mode": str(params.get("dispatch_mode") or "hybrid"),
                     "demand_charge_yuan_per_kw_month": self._safe_float(
                         self._economic_param(
@@ -623,7 +622,7 @@ class BuildExportService:
             "project_life_years", "discount_rate", "annual_revenue_growth_rate", "annual_om_growth_rate",
             "power_related_capex_yuan_per_kw", "integration_markup_ratio", "safety_markup_ratio", "other_capex_yuan",
             "degradation_cost_yuan_per_kwh_throughput", "battery_capex_share", "cycle_life_efc", "annual_cycle_limit",
-            "calendar_life_years", "calendar_fade_share", "min_degradation_cost_ratio",
+            "calendar_life_years", "calendar_fade_share",
             "dispatch_mode", "demand_charge_yuan_per_kw_month", "daily_demand_shadow_yuan_per_kw", "voltage_penalty_coeff_yuan",
             "run_mode",
         ]

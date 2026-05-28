@@ -32,6 +32,7 @@ import {
   getResultFileDownloadUrl,
 } from '../../services/solver';
 import { buildProposalHtml } from '../../services/reportBuilder';
+import { SEMANTIC_COLORS, LINE_STYLES } from '@/constants/chartStyles';
 import type {
   EngineDiagnosticsPayload,
   EngineDiagnosticsScenario,
@@ -52,6 +53,32 @@ type NetworkTopologyChart = {
   selectedNodeId?: string | null;
   dataQuality?: string;
 };
+type TopologyLayerKey = 'lineLoading' | 'nodeVoltage' | 'flowDirection' | 'storageImpact' | 'riskBadges' | 'labels' | 'buildings';
+type TopologyLayers = Record<TopologyLayerKey, boolean>;
+type TopologyRiskSeverity = 'critical' | 'warning' | 'info';
+type TopologyRiskKind = 'edge' | 'node';
+type TopologyRiskItem = {
+  id: string;
+  kind: TopologyRiskKind;
+  objectId: string;
+  title: string;
+  detail: string;
+  valueText: string;
+  severity: TopologyRiskSeverity;
+  priority: number;
+  score: number;
+};
+type ProjectedTopologyNode = ResultChartPoint & {
+  nodeId: string;
+  rawX: number;
+  rawY: number;
+  projectedX: number;
+  projectedY: number;
+};
+type TopologyPathResult = {
+  edgeIds: Set<string>;
+  nodeIds: Set<string>;
+};
 type TopologyLabelPlacement = {
   tx: number;
   ty: number;
@@ -60,18 +87,6 @@ type TopologyLabelPlacement = {
   width: number;
   height: number;
 };
-
-const COLORS = {
-  base: '#1f4e79',
-  accent1: '#d08a33',
-  accent2: '#4f8f5b',
-  accent3: '#8e63a9',
-  accent4: '#c67a7a',
-  gray: '#6b7280',
-  grid: '#e5e7eb',
-};
-
-const PIE_COLORS = [COLORS.base, COLORS.accent1, COLORS.accent4, COLORS.accent2, COLORS.gray, COLORS.accent3];
 
 function toFiniteNumber(value: unknown): number | null {
   if (typeof value === 'number' && Number.isFinite(value)) return value;
@@ -455,6 +470,13 @@ export default function ResultsPage() {
   const capitalBreakdown = nonZeroRows(chartRows(chartData.capital_breakdown));
   const annualValueBreakdown = chartRows(chartData.annual_value_breakdown);
   const financialMetrics = chartRows(chartData.financial_metrics);
+  const lcosSummary = chartData.lcos?.summary;
+  const lcosComponents = nonZeroRows(chartRows(chartData.lcos?.components));
+  const hasLcosData = lcosComponents.length > 0
+    || toFiniteNumber(lcosSummary?.lcosYuanPerKwh) !== null
+    || toFiniteNumber(lcosSummary?.totalCostWan) !== null
+    || toFiniteNumber(lcosSummary?.totalThroughputMwh) !== null;
+  const degradationSoh = chartRows(chartData.degradation_soh);
   const pareto = chartRows(chartData.pareto);
   const history = chartRows(chartData.optimization_history);
   const storageImpact = chartRows(chartData.storage_impact);
@@ -852,6 +874,14 @@ export default function ResultsPage() {
             {financialMetrics.length ? <FinancialMetricsChart data={financialMetrics} /> : <EmptyChart />}
           </ChartCard>
 
+          <ChartCard title="LCOS 成本构成">
+            {hasLcosData ? <LcosChart summary={lcosSummary} components={lcosComponents} /> : <EmptyChart />}
+          </ChartCard>
+
+          <ChartCard title="SOH 与容量保持率">
+            {degradationSoh.length ? <DegradationSohChart data={degradationSoh} /> : <EmptyChart />}
+          </ChartCard>
+
           <ChartCard title="候选方案经济性散点">
             {pareto.length ? <ParetoChart data={pareto} /> : <EmptyChart />}
           </ChartCard>
@@ -1026,12 +1056,12 @@ function ViolationChart(props: { data: ResultChartPoint[] }) {
   return (
     <ResponsiveContainer width="100%" height={310}>
       <BarChart data={props.data} layout="vertical" margin={{ top: 10, right: 18, bottom: 0, left: 78 }}>
-        <CartesianGrid stroke={COLORS.grid} strokeDasharray="3 3" />
+        <CartesianGrid stroke={SEMANTIC_COLORS.grid} strokeDasharray="3 3" />
         <XAxis type="number" />
         <YAxis dataKey="name" type="category" width={104} />
         <Tooltip formatter={numberTooltipFormatter} />
-        <ReferenceLine x={0} stroke="#111827" strokeWidth={1} />
-        <Bar dataKey="value" name="违反量" fill={COLORS.accent4} />
+        <ReferenceLine x={0} stroke={SEMANTIC_COLORS.zeroLine} strokeWidth={1} />
+        <Bar dataKey="value" name="违反量" fill={SEMANTIC_COLORS.cost.primary} />
       </BarChart>
     </ResponsiveContainer>
   );
@@ -1040,6 +1070,8 @@ function ViolationChart(props: { data: ResultChartPoint[] }) {
 function CandidateStatusChart(props: { data: ResultChartPoint[] }) {
   const total = props.data.reduce((sum, row) => sum + (toFiniteNumber(row.count) ?? 0), 0);
   if (total <= 0) return <EmptyChart />;
+  const feasibleCount = props.data.reduce((sum, row) => sum + (String(row.name).includes('不可行') ? 0 : (toFiniteNumber(row.count) ?? 0)), 0);
+  const feasiblePct = total > 0 ? Math.round((feasibleCount / total) * 100) : 0;
   return (
     <ResponsiveContainer width="100%" height={310}>
       <PieChart>
@@ -1047,9 +1079,13 @@ function CandidateStatusChart(props: { data: ResultChartPoint[] }) {
         <Legend />
         <Pie data={props.data} dataKey="count" nameKey="name" innerRadius={62} outerRadius={104} paddingAngle={2}>
           {props.data.map((entry, idx) => (
-            <Cell key={String(entry.name ?? idx)} fill={String(entry.name).includes('不可行') ? COLORS.accent4 : COLORS.accent2} />
+            <Cell key={String(entry.name ?? idx)} fill={String(entry.name).includes('不可行') ? SEMANTIC_COLORS.infeasible : SEMANTIC_COLORS.feasible} />
           ))}
         </Pie>
+        <text x="50%" y="50%" textAnchor="middle" dominantBaseline="middle" style={{ fontSize: 14, fill: SEMANTIC_COLORS.zeroLine }}>
+          <tspan x="50%" dy="-0.5em" style={{ fontSize: 18, fontWeight: 700 }}>{total} 方案</tspan>
+          <tspan x="50%" dy="1.4em" style={{ fontSize: 13, fill: SEMANTIC_COLORS.feasible }}>{feasiblePct}% 可行</tspan>
+        </text>
       </PieChart>
     </ResponsiveContainer>
   );
@@ -1059,13 +1095,13 @@ function CandidateViolationChart(props: { data: ResultChartPoint[] }) {
   return (
     <ResponsiveContainer width="100%" height={310}>
       <ComposedChart data={props.data} margin={{ top: 10, right: 18, bottom: 0, left: 0 }}>
-        <CartesianGrid stroke={COLORS.grid} strokeDasharray="3 3" />
+        <CartesianGrid stroke={SEMANTIC_COLORS.grid} strokeDasharray="3 3" />
         <XAxis dataKey="index" />
         <YAxis />
         <Tooltip formatter={numberTooltipFormatter} />
         <Legend />
-        <Bar dataKey="cycleViolation" name="循环次数超限" fill={COLORS.accent4} opacity={0.7} />
-        <Line type="monotone" dataKey="totalViolation" name="总违反量" stroke="#111827" strokeWidth={2} />
+        <Bar dataKey="cycleViolation" name="循环次数超限" fill={SEMANTIC_COLORS.cost.primary} opacity={0.7} />
+        <Line type="monotone" dataKey="totalViolation" name="总违反量" stroke={SEMANTIC_COLORS.zeroLine} strokeWidth={2} />
       </ComposedChart>
     </ResponsiveContainer>
   );
@@ -1075,18 +1111,18 @@ function StorageImpactChart(props: { data: ResultChartPoint[] }) {
   return (
     <ResponsiveContainer width="100%" height={310}>
       <ComposedChart data={props.data} margin={{ top: 10, right: 18, bottom: 0, left: 0 }}>
-        <CartesianGrid stroke={COLORS.grid} strokeDasharray="3 3" />
+        <CartesianGrid stroke={SEMANTIC_COLORS.grid} strokeDasharray="3 3" />
         <XAxis dataKey="hour" />
         <YAxis yAxisId="power" />
         <YAxis yAxisId="tariff" orientation="right" />
         <Tooltip formatter={numberTooltipFormatter} />
         <Legend />
-        <ReferenceLine yAxisId="power" y={0} stroke="#111827" strokeWidth={1} />
-        <Bar yAxisId="power" dataKey="dischargeKw" name="放电削峰" fill={COLORS.accent2} />
-        <Bar yAxisId="power" dataKey="chargeKw" name="充电增荷" fill={COLORS.accent1} />
-        <Line yAxisId="power" type="monotone" dataKey="actualNetLoadKw" name="储能前净负荷" stroke={COLORS.base} strokeWidth={2} dot={false} />
-        <Line yAxisId="power" type="monotone" dataKey="gridExchangeKw" name="储能后并网功率" stroke="#111827" strokeWidth={2} dot={false} />
-        <Line yAxisId="tariff" type="stepAfter" dataKey="tariffYuanPerKwh" name="电价" stroke={COLORS.accent3} strokeWidth={2} dot={false} />
+        <ReferenceLine yAxisId="power" y={0} stroke={SEMANTIC_COLORS.zeroLine} strokeWidth={1} />
+        <Bar yAxisId="power" dataKey="dischargeKw" name="放电削峰" fill={SEMANTIC_COLORS.discharge} />
+        <Bar yAxisId="power" dataKey="chargeKw" name="充电增荷" fill={SEMANTIC_COLORS.charge} />
+        <Line yAxisId="power" type="monotone" dataKey="actualNetLoadKw" name="储能前净负荷" stroke={SEMANTIC_COLORS.baseline} strokeDasharray={LINE_STYLES.dashed} strokeWidth={2} dot={false} />
+        <Line yAxisId="power" type="monotone" dataKey="gridExchangeKw" name="储能后并网功率" stroke={SEMANTIC_COLORS.optimized} strokeWidth={2} dot={false} />
+        <Line yAxisId="tariff" type="stepAfter" dataKey="tariffYuanPerKwh" name="电价" stroke={SEMANTIC_COLORS.tariff} strokeWidth={2} dot={false} />
       </ComposedChart>
     </ResponsiveContainer>
   );
@@ -1096,17 +1132,17 @@ function NetworkConstraintChart(props: { data: ResultChartPoint[] }) {
   return (
     <ResponsiveContainer width="100%" height={310}>
       <ComposedChart data={props.data} margin={{ top: 10, right: 18, bottom: 0, left: 0 }}>
-        <CartesianGrid stroke={COLORS.grid} strokeDasharray="3 3" />
+        <CartesianGrid stroke={SEMANTIC_COLORS.grid} strokeDasharray="3 3" />
         <XAxis dataKey="dayIndex" />
         <YAxis yAxisId="penalty" />
         <YAxis yAxisId="power" orientation="right" />
         <Tooltip formatter={numberTooltipFormatter} />
         <Legend />
-        <ReferenceLine yAxisId="power" y={0} stroke="#111827" strokeWidth={1} />
-        <Bar yAxisId="penalty" dataKey="transformerPenaltyWan" name="变压器罚金" fill={COLORS.accent4} opacity={0.7} />
-        <Bar yAxisId="penalty" dataKey="voltagePenaltyWan" name="电压罚金" fill={COLORS.accent1} opacity={0.7} />
-        <Line yAxisId="power" type="monotone" dataKey="maxGridExchangeKw" name="日最大并网功率" stroke={COLORS.base} strokeWidth={1.6} dot={false} />
-        <Line yAxisId="power" type="monotone" dataKey="opendssLossReductionKwh" name="OpenDSS日网损差" stroke="#0f766e" strokeWidth={1.6} dot={false} />
+        <ReferenceLine yAxisId="power" y={0} stroke={SEMANTIC_COLORS.zeroLine} strokeWidth={1} />
+        <Bar yAxisId="penalty" dataKey="transformerPenaltyWan" name="变压器罚金" fill={SEMANTIC_COLORS.cost.primary} opacity={0.7} />
+        <Bar yAxisId="penalty" dataKey="voltagePenaltyWan" name="电压罚金" fill={SEMANTIC_COLORS.cost.secondary} opacity={0.7} />
+        <Line yAxisId="power" type="monotone" dataKey="maxGridExchangeKw" name="日最大并网功率" stroke={SEMANTIC_COLORS.optimized} strokeWidth={1.6} dot={false} />
+        <Line yAxisId="power" type="monotone" dataKey="opendssLossReductionKwh" name="OpenDSS日网损差" stroke={SEMANTIC_COLORS.revenue.secondary} strokeWidth={1.6} dot={false} />
       </ComposedChart>
     </ResponsiveContainer>
   );
@@ -1117,13 +1153,13 @@ function LineCapacityChart(props: { data: ResultChartPoint[] }) {
   return (
     <ResponsiveContainer width="100%" height={310}>
       <BarChart data={data} layout="vertical" margin={{ top: 10, right: 18, bottom: 0, left: 78 }}>
-        <CartesianGrid stroke={COLORS.grid} strokeDasharray="3 3" />
+        <CartesianGrid stroke={SEMANTIC_COLORS.grid} strokeDasharray="3 3" />
         <XAxis type="number" />
         <YAxis dataKey="lineId" type="category" width={104} />
         <Tooltip formatter={numberTooltipFormatter} />
         <Legend />
-        <Bar dataKey="normamps" name="额定电流 A" fill={COLORS.base} />
-        <Bar dataKey="emergamps" name="应急电流 A" fill={COLORS.accent1} />
+        <Bar dataKey="normamps" name="额定电流 A" fill={SEMANTIC_COLORS.optimized} />
+        <Bar dataKey="emergamps" name="应急电流 A" fill={SEMANTIC_COLORS.cost.secondary} />
       </BarChart>
     </ResponsiveContainer>
   );
@@ -1133,19 +1169,21 @@ function MonthlyRevenueChart(props: { data: ResultChartPoint[] }) {
   return (
     <ResponsiveContainer width="100%" height={310}>
       <ComposedChart data={props.data} margin={{ top: 10, right: 18, bottom: 0, left: 0 }}>
-        <CartesianGrid stroke={COLORS.grid} strokeDasharray="3 3" />
+        <CartesianGrid stroke={SEMANTIC_COLORS.grid} strokeDasharray="3 3" />
         <XAxis dataKey="month" />
         <YAxis />
         <Tooltip formatter={numberTooltipFormatter} />
         <Legend />
-        <ReferenceLine y={0} stroke="#111827" strokeWidth={1} />
-        <Bar dataKey="arbitrageRevenueWan" name="套利收益" stackId="revenue" fill={COLORS.base} />
-        <Bar dataKey="demandSavingWan" name="需量收益" stackId="revenue" fill={COLORS.accent1} />
-        <Bar dataKey="serviceNetRevenueWan" name="服务净收益" stackId="revenue" fill={COLORS.accent2} />
-        <Bar dataKey="capacityRevenueWan" name="容量收益" stackId="revenue" fill={COLORS.accent3} />
-        <Bar dataKey="lossReductionRevenueWan" name="降损收益" stackId="revenue" fill="#0f766e" />
-        <Bar dataKey="penaltyCostWan" name="退化与罚金" fill={COLORS.accent4} />
-        <Line type="monotone" dataKey="netCashflowWan" name="月净现金流" stroke="#111827" strokeWidth={2} dot={false} />
+        <ReferenceLine y={0} stroke={SEMANTIC_COLORS.zeroLine} strokeWidth={1} />
+        {/* Revenue items stacked upward */}
+        <Bar dataKey="arbitrageRevenueWan" name="套利收益" stackId="revenue" fill={SEMANTIC_COLORS.revenue.primary} />
+        <Bar dataKey="demandSavingWan" name="需量收益" stackId="revenue" fill={SEMANTIC_COLORS.revenue.secondary} />
+        <Bar dataKey="serviceNetRevenueWan" name="服务净收益" stackId="revenue" fill={SEMANTIC_COLORS.revenue.tertiary} />
+        <Bar dataKey="capacityRevenueWan" name="容量收益" stackId="revenue" fill={SEMANTIC_COLORS.revenue.quaternary} />
+        <Bar dataKey="lossReductionRevenueWan" name="降损收益" stackId="revenue" fill={SEMANTIC_COLORS.revenue.lossReduction} />
+        {/* Cost items stacked downward */}
+        <Bar dataKey="penaltyCostWan" name="退化与罚金" stackId="cost" fill={SEMANTIC_COLORS.cost.primary} />
+        <Line type="monotone" dataKey="netCashflowWan" name="月净现金流" stroke={SEMANTIC_COLORS.zeroLine} strokeWidth={2} dot={false} />
       </ComposedChart>
     </ResponsiveContainer>
   );
@@ -1155,17 +1193,17 @@ function RepresentativeDayChart(props: { data: ResultChartPoint[] }) {
   return (
     <ResponsiveContainer width="100%" height={310}>
       <ComposedChart data={props.data} margin={{ top: 10, right: 18, bottom: 0, left: 0 }}>
-        <CartesianGrid stroke={COLORS.grid} strokeDasharray="3 3" />
+        <CartesianGrid stroke={SEMANTIC_COLORS.grid} strokeDasharray="3 3" />
         <XAxis dataKey="hour" />
         <YAxis yAxisId="power" />
         <YAxis yAxisId="tariff" orientation="right" />
         <Tooltip formatter={numberTooltipFormatter} />
         <Legend />
-        <ReferenceLine yAxisId="power" y={0} stroke="#111827" strokeWidth={1} />
-        <Bar yAxisId="power" dataKey="dischargeKw" name="放电功率" fill={COLORS.accent2} />
-        <Bar yAxisId="power" dataKey="chargeKw" name="充电功率" fill={COLORS.accent1} />
-        <Line yAxisId="power" type="monotone" dataKey="gridExchangeKw" name="并网交换功率" stroke="#111827" strokeWidth={2} dot={false} />
-        <Line yAxisId="tariff" type="stepAfter" dataKey="tariffYuanPerKwh" name="分时电价" stroke={COLORS.accent3} strokeWidth={2} dot={false} />
+        <ReferenceLine yAxisId="power" y={0} stroke={SEMANTIC_COLORS.zeroLine} strokeWidth={1} />
+        <Bar yAxisId="power" dataKey="dischargeKw" name="放电功率" fill={SEMANTIC_COLORS.discharge} />
+        <Bar yAxisId="power" dataKey="chargeKw" name="充电功率" fill={SEMANTIC_COLORS.charge} />
+        <Line yAxisId="power" type="monotone" dataKey="gridExchangeKw" name="并网交换功率" stroke={SEMANTIC_COLORS.optimized} strokeWidth={2} dot={false} />
+        <Line yAxisId="tariff" type="stepAfter" dataKey="tariffYuanPerKwh" name="分时电价" stroke={SEMANTIC_COLORS.tariff} strokeWidth={2} dot={false} />
       </ComposedChart>
     </ResponsiveContainer>
   );
@@ -1175,15 +1213,21 @@ function SocCashflowChart(props: { data: ResultChartPoint[] }) {
   return (
     <ResponsiveContainer width="100%" height={310}>
       <ComposedChart data={props.data} margin={{ top: 10, right: 18, bottom: 0, left: 0 }}>
-        <CartesianGrid stroke={COLORS.grid} strokeDasharray="3 3" />
+        <CartesianGrid stroke={SEMANTIC_COLORS.grid} strokeDasharray="3 3" />
         <XAxis dataKey="hour" />
         <YAxis yAxisId="soc" domain={[0, 1]} />
         <YAxis yAxisId="cash" orientation="right" />
         <Tooltip formatter={numberTooltipFormatter} />
         <Legend />
-        <ReferenceLine yAxisId="cash" y={0} stroke="#111827" strokeWidth={1} />
-        <Bar yAxisId="cash" dataKey="netCashflowYuan" name="小时净收益" fill={COLORS.accent4} opacity={0.45} />
-        <Line yAxisId="soc" type="natural" dataKey="socClose" name="SOC" stroke={COLORS.accent2} strokeWidth={2.4} strokeLinecap="round" strokeLinejoin="round" dot={false} />
+        <ReferenceLine yAxisId="cash" y={0} stroke={SEMANTIC_COLORS.zeroLine} strokeWidth={1} />
+        <ReferenceLine yAxisId="soc" y={0} stroke={SEMANTIC_COLORS.constraint} strokeDasharray={LINE_STYLES.dashed} strokeWidth={1} />
+        <ReferenceLine yAxisId="soc" y={1} stroke={SEMANTIC_COLORS.constraint} strokeDasharray={LINE_STYLES.dashed} strokeWidth={1} />
+        <Bar yAxisId="cash" dataKey="netCashflowYuan" name="小时净收益" opacity={0.55}>
+          {props.data.map((entry, idx) => (
+            <Cell key={String(idx)} fill={(toFiniteNumber(entry.netCashflowYuan) ?? 0) >= 0 ? SEMANTIC_COLORS.discharge : SEMANTIC_COLORS.charge} />
+          ))}
+        </Bar>
+        <Line yAxisId="soc" type="monotone" dataKey="socClose" name="SOC" stroke={SEMANTIC_COLORS.soc} strokeWidth={2.4} strokeLinecap="round" strokeLinejoin="round" dot={false} />
       </ComposedChart>
     </ResponsiveContainer>
   );
@@ -1241,7 +1285,7 @@ function YearlySocChart(props: { data: ResultChartPoint[] }) {
     <div ref={containerRef} style={{ overflow: 'hidden' }}>
       <ResponsiveContainer width="100%" height={310}>
         <ComposedChart data={props.data} margin={{ top: 10, right: 18, bottom: 8, left: 0 }}>
-          <CartesianGrid stroke={COLORS.grid} strokeDasharray="3 3" />
+          <CartesianGrid stroke={SEMANTIC_COLORS.grid} strokeDasharray="3 3" />
           <XAxis
             dataKey="hourOfYear"
             tickFormatter={formatHourOfYearTick}
@@ -1254,7 +1298,7 @@ function YearlySocChart(props: { data: ResultChartPoint[] }) {
             type="monotone"
             dataKey="socClose"
             name="SOC"
-            stroke={COLORS.accent2}
+            stroke={SEMANTIC_COLORS.soc}
             strokeWidth={1.8}
             dot={false}
             isAnimationActive={false}
@@ -1281,15 +1325,15 @@ function DailyOperationChart(props: { data: ResultChartPoint[] }) {
   return (
     <ResponsiveContainer width="100%" height={310}>
       <ComposedChart data={props.data} margin={{ top: 10, right: 18, bottom: 0, left: 0 }}>
-        <CartesianGrid stroke={COLORS.grid} strokeDasharray="3 3" />
+        <CartesianGrid stroke={SEMANTIC_COLORS.grid} strokeDasharray="3 3" />
         <XAxis dataKey="dayIndex" />
         <YAxis yAxisId="throughput" />
         <YAxis yAxisId="cashflow" orientation="right" />
         <Tooltip formatter={numberTooltipFormatter} />
         <Legend />
-        <Line yAxisId="throughput" type="monotone" dataKey="throughputKwh" name="日吞吐量" stroke={COLORS.base} strokeWidth={1.2} dot={false} opacity={0.3} />
-        <Line yAxisId="throughput" type="monotone" dataKey="throughputMa7Kwh" name="吞吐量7日均值" stroke={COLORS.accent1} strokeWidth={2} dot={false} />
-        <Line yAxisId="cashflow" type="monotone" dataKey="netCashflowMa7Yuan" name="净收益7日均值" stroke="#111827" strokeWidth={2} dot={false} />
+        <Bar yAxisId="throughput" dataKey="throughputKwh" name="日吞吐量" fill={SEMANTIC_COLORS.optimized} opacity={0.25} />
+        <Line yAxisId="throughput" type="monotone" dataKey="throughputMa7Kwh" name="吞吐量7日均值" stroke={SEMANTIC_COLORS.revenue.secondary} strokeWidth={2} dot={false} />
+        <Line yAxisId="cashflow" type="monotone" dataKey="netCashflowMa7Yuan" name="净收益7日均值" stroke={SEMANTIC_COLORS.zeroLine} strokeWidth={2} dot={false} />
       </ComposedChart>
     </ResponsiveContainer>
   );
@@ -1308,39 +1352,60 @@ function formatHourOfYearLabel(value: unknown): string {
 }
 
 function CashflowChart(props: { data: ResultChartPoint[] }) {
+  let paybackYear: number | null = null;
+  for (const d of props.data) {
+    const cum = toFiniteNumber(d.cumulativeDiscountedWan);
+    if (cum !== null && cum >= 0) { paybackYear = toFiniteNumber(d.year); break; }
+  }
+
   return (
     <ResponsiveContainer width="100%" height={310}>
       <ComposedChart data={props.data} margin={{ top: 10, right: 18, bottom: 0, left: 0 }}>
-        <CartesianGrid stroke={COLORS.grid} strokeDasharray="3 3" />
+        <CartesianGrid stroke={SEMANTIC_COLORS.grid} strokeDasharray="3 3" />
         <XAxis dataKey="year" />
         <YAxis />
         <Tooltip formatter={numberTooltipFormatter} />
         <Legend />
-        <ReferenceLine y={0} stroke="#111827" strokeWidth={1} />
-        <Bar dataKey="operatingRevenueWan" name="运行收益" fill={COLORS.base} opacity={0.72} />
-        <Bar dataKey="operatingCostWan" name="运行成本" fill={COLORS.accent4} opacity={0.72} />
-        <Bar dataKey="omCostWan" name="运维成本" fill={COLORS.accent1} opacity={0.72} />
-        <Bar dataKey="replacementCostWan" name="更换成本" fill="#7c2d12" opacity={0.72} />
-        <Bar dataKey="salvageValueWan" name="残值" fill={COLORS.accent2} opacity={0.72} />
-        <Line type="monotone" dataKey="discountedNetCashflowWan" name="折现净现金流" stroke={COLORS.accent1} strokeWidth={2} />
-        <Line type="monotone" dataKey="cumulativeDiscountedWan" name="累计折现现金流" stroke={COLORS.base} strokeWidth={2.2} />
+        <ReferenceLine y={0} stroke={SEMANTIC_COLORS.zeroLine} strokeWidth={1} />
+        {/* Annual net cashflow bars — positive green, negative red */}
+        <Bar dataKey="netCashflowWan" name="年净现金流" opacity={0.72}>
+          {props.data.map((entry, idx) => (
+            <Cell key={String(idx)} fill={(toFiniteNumber(entry.netCashflowWan) ?? 0) >= 0 ? SEMANTIC_COLORS.revenue.secondary : SEMANTIC_COLORS.cost.primary} />
+          ))}
+        </Bar>
+        <Line type="monotone" dataKey="cumulativeUndiscountedWan" name="累计未折现现金流" stroke={SEMANTIC_COLORS.baseline} strokeDasharray={LINE_STYLES.dashed} strokeWidth={2} dot={false} />
+        <Line type="monotone" dataKey="cumulativeDiscountedWan" name="累计折现现金流" stroke={SEMANTIC_COLORS.optimized} strokeWidth={2.2} dot={false} />
+        {paybackYear !== null && paybackYear > 0 && (
+          <ReferenceLine x={paybackYear} stroke={SEMANTIC_COLORS.recommended} strokeDasharray={LINE_STYLES.dashDot} strokeWidth={1.5} label={{ value: `回收期 ${paybackYear} 年`, position: 'top', fill: SEMANTIC_COLORS.recommended, fontSize: 12 }} />
+        )}
       </ComposedChart>
     </ResponsiveContainer>
   );
 }
 
 function CapitalBreakdownChart(props: { data: ResultChartPoint[] }) {
+  const nonZeroRows = props.data.filter((d) => (toFiniteNumber(d.valueWan) ?? 0) !== 0);
+  if (nonZeroRows.length === 0) return <EmptyChart />;
+  const sorted = [...nonZeroRows].sort((a, b) => (toFiniteNumber(b.valueWan) ?? 0) - (toFiniteNumber(a.valueWan) ?? 0));
+  const total = sorted.reduce((sum, d) => sum + (toFiniteNumber(d.valueWan) ?? 0), 0);
+  const height = Math.max(310, sorted.length * 44 + 48);
+  const CAPITAL_COLORS = [SEMANTIC_COLORS.optimized, SEMANTIC_COLORS.cost.secondary, SEMANTIC_COLORS.cost.primary, SEMANTIC_COLORS.revenue.secondary, SEMANTIC_COLORS.neutral, SEMANTIC_COLORS.tariff];
   return (
-    <ResponsiveContainer width="100%" height={310}>
-      <PieChart>
-        <Tooltip formatter={numberTooltipFormatter} />
-        <Legend />
-        <Pie data={props.data} dataKey="valueWan" nameKey="name" innerRadius={62} outerRadius={104} paddingAngle={2}>
-          {props.data.map((entry, idx) => (
-            <Cell key={String(entry.name ?? idx)} fill={PIE_COLORS[idx % PIE_COLORS.length]} />
+    <ResponsiveContainer width="100%" height={height}>
+      <BarChart data={sorted} layout="vertical" margin={{ top: 10, right: 18, bottom: 0, left: 8 }}>
+        <CartesianGrid stroke={SEMANTIC_COLORS.grid} strokeDasharray="3 3" />
+        <XAxis type="number" />
+        <YAxis dataKey="name" type="category" width={104} interval={0} />
+        <Tooltip formatter={(value: unknown) => {
+          const num = toFiniteNumber(value) ?? 0;
+          return [`${num.toLocaleString('zh-CN', { maximumFractionDigits: 2 })} 万元 (${total > 0 ? ((num / total) * 100).toFixed(1) : 0}%)`, '投资额'];
+        }} />
+        <Bar dataKey="valueWan" name="投资额">
+          {sorted.map((entry, idx) => (
+            <Cell key={String(entry.name ?? idx)} fill={CAPITAL_COLORS[idx % CAPITAL_COLORS.length]} />
           ))}
-        </Pie>
-      </PieChart>
+        </Bar>
+      </BarChart>
     </ResponsiveContainer>
   );
 }
@@ -1350,14 +1415,14 @@ function AnnualValueChart(props: { data: ResultChartPoint[] }) {
   return (
     <ResponsiveContainer width="100%" height={height}>
       <BarChart data={props.data} layout="vertical" margin={{ top: 10, right: 18, bottom: 0, left: 8 }}>
-        <CartesianGrid stroke={COLORS.grid} strokeDasharray="3 3" />
+        <CartesianGrid stroke={SEMANTIC_COLORS.grid} strokeDasharray="3 3" />
         <XAxis type="number" />
         <YAxis dataKey="name" type="category" width={120} interval={0} />
         <Tooltip formatter={numberTooltipFormatter} />
-        <ReferenceLine x={0} stroke="#111827" strokeWidth={1} />
+        <ReferenceLine x={0} stroke={SEMANTIC_COLORS.zeroLine} strokeWidth={1} />
         <Bar dataKey="valueWan" name="金额">
           {props.data.map((entry, idx) => (
-            <Cell key={String(entry.name ?? idx)} fill={(toFiniteNumber(entry.valueWan) ?? 0) >= 0 ? COLORS.base : COLORS.accent4} />
+            <Cell key={String(entry.name ?? idx)} fill={(toFiniteNumber(entry.valueWan) ?? 0) >= 0 ? SEMANTIC_COLORS.revenue.primary : SEMANTIC_COLORS.cost.primary} />
           ))}
         </Bar>
       </BarChart>
@@ -1379,19 +1444,96 @@ function FinancialMetricsChart(props: { data: ResultChartPoint[] }) {
   );
 }
 
+function LcosChart(props: { summary?: ResultChartPoint; components: ResultChartPoint[] }) {
+  const summary = props.summary ?? {};
+  const lcos = toFiniteNumber(summary.lcosYuanPerKwh);
+  const totalCost = toFiniteNumber(summary.totalCostWan);
+  const totalThroughput = toFiniteNumber(summary.totalThroughputMwh);
+  const averageRevenue = toFiniteNumber(summary.averageRevenueYuanPerKwh);
+  const height = Math.max(240, props.components.length * 36 + 96);
+  return (
+    <div style={{ display: 'grid', gap: 12 }}>
+      <div style={metricGridStyle}>
+        <Metric label="LCOS" value={lcos === null ? '--' : `${lcos.toFixed(3)} 元/kWh`} />
+        <Metric label="生命周期成本" value={totalCost === null ? '--' : `${totalCost.toLocaleString('zh-CN', { maximumFractionDigits: 1 })} 万元`} />
+        <Metric label="生命周期吞吐量" value={totalThroughput === null ? '--' : `${totalThroughput.toLocaleString('zh-CN', { maximumFractionDigits: 1 })} MWh`} />
+        <Metric label="等效收益单价" value={averageRevenue === null ? '--' : `${averageRevenue.toFixed(3)} 元/kWh`} />
+      </div>
+      {props.components.length ? (
+        <ResponsiveContainer width="100%" height={height}>
+          <BarChart data={props.components} layout="vertical" margin={{ top: 10, right: 18, bottom: 0, left: 8 }}>
+            <CartesianGrid stroke={SEMANTIC_COLORS.grid} strokeDasharray="3 3" />
+            <XAxis type="number" />
+            <YAxis dataKey="name" type="category" width={112} interval={0} />
+            <Tooltip formatter={numberTooltipFormatter} />
+            <ReferenceLine x={0} stroke={SEMANTIC_COLORS.zeroLine} strokeWidth={1} />
+            <Bar dataKey="valueWan" name="成本构成">
+              {props.components.map((entry, idx) => (
+                <Cell key={String(entry.name ?? idx)} fill={(toFiniteNumber(entry.valueWan) ?? 0) >= 0 ? SEMANTIC_COLORS.cost.secondary : SEMANTIC_COLORS.revenue.secondary} />
+              ))}
+            </Bar>
+          </BarChart>
+        </ResponsiveContainer>
+      ) : null}
+    </div>
+  );
+}
+
+function DegradationSohChart(props: { data: ResultChartPoint[] }) {
+  const hasCost = props.data.some((row) => Math.abs(toFiniteNumber(row.degradationCostWan) ?? 0) > 0 || Math.abs(toFiniteNumber(row.replacementCostWan) ?? 0) > 0);
+  return (
+    <ResponsiveContainer width="100%" height={310}>
+      <ComposedChart data={props.data} margin={{ top: 10, right: 18, bottom: 0, left: 0 }}>
+        <CartesianGrid stroke={SEMANTIC_COLORS.grid} strokeDasharray="3 3" />
+        <XAxis dataKey="year" />
+        <YAxis yAxisId="pct" domain={[0, 105]} tickFormatter={(value) => `${value}%`} />
+        {hasCost ? <YAxis yAxisId="cost" orientation="right" /> : null}
+        <Tooltip formatter={numberTooltipFormatter} />
+        <Legend />
+        {hasCost ? <Bar yAxisId="cost" dataKey="degradationCostWan" name="退化成本（万元）" fill={SEMANTIC_COLORS.cost.secondary} opacity={0.62} /> : null}
+        {hasCost ? <Bar yAxisId="cost" dataKey="replacementCostWan" name="更换成本（万元）" fill={SEMANTIC_COLORS.cost.primary} opacity={0.72} /> : null}
+        <Line yAxisId="pct" type="monotone" dataKey="batterySohPct" name="SOH" stroke={SEMANTIC_COLORS.soc} strokeWidth={2.2} dot={false} />
+        <Line yAxisId="pct" type="monotone" dataKey="capacityFactorPct" name="容量保持率" stroke={SEMANTIC_COLORS.optimized} strokeDasharray={LINE_STYLES.dashed} strokeWidth={2} dot={false} />
+        <ReferenceLine yAxisId="pct" y={70} stroke={SEMANTIC_COLORS.constraint} strokeDasharray={LINE_STYLES.dashDot} strokeWidth={1} label={{ value: '70% 更换阈值', position: 'insideTopRight', fill: SEMANTIC_COLORS.constraint, fontSize: 12 }} />
+      </ComposedChart>
+    </ResponsiveContainer>
+  );
+}
+
 function ParetoChart(props: { data: ResultChartPoint[] }) {
+  // Prefer backend non-dominated labels; fall back to legacy frontend inference for old results.
+  const frontier = useMemo(() => {
+    const backendFrontier = props.data
+      .filter(d => d.paretoFrontier === true)
+      .sort((a, b) => (toFiniteNumber(a.frontierOrder) ?? 0) - (toFiniteNumber(b.frontierOrder) ?? 0));
+    if (backendFrontier.length > 0) return backendFrontier;
+    const sorted = [...props.data].filter(d => d.feasible).sort((a, b) => (toFiniteNumber(a.initialInvestmentWan) ?? 0) - (toFiniteNumber(b.initialInvestmentWan) ?? 0));
+    const front: typeof sorted = [];
+    let maxNpv = -Infinity;
+    for (const p of sorted) {
+      const npv = toFiniteNumber(p.npvWan) ?? -Infinity;
+      if (npv > maxNpv) { maxNpv = npv; front.push(p); }
+    }
+    return front;
+  }, [props.data]);
+
   return (
     <ResponsiveContainer width="100%" height={310}>
       <ScatterChart margin={{ top: 10, right: 18, bottom: 0, left: 0 }}>
-        <CartesianGrid stroke={COLORS.grid} strokeDasharray="3 3" />
+        <CartesianGrid stroke={SEMANTIC_COLORS.grid} strokeDasharray="3 3" />
         <XAxis dataKey="initialInvestmentWan" name="初始投资" type="number" />
         <YAxis dataKey="npvWan" name="NPV" type="number" />
         <ZAxis dataKey="ratedEnergyKwh" range={[70, 220]} />
         <Tooltip formatter={numberTooltipFormatter} cursor={{ strokeDasharray: '3 3' }} />
         <Legend />
+        <ReferenceLine y={0} stroke={SEMANTIC_COLORS.constraint} strokeDasharray={LINE_STYLES.dashed} strokeWidth={1} />
+        {/* Pareto frontier line */}
+        {frontier.length >= 2 && (
+          <Scatter data={frontier} name="Pareto 前沿" line={{ stroke: SEMANTIC_COLORS.recommended, strokeWidth: 2, strokeDasharray: LINE_STYLES.dashDot }} shape={() => <circle r={0} />} />
+        )}
         <Scatter data={props.data} name="候选方案">
           {props.data.map((entry, idx) => (
-            <Cell key={String(entry.index ?? idx)} fill={entry.feasible ? COLORS.accent2 : COLORS.accent4} />
+            <Cell key={String(entry.index ?? idx)} fill={entry.feasible ? SEMANTIC_COLORS.feasible : SEMANTIC_COLORS.infeasible} />
           ))}
         </Scatter>
       </ScatterChart>
@@ -1400,18 +1542,21 @@ function ParetoChart(props: { data: ResultChartPoint[] }) {
 }
 
 function HistoryChart(props: { data: ResultChartPoint[] }) {
+  // Show only fields that actually exist in the data
+  const hasAvgNpv = props.data.some(d => toFiniteNumber(d.avgNpvWan) !== null);
   return (
     <ResponsiveContainer width="100%" height={310}>
       <ComposedChart data={props.data} margin={{ top: 10, right: 18, bottom: 0, left: 0 }}>
-        <CartesianGrid stroke={COLORS.grid} strokeDasharray="3 3" />
+        <CartesianGrid stroke={SEMANTIC_COLORS.grid} strokeDasharray="3 3" />
         <XAxis dataKey="generation" />
         <YAxis yAxisId="npv" />
         <YAxis yAxisId="count" orientation="right" allowDecimals={false} />
         <Tooltip formatter={numberTooltipFormatter} />
         <Legend />
-        <Line yAxisId="npv" type="monotone" dataKey="bestNpvWan" name="最优NPV" stroke={COLORS.base} strokeWidth={2} />
-        <Line yAxisId="count" type="monotone" dataKey="archiveSize" name="Archive大小" stroke={COLORS.accent1} strokeWidth={2} />
-        <Bar yAxisId="count" dataKey="feasibleCount" name="可行解数量" fill={COLORS.accent2} opacity={0.55} />
+        <Line yAxisId="npv" type="monotone" dataKey="bestNpvWan" name="最优NPV" stroke={SEMANTIC_COLORS.optimized} strokeWidth={2} />
+        {hasAvgNpv && <Line yAxisId="npv" type="monotone" dataKey="avgNpvWan" name="平均NPV" stroke={SEMANTIC_COLORS.baseline} strokeWidth={1.5} strokeDasharray={LINE_STYLES.dashed} dot={false} />}
+        <Line yAxisId="count" type="monotone" dataKey="archiveSize" name="Archive大小" stroke={SEMANTIC_COLORS.revenue.secondary} strokeWidth={2} />
+        <Bar yAxisId="count" dataKey="feasibleCount" name="可行解数量" fill={SEMANTIC_COLORS.feasible} opacity={0.55} />
       </ComposedChart>
     </ResponsiveContainer>
   );
@@ -1490,22 +1635,265 @@ function EngineDiagnosticsScenarioBlock(props: { scenario: EngineDiagnosticsScen
       {historyData.length ? (
         <ResponsiveContainer width="100%" height={310}>
           <ComposedChart data={historyData} margin={{ top: 10, right: 18, bottom: 0, left: 0 }}>
-            <CartesianGrid stroke={COLORS.grid} strokeDasharray="3 3" />
+            <CartesianGrid stroke={SEMANTIC_COLORS.grid} strokeDasharray="3 3" />
             <XAxis dataKey="generation" />
             <YAxis yAxisId="npv" />
             <YAxis yAxisId="count" orientation="right" allowDecimals={false} />
             <Tooltip formatter={numberTooltipFormatter} />
             <Legend />
-            <Bar yAxisId="count" dataKey="feasible_count" name="可行解数量" fill={COLORS.accent2} opacity={0.55} />
-            <Line yAxisId="count" type="monotone" dataKey="population_size" name="种群规模" stroke={COLORS.accent1} strokeWidth={2} dot={false} />
-            <Line yAxisId="count" type="monotone" dataKey="archive_size" name="Archive 大小" stroke={COLORS.accent3} strokeWidth={2} dot={false} />
-            <Line yAxisId="npv" type="monotone" dataKey="best_npv_yuan" name="最优 NPV (元)" stroke={COLORS.base} strokeWidth={2.2} dot={false} />
+            <Bar yAxisId="count" dataKey="feasible_count" name="可行解数量" fill={SEMANTIC_COLORS.feasible} opacity={0.55} />
+            <Line yAxisId="count" type="monotone" dataKey="population_size" name="种群规模" stroke={SEMANTIC_COLORS.revenue.secondary} strokeWidth={2} dot={false} />
+            <Line yAxisId="count" type="monotone" dataKey="archive_size" name="Archive 大小" stroke={SEMANTIC_COLORS.tariff} strokeWidth={2} dot={false} />
+            <Line yAxisId="npv" type="monotone" dataKey="best_npv_yuan" name="最优 NPV (元)" stroke={SEMANTIC_COLORS.optimized} strokeWidth={2.2} dot={false} />
           </ComposedChart>
         </ResponsiveContainer>
       ) : (
         <EmptyChart />
       )}
     </div>
+  );
+}
+
+function projectTopologyPoint(x: number, y: number, depth = 0) {
+  return {
+    x: x + y * 0.18,
+    y: y * 0.62 - depth,
+  };
+}
+
+function buildProjectedTopologyNodes(nodes: ResultChartPoint[]): ProjectedTopologyNode[] {
+  return nodes.map((node, index) => {
+    const rawX = toFiniteNumber(node.x) ?? index * 90;
+    const rawY = toFiniteNumber(node.y) ?? (index % 7) * 70;
+    const projected = projectTopologyPoint(rawX, rawY);
+    return {
+      ...node,
+      nodeId: String(node.id ?? node.bus ?? node.name ?? `node-${index}`),
+      rawX,
+      rawY,
+      projectedX: projected.x,
+      projectedY: projected.y,
+    };
+  });
+}
+
+function isTopologyRootNode(node: ResultChartPoint) {
+  const type = String(node.type ?? '').toLowerCase();
+  const name = String(node.name ?? node.id ?? node.bus ?? '').toLowerCase();
+  return type.includes('grid') || type.includes('source') || type.includes('root') || name.includes('source') || name.includes('grid');
+}
+
+function findStoragePath(nodes: ProjectedTopologyNode[], edges: ResultChartPoint[], selectedNodeId?: string | null): TopologyPathResult {
+  const emptyPath = { edgeIds: new Set<string>(), nodeIds: new Set<string>() };
+  if (!nodes.length || !edges.length) return emptyPath;
+  const nodeIds = new Set(nodes.map((node) => node.nodeId));
+  const storageNode = nodes.find((node) => String(node.nodeId) === String(selectedNodeId ?? ''))
+    ?? nodes.find((node) => node.storageTarget === true)
+    ?? null;
+  if (!storageNode) return emptyPath;
+
+  const indegree = new Map<string, number>();
+  const adjacency = new Map<string, Array<{ to: string; edgeId: string }>>();
+  nodes.forEach((node) => {
+    indegree.set(node.nodeId, 0);
+    adjacency.set(node.nodeId, []);
+  });
+  edges.forEach((edge, index) => {
+    const from = String(edge.from_node_id ?? '');
+    const to = String(edge.to_node_id ?? '');
+    if (!nodeIds.has(from) || !nodeIds.has(to)) return;
+    const edgeId = String(edge.id ?? `edge-${index}`);
+    adjacency.get(from)?.push({ to, edgeId });
+    adjacency.get(to)?.push({ to: from, edgeId });
+    indegree.set(to, (indegree.get(to) ?? 0) + 1);
+  });
+
+  const rootCandidates = [
+    ...nodes.filter(isTopologyRootNode).map((node) => node.nodeId),
+    ...nodes.filter((node) => (indegree.get(node.nodeId) ?? 0) === 0).map((node) => node.nodeId),
+    nodes[0]?.nodeId,
+  ].filter(Boolean);
+  const targetId = storageNode.nodeId;
+  for (const rootId of rootCandidates) {
+    const queue = [String(rootId)];
+    const visited = new Set<string>([String(rootId)]);
+    const previous = new Map<string, { from: string; edgeId: string }>();
+    while (queue.length) {
+      const current = queue.shift();
+      if (!current) continue;
+      if (current === targetId) {
+        const pathEdgeIds = new Set<string>();
+        const pathNodeIds = new Set<string>([targetId]);
+        let cursor = targetId;
+        while (previous.has(cursor)) {
+          const prev = previous.get(cursor);
+          if (!prev) break;
+          pathEdgeIds.add(prev.edgeId);
+          pathNodeIds.add(prev.from);
+          cursor = prev.from;
+        }
+        return { edgeIds: pathEdgeIds, nodeIds: pathNodeIds };
+      }
+      (adjacency.get(current) ?? []).forEach((next) => {
+        if (visited.has(next.to)) return;
+        visited.add(next.to);
+        previous.set(next.to, { from: current, edgeId: next.edgeId });
+        queue.push(next.to);
+      });
+    }
+  }
+  return emptyPath;
+}
+
+function buildTopologyRiskItems(nodes: ProjectedTopologyNode[], edges: ResultChartPoint[]): TopologyRiskItem[] {
+  const risks: TopologyRiskItem[] = [];
+  edges.forEach((edge, index) => {
+    const edgeId = String(edge.id ?? `edge-${index}`);
+    const name = String(edge.name ?? edge.id ?? `线路 ${index + 1}`);
+    const loadRate = toFiniteNumber(edge.loadRatePct ?? edge.loadingPct);
+    const capacityInsufficient = String(edge.capacityCheckStatus ?? '') === 'insufficient';
+    const autoServiceLine = edge.autoServiceLine === true;
+    if (loadRate !== null && loadRate > 100) {
+      risks.push({
+        id: `edge-overload-${edgeId}`,
+        kind: 'edge',
+        objectId: edgeId,
+        title: name,
+        detail: '线路负载率超过额定容量',
+        valueText: metricText(loadRate, '%'),
+        severity: 'critical',
+        priority: 10,
+        score: loadRate,
+      });
+    } else if (loadRate !== null && loadRate >= 80) {
+      risks.push({
+        id: `edge-heavy-${edgeId}`,
+        kind: 'edge',
+        objectId: edgeId,
+        title: name,
+        detail: '线路负载率接近上限',
+        valueText: metricText(loadRate, '%'),
+        severity: 'warning',
+        priority: 20,
+        score: loadRate,
+      });
+    }
+    if (capacityInsufficient || autoServiceLine) {
+      const requiredCurrent = toFiniteNumber(edge.estimatedRequiredCurrentA);
+      risks.push({
+        id: `edge-capacity-${edgeId}`,
+        kind: 'edge',
+        objectId: edgeId,
+        title: name,
+        detail: capacityInsufficient ? '自动接入线容量不足' : '自动接入线需关注',
+        valueText: requiredCurrent !== null ? ampText(requiredCurrent) : '容量校核',
+        severity: capacityInsufficient ? 'critical' : 'warning',
+        priority: capacityInsufficient ? 30 : 55,
+        score: requiredCurrent ?? 0,
+      });
+    }
+  });
+
+  nodes.forEach((node, index) => {
+    const nodeId = node.nodeId || String(node.id ?? `node-${index}`);
+    const name = String(node.bus ?? node.name ?? node.id ?? `节点 ${index + 1}`);
+    const voltageMin = toFiniteNumber(node.voltagePuMin);
+    const voltageMax = toFiniteNumber(node.voltagePuMax);
+    const voltageWorsening = toFiniteNumber(node.storageVoltageViolationIncrementPu);
+    const capacityMarginAfterKw = toFiniteNumber(node.capacityMarginAfterKw);
+    if ((voltageMin !== null && voltageMin < 0.95) || (voltageMax !== null && voltageMax > 1.05)) {
+      const critical = (voltageMin !== null && voltageMin < 0.93) || (voltageMax !== null && voltageMax > 1.07);
+      risks.push({
+        id: `node-voltage-${nodeId}`,
+        kind: 'node',
+        objectId: nodeId,
+        title: name,
+        detail: '节点电压越限或接近边界',
+        valueText: puRangeText(voltageMin, voltageMax) || '--',
+        severity: critical ? 'critical' : 'warning',
+        priority: critical ? 15 : 35,
+        score: Math.max(voltageMin !== null ? Math.abs(0.95 - voltageMin) : 0, voltageMax !== null ? Math.abs(voltageMax - 1.05) : 0),
+      });
+    }
+    if (voltageWorsening !== null && voltageWorsening > 0.002) {
+      risks.push({
+        id: `node-storage-worse-${nodeId}`,
+        kind: 'node',
+        objectId: nodeId,
+        title: name,
+        detail: '储能接入后电压风险增加',
+        valueText: signedMetricText(voltageWorsening, ' pu'),
+        severity: 'warning',
+        priority: 45,
+        score: voltageWorsening,
+      });
+    }
+    if (capacityMarginAfterKw !== null && capacityMarginAfterKw < 0) {
+      risks.push({
+        id: `node-margin-${nodeId}`,
+        kind: 'node',
+        objectId: nodeId,
+        title: name,
+        detail: '变压器或节点承载裕度不足',
+        valueText: metricText(capacityMarginAfterKw, ' kW'),
+        severity: 'critical',
+        priority: 50,
+        score: Math.abs(capacityMarginAfterKw),
+      });
+    }
+  });
+
+  return risks
+    .sort((a, b) => a.priority - b.priority || b.score - a.score)
+    .slice(0, 12);
+}
+
+function topologyRiskColor(severity: TopologyRiskSeverity) {
+  if (severity === 'critical') return SEMANTIC_COLORS.cost.primary;
+  if (severity === 'warning') return SEMANTIC_COLORS.cost.secondary;
+  return '#38bdf8';
+}
+
+function topologyStatusFromMetrics(params: {
+  overloadedCount: number;
+  voltageRiskCount: number;
+  heavyLineCount: number;
+  missingDataCount: number;
+}) {
+  if (params.overloadedCount > 0 || params.voltageRiskCount > 0) return { label: '存在风险', color: SEMANTIC_COLORS.cost.primary };
+  if (params.heavyLineCount > 0) return { label: '需关注', color: SEMANTIC_COLORS.cost.secondary };
+  if (params.missingDataCount > 0) return { label: '数据不足', color: SEMANTIC_COLORS.neutral };
+  return { label: '可接入', color: SEMANTIC_COLORS.feasible };
+}
+
+function IsoBuildingBlock(props: { x: number; y: number; height: number; warning?: boolean }) {
+  const width = 24;
+  const depth = 14;
+  const height = Math.max(12, Math.min(46, props.height));
+  const topColor = props.warning ? '#f97316' : '#38bdf8';
+  return (
+    <g opacity={0.78}>
+      <ellipse cx={props.x + 10} cy={props.y + 12} rx={23} ry={9} fill="#020617" opacity={0.34} />
+      <polygon
+        points={`${props.x - width / 2},${props.y} ${props.x + width / 2},${props.y - depth * 0.34} ${props.x + width / 2},${props.y - height} ${props.x - width / 2},${props.y - height + depth * 0.34}`}
+        fill="#0f3b64"
+        stroke="#38bdf8"
+        strokeOpacity={0.18}
+      />
+      <polygon
+        points={`${props.x + width / 2},${props.y - depth * 0.34} ${props.x + width / 2 + depth},${props.y + depth * 0.28} ${props.x + width / 2 + depth},${props.y - height + depth * 0.62} ${props.x + width / 2},${props.y - height}`}
+        fill="#0b2444"
+        stroke="#38bdf8"
+        strokeOpacity={0.14}
+      />
+      <polygon
+        points={`${props.x - width / 2},${props.y - height + depth * 0.34} ${props.x + width / 2},${props.y - height} ${props.x + width / 2 + depth},${props.y - height + depth * 0.62} ${props.x - width / 2 + depth},${props.y - height + depth}`}
+        fill={topColor}
+        fillOpacity={props.warning ? 0.52 : 0.34}
+        stroke={topColor}
+        strokeOpacity={0.7}
+      />
+    </g>
   );
 }
 
@@ -1516,12 +1904,44 @@ function NetworkTopologyPanel(props: { data: NetworkTopologyChart | null }) {
   const [summaryOpen, setSummaryOpen] = useState(false);
   const [fullscreenOpen, setFullscreenOpen] = useState(false);
   const [detailsOpen, setDetailsOpen] = useState(false);
+  const [selectedRiskId, setSelectedRiskId] = useState<string | null>(null);
+  const [layers, setLayers] = useState<TopologyLayers>({
+    lineLoading: true,
+    nodeVoltage: true,
+    flowDirection: true,
+    storageImpact: true,
+    riskBadges: true,
+    labels: false,
+    buildings: true,
+  });
   const [zoom, setZoom] = useState(1);
   const [pan, setPan] = useState({ x: 0, y: 0 });
   const panDragRef = useRef<{ clientX: number; clientY: number; panX: number; panY: number } | null>(null);
   const topologySvgRef = useRef<SVGSVGElement | null>(null);
   const topologyWheelRef = useRef<HTMLDivElement | null>(null);
   const topologyStateRef = useRef({ zoom: 1, pan: { x: 0, y: 0 }, minX: 0, minY: 0, baseWidth: 600, baseHeight: 420 });
+  const projectedNodes = useMemo(() => buildProjectedTopologyNodes(nodes), [nodes]);
+  const nodeById = useMemo(() => new Map(projectedNodes.map((node) => [node.nodeId, node])), [projectedNodes]);
+  const edgeById = useMemo(
+    () => new Map(edges.map((edge, index) => [String(edge.id ?? `edge-${index}`), edge])),
+    [edges],
+  );
+  const storagePath = useMemo(
+    () => findStoragePath(projectedNodes, edges, props.data?.selectedNodeId),
+    [projectedNodes, edges, props.data?.selectedNodeId],
+  );
+  const riskItems = useMemo(() => buildTopologyRiskItems(projectedNodes, edges), [projectedNodes, edges]);
+  const selectedRisk = riskItems.find((risk) => risk.id === selectedRiskId) ?? null;
+  const layerEntries: Array<{ key: TopologyLayerKey; label: string }> = [
+    { key: 'lineLoading', label: '线路负载' },
+    { key: 'nodeVoltage', label: '节点电压' },
+    { key: 'flowDirection', label: '潮流方向' },
+    { key: 'storageImpact', label: '储能影响' },
+    { key: 'riskBadges', label: '风险编号' },
+    { key: 'labels', label: '详细标签' },
+    { key: 'buildings', label: '负荷块' },
+  ];
+
   useEffect(() => {
     const element = topologyWheelRef.current;
     if (!element) return;
@@ -1554,13 +1974,12 @@ function NetworkTopologyPanel(props: { data: NetworkTopologyChart | null }) {
     return () => element.removeEventListener('wheel', onWheel);
   });
 
-  const nodeById = new Map(nodes.map((node) => [String(node.id ?? ''), node]));
-  const xs = nodes.map((node) => toFiniteNumber(node.x) ?? 0);
-  const ys = nodes.map((node) => toFiniteNumber(node.y) ?? 0);
-  const minX = Math.min(...xs, 0) - 80;
-  const maxX = Math.max(...xs, 900) + 120;
-  const minY = Math.min(...ys, 0) - 80;
-  const maxY = Math.max(...ys, 520) + 120;
+  const xs = projectedNodes.map((node) => node.projectedX);
+  const ys = projectedNodes.map((node) => node.projectedY);
+  const minX = Math.min(...xs, 0) - 260;
+  const maxX = Math.max(...xs, 900) + 380;
+  const minY = Math.min(...ys, 0) - 170;
+  const maxY = Math.max(...ys, 520) + 190;
   const baseWidth = Math.max(600, maxX - minX);
   const baseHeight = Math.max(420, maxY - minY);
   useEffect(() => {
@@ -1576,22 +1995,45 @@ function NetworkTopologyPanel(props: { data: NetworkTopologyChart | null }) {
   const panelStyle = fullscreenOpen ? topologyFullscreenStyle : undefined;
   const canvasStyle = fullscreenOpen ? topologyCanvasFullscreenStyle : topologyCanvasStyle;
   const zoomDisplayMode = zoom < 0.75 ? 'overview' : zoom < 1.45 ? 'summary' : 'detail';
-  const showSummaryLabels = detailsOpen || zoomDisplayMode !== 'overview';
-  const showDetailedLabels = detailsOpen || zoomDisplayMode === 'detail';
+  const labelsEnabled = layers.labels || detailsOpen;
+  const showSummaryLabels = labelsEnabled && zoomDisplayMode !== 'overview';
+  const showDetailedLabels = labelsEnabled && zoomDisplayMode === 'detail';
   const zoomDisplayLabel = zoomDisplayMode === 'overview' ? '总览' : zoomDisplayMode === 'summary' ? '摘要' : '详细';
   const labelScale = Math.max(0.42, Math.min(1, 1 / zoom));
   const nodeVisualScale = Math.max(0.62, Math.min(1, 1 / Math.sqrt(zoom)));
   const topLoadedLineIds = new Set(
     edges
-      .map((edge) => ({ id: String(edge.id ?? ''), loadRate: toFiniteNumber(edge.loadRatePct) }))
+      .map((edge, index) => ({ id: String(edge.id ?? `edge-${index}`), loadRate: toFiniteNumber(edge.loadRatePct ?? edge.loadingPct) }))
       .filter((edge) => edge.id && edge.loadRate !== null)
       .sort((a, b) => (b.loadRate ?? 0) - (a.loadRate ?? 0))
       .slice(0, 3)
       .map((edge) => edge.id),
   );
-  const occupiedTopologyBoxes: TopologyLabelPlacement[] = nodes.map((node) => {
-    const x = toFiniteNumber(node.x) ?? 0;
-    const y = toFiniteNumber(node.y) ?? 0;
+  const overloadedCount = edges.filter((edge) => {
+    const loadRate = toFiniteNumber(edge.loadRatePct ?? edge.loadingPct);
+    return loadRate !== null && loadRate > 100;
+  }).length;
+  const heavyLineCount = edges.filter((edge) => {
+    const loadRate = toFiniteNumber(edge.loadRatePct ?? edge.loadingPct);
+    return loadRate !== null && loadRate >= 80 && loadRate <= 100;
+  }).length;
+  const voltageRiskCount = projectedNodes.filter((node) => {
+    const voltageMin = toFiniteNumber(node.voltagePuMin);
+    const voltageMax = toFiniteNumber(node.voltagePuMax);
+    return (voltageMin !== null && voltageMin < 0.95) || (voltageMax !== null && voltageMax > 1.05);
+  }).length;
+  const missingDataCount = edges.filter((edge) => toFiniteNumber(edge.loadRatePct ?? edge.loadingPct) === null).length
+    + projectedNodes.filter((node) => toFiniteNumber(node.voltagePuMin) === null && toFiniteNumber(node.voltagePuMax) === null).length;
+  const minVoltage = Math.min(...projectedNodes.map((node) => toFiniteNumber(node.voltagePuMin)).filter((value): value is number => value !== null));
+  const maxVoltage = Math.max(...projectedNodes.map((node) => toFiniteNumber(node.voltagePuMax)).filter((value): value is number => value !== null));
+  const maxLineLoad = Math.max(...edges.map((edge) => toFiniteNumber(edge.loadRatePct ?? edge.loadingPct)).filter((value): value is number => value !== null));
+  const topologyStatus = topologyStatusFromMetrics({ overloadedCount, voltageRiskCount, heavyLineCount, missingDataCount });
+  const storageNode = projectedNodes.find((node) => node.storageTarget === true)
+    ?? projectedNodes.find((node) => String(node.nodeId) === String(props.data?.selectedNodeId ?? ''))
+    ?? null;
+  const occupiedTopologyBoxes: TopologyLabelPlacement[] = projectedNodes.map((node) => {
+    const x = node.projectedX;
+    const y = node.projectedY;
     const isTarget = node.storageTarget === true;
     const size = (isTarget ? 78 : 64) * nodeVisualScale;
     return {
@@ -1629,12 +2071,36 @@ function NetworkTopologyPanel(props: { data: NetworkTopologyChart | null }) {
       // Pointer capture may already be released by the browser.
     }
   };
+  const toggleLayer = (key: TopologyLayerKey) => setLayers((current) => ({ ...current, [key]: !current[key] }));
+  const getRiskPosition = (risk: TopologyRiskItem) => {
+    if (risk.kind === 'node') {
+      const node = nodeById.get(risk.objectId);
+      return node ? { x: node.projectedX + 20, y: node.projectedY - 22 } : null;
+    }
+    const edge = edgeById.get(risk.objectId);
+    if (!edge) return null;
+    const from = nodeById.get(String(edge.from_node_id ?? ''));
+    const to = nodeById.get(String(edge.to_node_id ?? ''));
+    if (!from || !to) return null;
+    return { x: (from.projectedX + to.projectedX) / 2, y: (from.projectedY + to.projectedY) / 2 - 18 };
+  };
+  const kpiItems = [
+    { label: '储后最低电压', value: Number.isFinite(minVoltage) ? `${minVoltage.toFixed(3)} pu` : '--', color: topologyVoltageColor(Number.isFinite(minVoltage) ? minVoltage : null, null) },
+    { label: '储后最高电压', value: Number.isFinite(maxVoltage) ? `${maxVoltage.toFixed(3)} pu` : '--', color: topologyVoltageColor(null, Number.isFinite(maxVoltage) ? maxVoltage : null) },
+    { label: '最高线路负载率', value: Number.isFinite(maxLineLoad) ? `${maxLineLoad.toFixed(1)}%` : '--', color: topologyEdgeColor(Number.isFinite(maxLineLoad) ? maxLineLoad : null) },
+    { label: '过载线路', value: `${overloadedCount} 条`, color: overloadedCount > 0 ? SEMANTIC_COLORS.cost.primary : SEMANTIC_COLORS.feasible },
+    { label: '电压风险节点', value: `${voltageRiskCount} 个`, color: voltageRiskCount > 0 ? SEMANTIC_COLORS.cost.primary : SEMANTIC_COLORS.feasible },
+    { label: '综合状态', value: topologyStatus.label, color: topologyStatus.color },
+  ];
 
   return (
     <div style={panelStyle}>
       {props.data?.warnings?.length ? <WarningPanel warnings={props.data.warnings} /> : null}
       <div style={topologyToolbarStyle}>
-        <div style={{ color: '#475569', fontSize: 13 }}>当前显示：{qualityLabel}</div>
+        <div>
+          <div style={{ color: '#0f172a', fontSize: 14, fontWeight: 800 }}>2.5D 配电网数字孪生态势图</div>
+          <div style={{ color: '#64748b', fontSize: 12, marginTop: 3 }}>当前显示：{qualityLabel}</div>
+        </div>
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
           <button type="button" onClick={() => setDetailsOpen((value) => !value)} style={smallBtnStyle}>
             {detailsOpen ? '关闭强制详细' : '强制详细标注'}
@@ -1654,6 +2120,14 @@ function NetworkTopologyPanel(props: { data: NetworkTopologyChart | null }) {
       <div style={topologyLegendStripStyle}>
         <TopologyLegend />
       </div>
+      <div style={topologyKpiStripStyle}>
+        {kpiItems.map((item) => (
+          <div key={item.label} style={topologyKpiItemStyle}>
+            <span style={topologyKpiLabelStyle}>{item.label}</span>
+            <strong style={{ ...topologyKpiValueStyle, color: item.color }}>{item.value}</strong>
+          </div>
+        ))}
+      </div>
       <div ref={topologyWheelRef} style={canvasStyle}>
         <svg
           ref={topologySvgRef}
@@ -1669,30 +2143,67 @@ function NetworkTopologyPanel(props: { data: NetworkTopologyChart | null }) {
         >
             <defs>
               <linearGradient id="topology-floor-gradient" x1="0" y1="0" x2="1" y2="1">
-                <stop offset="0%" stopColor="#f8fbff" />
-                <stop offset="100%" stopColor="#edf3f8" />
+                <stop offset="0%" stopColor="#04111f" />
+                <stop offset="55%" stopColor="#071a33" />
+                <stop offset="100%" stopColor="#020617" />
               </linearGradient>
-              <pattern id="topology-grid" width="80" height="80" patternUnits="userSpaceOnUse">
-                <path d="M 80 0 L 0 0 0 80" fill="none" stroke="#e2e8f0" strokeWidth="1" />
+              <radialGradient id="topology-storage-glow">
+                <stop offset="0%" stopColor="#22d3ee" stopOpacity="0.42" />
+                <stop offset="52%" stopColor="#0ea5e9" stopOpacity="0.16" />
+                <stop offset="100%" stopColor="#020617" stopOpacity="0" />
+              </radialGradient>
+              <pattern id="topology-grid" width="92" height="64" patternUnits="userSpaceOnUse">
+                <path d="M 0 64 L 92 0 M 0 0 L 92 64 M 0 32 H 92" fill="none" stroke="#38bdf8" strokeWidth="0.85" opacity="0.22" />
               </pattern>
+              <filter id="topology-line-glow" x="-35%" y="-35%" width="170%" height="170%">
+                <feGaussianBlur stdDeviation="4" result="blur" />
+                <feMerge>
+                  <feMergeNode in="blur" />
+                  <feMergeNode in="SourceGraphic" />
+                </feMerge>
+              </filter>
               <filter id="topology-node-shadow" x="-60%" y="-60%" width="220%" height="220%">
-                <feDropShadow dx="5" dy="8" stdDeviation="4" floodColor="#0f172a" floodOpacity="0.22" />
+                <feDropShadow dx="6" dy="9" stdDeviation="5" floodColor="#000000" floodOpacity="0.38" />
               </filter>
               <filter id="topology-label-shadow" x="-30%" y="-30%" width="160%" height="160%">
-                <feDropShadow dx="2" dy="4" stdDeviation="2" floodColor="#0f172a" floodOpacity="0.12" />
+                <feDropShadow dx="2" dy="5" stdDeviation="3" floodColor="#020617" floodOpacity="0.45" />
               </filter>
             </defs>
             <rect x={minX - baseWidth} y={minY - baseHeight} width={baseWidth * 3} height={baseHeight * 3} fill="url(#topology-floor-gradient)" />
-            <rect x={minX - baseWidth} y={minY - baseHeight} width={baseWidth * 3} height={baseHeight * 3} fill="url(#topology-grid)" opacity={0.5} />
-            {edges.map((edge) => {
+            <rect x={minX - baseWidth} y={minY - baseHeight} width={baseWidth * 3} height={baseHeight * 3} fill="url(#topology-grid)" opacity={0.72} />
+            <polygon
+              points={`${minX + baseWidth * 0.12},${minY + baseHeight * 0.68} ${minX + baseWidth * 0.42},${minY + baseHeight * 0.48} ${minX + baseWidth * 0.62},${minY + baseHeight * 0.58} ${minX + baseWidth * 0.28},${minY + baseHeight * 0.81}`}
+              fill="#0b2444"
+              stroke="#38bdf8"
+              strokeOpacity={0.28}
+              opacity={0.45}
+            />
+            <polygon
+              points={`${minX + baseWidth * 0.39},${minY + baseHeight * 0.28} ${minX + baseWidth * 0.76},${minY + baseHeight * 0.22} ${minX + baseWidth * 0.88},${minY + baseHeight * 0.42} ${minX + baseWidth * 0.51},${minY + baseHeight * 0.52}`}
+              fill="#082f49"
+              stroke="#22d3ee"
+              strokeOpacity={0.22}
+              opacity={0.36}
+            />
+            <polygon
+              points={`${minX + baseWidth * 0.08},${minY + baseHeight * 0.33} ${minX + baseWidth * 0.31},${minY + baseHeight * 0.20} ${minX + baseWidth * 0.44},${minY + baseHeight * 0.32} ${minX + baseWidth * 0.19},${minY + baseHeight * 0.48}`}
+              fill="#0f172a"
+              stroke="#60a5fa"
+              strokeOpacity={0.18}
+              opacity={0.48}
+            />
+            {storageNode ? (
+              <circle cx={storageNode.projectedX} cy={storageNode.projectedY} r={150} fill="url(#topology-storage-glow)" opacity={layers.storageImpact ? 1 : 0.35} />
+            ) : null}
+            {edges.map((edge, index) => {
               const from = nodeById.get(String(edge.from_node_id ?? ''));
               const to = nodeById.get(String(edge.to_node_id ?? ''));
               if (!from || !to) return null;
-              const x1 = toFiniteNumber(from.x) ?? 0;
-              const y1 = toFiniteNumber(from.y) ?? 0;
-              const x2 = toFiniteNumber(to.x) ?? 0;
-              const y2 = toFiniteNumber(to.y) ?? 0;
-              const loadRate = toFiniteNumber(edge.loadRatePct);
+              const x1 = from.projectedX;
+              const y1 = from.projectedY;
+              const x2 = to.projectedX;
+              const y2 = to.projectedY;
+              const loadRate = toFiniteNumber(edge.loadRatePct ?? edge.loadingPct);
               const currentA = toFiniteNumber(edge.currentA ?? edge.estimatedCurrentA);
               const normamps = toFiniteNumber(edge.normamps);
               const emergamps = toFiniteNumber(edge.emergamps);
@@ -1703,7 +2214,11 @@ function NetworkTopologyPanel(props: { data: NetworkTopologyChart | null }) {
               const recommendedCurrentA = toFiniteNumber(edge.recommendedCurrentA);
               const capacityInsufficient = String(edge.capacityCheckStatus ?? '') === 'insufficient';
               const terminal1PowerKw = toFiniteNumber(edge.terminal1PowerKw);
-              const stroke = topologyEdgeColor(loadRate);
+              const edgeId = String(edge.id ?? `edge-${index}`);
+              const isStoragePath = storagePath.edgeIds.has(edgeId);
+              const isRiskEdge = riskItems.slice(0, 5).some((risk) => risk.kind === 'edge' && risk.objectId === edgeId);
+              const isSelectedRiskEdge = selectedRisk?.kind === 'edge' && selectedRisk.objectId === edgeId;
+              const stroke = layers.storageImpact && isStoragePath ? '#22d3ee' : layers.lineLoading ? topologyEdgeColor(loadRate) : '#38bdf8';
               const isOpen = edge.enabled === false || edge.normallyOpen === true;
               const isTransformerLink = edge.isTransformerLink === true;
               const isTopLoadedLine = topLoadedLineIds.has(String(edge.id ?? ''));
@@ -1713,16 +2228,15 @@ function NetworkTopologyPanel(props: { data: NetworkTopologyChart | null }) {
               const lineDx = x2 - x1;
               const lineDy = y2 - y1;
               const lineLength = Math.hypot(lineDx, lineDy);
-              const useElbowPath = !isTransformerLink && Math.abs(lineDx) > 24 && Math.abs(lineDy) > 24;
-              const elbowX = x1 + lineDx * 0.52;
-              const edgePathD = useElbowPath
-                ? `M ${x1} ${y1} L ${elbowX} ${y1} L ${elbowX} ${y2} L ${x2} ${y2}`
-                : `M ${x1} ${y1} L ${x2} ${y2}`;
-              const edgeWidth = isTransformerLink ? 2.1 : loadRate !== null ? Math.min(5.2, Math.max(1.8, loadRate / 34)) : 1.8;
+              const edgePathD = `M ${x1} ${y1} L ${x2} ${y2}`;
+              let edgeWidth = loadRate === null ? 1.6 : Math.min(6.4, Math.max(1.8, 1.6 + loadRate / 26));
+              if (isTransformerLink) edgeWidth += 0.8;
+              if (layers.storageImpact && isStoragePath) edgeWidth += 2.2;
+              if (isSelectedRiskEdge) edgeWidth += 2.4;
               const flowSign = flowDirection === 'reverse' ? -1 : 1;
-              const flowUx = useElbowPath ? 0 : lineLength > 0 ? (lineDx / lineLength) * flowSign : 0;
-              const flowUy = useElbowPath ? Math.sign(lineDy || 1) * flowSign : lineLength > 0 ? (lineDy / lineLength) * flowSign : 0;
-              const arrowCenterX = useElbowPath ? elbowX : (x1 + x2) / 2;
+              const flowUx = lineLength > 0 ? (lineDx / lineLength) * flowSign : 0;
+              const flowUy = lineLength > 0 ? (lineDy / lineLength) * flowSign : 0;
+              const arrowCenterX = (x1 + x2) / 2;
               const arrowCenterY = (y1 + y2) / 2;
               const arrowTipX = arrowCenterX + flowUx * 10;
               const arrowTipY = arrowCenterY + flowUy * 10;
@@ -1755,7 +2269,7 @@ function NetworkTopologyPanel(props: { data: NetworkTopologyChart | null }) {
                       ? `容量建议 ${ampText(estimatedRequiredCurrentA)} → ${ampText(recommendedCurrentA)}`
                       : '',
               ].filter(Boolean);
-              const hasEdgeLabel = edgeLabelLines.length > 0;
+              const hasEdgeLabel = labelsEnabled && edgeLabelLines.length > 0;
               const labelWidth = isOverloadedLine || showDetailedLabels ? 128 : 82;
               const labelHeight = 18 + edgeLabelLines.length * 14;
               const labelBoxWidth = labelWidth * labelScale;
@@ -1790,17 +2304,17 @@ function NetworkTopologyPanel(props: { data: NetworkTopologyChart | null }) {
                 : '';
               const title = `${String(edge.name || edge.id || '')} | 潮流方向 ${flowDirectionText} | 端口有功 ${metricText(terminal1PowerKw, ' kW')} | 负载率 ${metricText(loadRate, '%')} | 电流 ${metricText(currentA, ' A')} | 额定 ${metricText(normamps, ' A')} | 应急 ${metricText(emergamps, ' A')}${serviceTitle}${capacityTitle}`;
               return (
-                <g key={String(edge.id)}>
+                <g key={edgeId}>
                   <title>{title}</title>
                   <path
                     d={edgePathD}
                     fill="none"
-                    stroke="#334155"
-                    strokeWidth={edgeWidth + 3.2}
+                    stroke={layers.storageImpact && isStoragePath ? '#22d3ee' : stroke}
+                    strokeWidth={edgeWidth + (isStoragePath ? 9 : 5)}
                     strokeLinecap="round"
                     strokeLinejoin="round"
-                    transform="translate(6 8)"
-                    opacity={isOpen ? 0.08 : isTransformerLink ? 0.1 : 0.18}
+                    opacity={isOpen ? 0.1 : isStoragePath ? 0.26 : isRiskEdge ? 0.24 : 0.15}
+                    filter="url(#topology-line-glow)"
                   />
                   <path
                     d={edgePathD}
@@ -1810,25 +2324,25 @@ function NetworkTopologyPanel(props: { data: NetworkTopologyChart | null }) {
                     strokeDasharray={isOpen ? '8 6' : undefined}
                     strokeLinecap="round"
                     strokeLinejoin="round"
-                    opacity={isOpen ? 0.35 : isTransformerLink ? 0.55 : 0.86}
+                    opacity={isOpen ? 0.32 : isTransformerLink ? 0.64 : 0.92}
                   />
                   {!isOpen ? (
                     <path
                       d={edgePathD}
                       fill="none"
-                      stroke="#ffffff"
+                      stroke="#e0f2fe"
                       strokeWidth={Math.max(0.7, edgeWidth * 0.22)}
                       strokeLinecap="round"
                       strokeLinejoin="round"
-                      transform="translate(-1 -1)"
-                      opacity={isTransformerLink ? 0.25 : 0.38}
+                      transform="translate(-1.2 -1)"
+                      opacity={isTransformerLink ? 0.28 : 0.45}
                     />
                   ) : null}
-                  {!isOpen && lineLength > 1 ? (
+                  {!isOpen && lineLength > 1 && layers.flowDirection && (isStoragePath || isTopLoadedLine || isOverloadedLine || isSelectedRiskEdge) ? (
                     <polygon
                       points={flowArrowPoints}
-                      fill={stroke}
-                      stroke="#ffffff"
+                      fill={flowDirection === 'reverse' ? SEMANTIC_COLORS.cost.secondary : '#67e8f9'}
+                      stroke="#082f49"
                       strokeWidth={1.2}
                       opacity={0.96}
                     />
@@ -1851,12 +2365,12 @@ function NetworkTopologyPanel(props: { data: NetworkTopologyChart | null }) {
                           width={labelWidth}
                           height={labelHeight}
                           rx={6}
-                          fill="#ffffff"
-                          stroke="#dbe3ef"
-                          opacity={0.92}
+                          fill="rgba(8, 21, 43, 0.95)"
+                          stroke="#38bdf8"
+                          opacity={0.95}
                           filter="url(#topology-label-shadow)"
                         />
-                        <text textAnchor="middle" fontSize="10" fill="#334155" fontWeight={700}>
+                        <text textAnchor="middle" fontSize="10" fill="#dff7ff" fontWeight={700}>
                           {edgeLabelLines.map((line, idx) => (
                             <tspan key={`${line}-${idx}`} x={0} y={-labelHeight + 24 + idx * 14}>
                               {line}
@@ -1870,9 +2384,26 @@ function NetworkTopologyPanel(props: { data: NetworkTopologyChart | null }) {
               );
             })}
 
-            {nodes.map((node) => {
-              const x = toFiniteNumber(node.x) ?? 0;
-              const y = toFiniteNumber(node.y) ?? 0;
+            {layers.buildings ? projectedNodes.map((node) => {
+              const designLoadKw = toFiniteNumber(node.designLoadKw);
+              if (node.storageTarget === true || designLoadKw === null || designLoadKw <= 0) return null;
+              const voltageMin = toFiniteNumber(node.voltagePuMin);
+              const voltageMax = toFiniteNumber(node.voltagePuMax);
+              const warning = (voltageMin !== null && voltageMin < 0.95) || (voltageMax !== null && voltageMax > 1.05);
+              return (
+                <IsoBuildingBlock
+                  key={`building-${node.nodeId}`}
+                  x={node.projectedX + 22}
+                  y={node.projectedY + 24}
+                  height={14 + Math.sqrt(designLoadKw) * 1.3}
+                  warning={warning}
+                />
+              );
+            }) : null}
+
+            {projectedNodes.map((node) => {
+              const x = node.projectedX;
+              const y = node.projectedY;
               const isTarget = node.storageTarget === true;
               const nodeType = String(node.type ?? '');
               const label = String(node.bus || node.name || node.id || '');
@@ -1893,7 +2424,10 @@ function NetworkTopologyPanel(props: { data: NetworkTopologyChart | null }) {
               const voltageLabel = puRangeText(voltageMin, voltageMax);
               const hasVoltageAlert = (voltageMin !== null && voltageMin < 0.95) || (voltageMax !== null && voltageMax > 1.05);
               const hasStorageVoltageWorsening = storageVoltageIncrement !== null && storageVoltageIncrement > 0.002;
-              const showNodeInfo = showDetailedLabels || isTarget || hasVoltageAlert || hasStorageVoltageWorsening;
+              const isStoragePathNode = storagePath.nodeIds.has(node.nodeId);
+              const isSelectedRiskNode = selectedRisk?.kind === 'node' && selectedRisk.objectId === node.nodeId;
+              const isRiskNode = riskItems.slice(0, 5).some((risk) => risk.kind === 'node' && risk.objectId === node.nodeId);
+              const showNodeInfo = labelsEnabled && (showDetailedLabels || isTarget || hasVoltageAlert || hasStorageVoltageWorsening);
               const detailedInfoLines = [
                 baselineVoltageLabel ? `储前电压标幺值 ${baselineVoltageLabel}` : '',
                 voltageLabel ? `储后电压标幺值 ${voltageLabel}` : '储后电压标幺值 --',
@@ -1952,23 +2486,31 @@ function NetworkTopologyPanel(props: { data: NetworkTopologyChart | null }) {
               return (
                 <g key={String(node.id)} transform={`translate(${x}, ${y})`}>
                   <title>{title}</title>
+                  {layers.storageImpact && isStoragePathNode ? (
+                    <circle r={isTarget ? 44 : 34} fill="none" stroke="#22d3ee" strokeWidth={isTarget ? 3 : 1.8} strokeDasharray={isTarget ? undefined : '6 5'} opacity={0.72} />
+                  ) : null}
+                  {layers.nodeVoltage && (hasVoltageAlert || hasStorageVoltageWorsening || isSelectedRiskNode || isRiskNode) ? (
+                    <circle r={isTarget ? 39 : 30} fill="none" stroke={isSelectedRiskNode ? '#ffffff' : hasVoltageAlert ? SEMANTIC_COLORS.cost.primary : SEMANTIC_COLORS.cost.secondary} strokeWidth={isSelectedRiskNode ? 4 : 2.4} opacity={0.88} />
+                  ) : null}
                   <g transform={`scale(${nodeVisualScale})`}>
                     <TopologyNodeSymbol
                       type={nodeType}
                       isTarget={isTarget}
-                      voltageColor={voltageColor}
+                      voltageColor={layers.nodeVoltage ? voltageColor : '#38bdf8'}
                       missingVoltage={voltageMin === null && voltageMax === null}
                     />
-                    <text y={31} textAnchor="middle" fontSize="10.5" fill="#0f172a" fontWeight={700}>
-                      {nodeShortLabel.length > 14 ? `${nodeShortLabel.slice(0, 13)}…` : nodeShortLabel}
-                    </text>
+                    {layers.labels || isTarget || isRiskNode ? (
+                      <text y={33} textAnchor="middle" fontSize="10.5" fill="#dff7ff" fontWeight={800} paintOrder="stroke" stroke="#020617" strokeWidth={3}>
+                        {nodeShortLabel.length > 14 ? `${nodeShortLabel.slice(0, 13)}…` : nodeShortLabel}
+                      </text>
+                    ) : null}
                   </g>
                   {nodeInfoPlacement ? (
                     <>
                       <path
                         d={`M 0 0 L ${nodeInfoPlacement.tx} ${nodeInfoPlacement.ty + nodeLabelHeight / 2}`}
                         fill="none"
-                        stroke={hasStorageVoltageWorsening ? COLORS.accent4 : isTarget ? '#f59e0b' : '#64748b'}
+                        stroke={hasStorageVoltageWorsening ? SEMANTIC_COLORS.cost.primary : isTarget ? '#f59e0b' : '#64748b'}
                         strokeWidth={Math.max(0.6, 1.3 * labelScale)}
                         strokeDasharray="4 4"
                         opacity={0.72}
@@ -1977,7 +2519,7 @@ function NetworkTopologyPanel(props: { data: NetworkTopologyChart | null }) {
                         cx={0}
                         cy={0}
                         r={Math.max(1.4, 2.2 * labelScale)}
-                        fill={hasStorageVoltageWorsening ? COLORS.accent4 : isTarget ? '#f59e0b' : '#64748b'}
+                        fill={hasStorageVoltageWorsening ? SEMANTIC_COLORS.cost.primary : isTarget ? '#f59e0b' : '#64748b'}
                         opacity={0.72}
                       />
                       <g transform={`translate(${nodeInfoPlacement.tx}, ${nodeInfoPlacement.ty}) scale(${labelScale})`}>
@@ -1987,11 +2529,11 @@ function NetworkTopologyPanel(props: { data: NetworkTopologyChart | null }) {
                           width={nodeInfoWidth}
                           height={nodeInfoHeight}
                           rx={6}
-                          fill="#ffffff"
-                          stroke={hasStorageVoltageWorsening ? COLORS.accent4 : isTarget ? '#f59e0b' : '#dbe3ef'}
+                          fill="rgba(8, 21, 43, 0.95)"
+                          stroke={hasStorageVoltageWorsening ? SEMANTIC_COLORS.cost.primary : isTarget ? '#f59e0b' : '#dbe3ef'}
                           opacity={0.94}
                         />
-                        <text textAnchor="middle" fontSize="10" fill="#334155" fontWeight={700}>
+                        <text textAnchor="middle" fontSize="10" fill="#dff7ff" fontWeight={700}>
                           {infoLines.map((line, idx) => (
                             <tspan
                               key={`${line}-${idx}`}
@@ -1999,14 +2541,14 @@ function NetworkTopologyPanel(props: { data: NetworkTopologyChart | null }) {
                               y={17 + idx * 15}
                               fill={
                                 line.startsWith('储后裕度增量') && capacityMarginDeltaKw !== null && capacityMarginDeltaKw < -1e-6
-                                  ? COLORS.accent4
+                                  ? SEMANTIC_COLORS.cost.primary
                                   : line.startsWith('储后裕度增量') && capacityMarginDeltaKw !== null && capacityMarginDeltaKw > 1e-6
-                                    ? COLORS.accent2
+                                    ? SEMANTIC_COLORS.feasible
                                     : line.includes('储后电压标幺值')
                                       ? voltageColor
                                       : line.startsWith('储能配置')
-                                        ? COLORS.accent1
-                                        : '#334155'
+                                        ? SEMANTIC_COLORS.cost.secondary
+                                        : '#dff7ff'
                               }
                             >
                               {line}
@@ -2019,21 +2561,93 @@ function NetworkTopologyPanel(props: { data: NetworkTopologyChart | null }) {
                 </g>
               );
             })}
+            {layers.riskBadges ? riskItems.slice(0, 5).map((risk, index) => {
+              const position = getRiskPosition(risk);
+              if (!position) return null;
+              const color = topologyRiskColor(risk.severity);
+              return (
+                <g
+                  key={`risk-badge-${risk.id}`}
+                  transform={`translate(${position.x}, ${position.y})`}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    setSelectedRiskId((current) => (current === risk.id ? null : risk.id));
+                  }}
+                  style={{ cursor: 'pointer' }}
+                >
+                  <title>{`${index + 1}. ${risk.title} | ${risk.detail} | ${risk.valueText}`}</title>
+                  <circle r={selectedRiskId === risk.id ? 16 : 13} fill={color} stroke="#ffffff" strokeWidth={2.2} filter="url(#topology-node-shadow)" />
+                  <text textAnchor="middle" y={4} fontSize="12" fill="#ffffff" fontWeight={900}>{index + 1}</text>
+                </g>
+              );
+            }) : null}
         </svg>
-        {summaryOpen ? (
-          <aside style={topologySummaryStyle}>
-            <h3 style={chartTitleStyle}>承载能力摘要</h3>
-            <div style={topologySummaryGridStyle}>
-              {summary.map((item) => (
-                <Metric
-                  key={String(item.name)}
-                  label={String(item.name)}
-                  value={metricTextWithUnit(item.value, item.unit)}
-                />
-              ))}
-            </div>
-          </aside>
-        ) : null}
+        <div style={topologyLayerBarStyle}>
+          <div style={topologyLayerTitleStyle}>图层</div>
+          {layerEntries.map((entry) => (
+            <button
+              key={entry.key}
+              type="button"
+              onClick={() => toggleLayer(entry.key)}
+              style={layers[entry.key] ? topologyLayerButtonActiveStyle : topologyLayerButtonStyle}
+            >
+              <span style={layers[entry.key] ? topologyLayerDotActiveStyle : topologyLayerDotStyle} />
+              {entry.label}
+            </button>
+          ))}
+        </div>
+        <aside style={topologySummaryStyle}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10, alignItems: 'center' }}>
+            <h3 style={topologySideTitleStyle}>配电网态势</h3>
+            <span style={{ ...topologyStatusPillStyle, borderColor: topologyStatus.color, color: topologyStatus.color }}>{topologyStatus.label}</span>
+          </div>
+          <div style={topologySideMetricGridStyle}>
+            <div style={topologySideMetricItemStyle}><span>最低电压</span><strong>{Number.isFinite(minVoltage) ? `${minVoltage.toFixed(3)} pu` : '--'}</strong></div>
+            <div style={topologySideMetricItemStyle}><span>最高负载率</span><strong>{Number.isFinite(maxLineLoad) ? `${maxLineLoad.toFixed(1)}%` : '--'}</strong></div>
+            <div style={topologySideMetricItemStyle}><span>过载线路</span><strong>{overloadedCount} 条</strong></div>
+            <div style={topologySideMetricItemStyle}><span>风险节点</span><strong>{voltageRiskCount} 个</strong></div>
+          </div>
+          <div style={topologySideSectionTitleStyle}>Top 风险</div>
+          <div style={topologyRiskListStyle}>
+            {riskItems.length ? riskItems.slice(0, 5).map((risk, index) => (
+              <button
+                key={`risk-list-${risk.id}`}
+                type="button"
+                onClick={() => setSelectedRiskId((current) => (current === risk.id ? null : risk.id))}
+                style={selectedRiskId === risk.id ? topologyRiskListItemActiveStyle : topologyRiskListItemStyle}
+              >
+                <span style={{ ...topologyRiskIndexStyle, background: topologyRiskColor(risk.severity) }}>{index + 1}</span>
+                <span style={topologyRiskTextStyle}>
+                  <strong>{risk.title}</strong>
+                  <em>{risk.detail}</em>
+                </span>
+                <b>{risk.valueText}</b>
+              </button>
+            )) : (
+              <div style={topologyEmptyRiskStyle}>未识别到过载或电压越限风险。</div>
+            )}
+          </div>
+          <div style={topologySideSectionTitleStyle}>储能影响</div>
+          <div style={topologyImpactTextStyle}>
+            <div>储能接入点：{storageNode ? String(storageNode.bus ?? storageNode.name ?? storageNode.id ?? '--') : '--'}</div>
+            <div>主影响路径：{storagePath.edgeIds.size ? `${storagePath.edgeIds.size} 条线路` : '未识别路径'}</div>
+            <div>新增风险：{riskItems.some((risk) => risk.id.includes('storage-worse')) ? '需关注' : '无明显新增风险'}</div>
+          </div>
+          {summaryOpen && summary.length ? (
+            <>
+              <div style={topologySideSectionTitleStyle}>承载能力摘要</div>
+              <div style={topologySummaryGridStyle}>
+                {summary.map((item) => (
+                  <Metric
+                    key={String(item.name)}
+                    label={String(item.name)}
+                    value={metricTextWithUnit(item.value, item.unit)}
+                  />
+                ))}
+              </div>
+            </>
+          ) : null}
+        </aside>
       </div>
     </div>
   );
@@ -2042,29 +2656,29 @@ function NetworkTopologyPanel(props: { data: NetworkTopologyChart | null }) {
 function TopologyLegend() {
   return (
     <div style={legendStyle}>
-      <div><span style={{ ...legendSwatchStyle, background: COLORS.accent2 }} />正常</div>
-      <div><span style={{ ...legendSwatchStyle, background: COLORS.accent1 }} />接近上限</div>
-      <div><span style={{ ...legendSwatchStyle, background: COLORS.accent4 }} />过载/越限</div>
-      <div><span style={{ ...legendSwatchStyle, background: COLORS.gray }} />估算/缺少实测</div>
-      <div><span style={{ ...legendSwatchStyle, background: '#cbd5e1' }} />缺少电压</div>
-      <div style={{ color: '#475569' }}>线路箭头表示潮流方向</div>
-      <div style={{ color: '#475569' }}>节点标注显示储前/储后电压标幺值、储能配置与储后裕度增量</div>
+      <div><span style={{ ...legendSwatchStyle, background: SEMANTIC_COLORS.feasible }} />正常</div>
+      <div><span style={{ ...legendSwatchStyle, background: SEMANTIC_COLORS.cost.secondary }} />接近上限</div>
+      <div><span style={{ ...legendSwatchStyle, background: SEMANTIC_COLORS.cost.primary }} />过载/越限</div>
+      <div><span style={{ ...legendSwatchStyle, background: SEMANTIC_COLORS.neutral }} />估算/缺少实测</div>
+      <div><span style={{ ...legendSwatchStyle, background: '#22d3ee' }} />储能影响路径</div>
+      <div><span style={{ ...legendSwatchStyle, background: '#facc15' }} />储能接入点</div>
+      <div style={{ color: '#9fb6cf' }}>箭头仅显示主干、储能影响路径与风险线路的潮流方向</div>
     </div>
   );
 }
 
 function topologyEdgeColor(loadRate: number | null) {
-  if (loadRate === null) return COLORS.gray;
-  if (loadRate > 100) return COLORS.accent4;
-  if (loadRate > 80) return COLORS.accent1;
-  return COLORS.accent2;
+  if (loadRate === null) return SEMANTIC_COLORS.neutral;
+  if (loadRate > 100) return SEMANTIC_COLORS.cost.primary;
+  if (loadRate > 80) return SEMANTIC_COLORS.cost.secondary;
+  return SEMANTIC_COLORS.feasible;
 }
 
 function topologyVoltageColor(voltageMin: number | null, voltageMax: number | null) {
   if (voltageMin === null && voltageMax === null) return '#cbd5e1';
-  if ((voltageMin !== null && voltageMin < 0.93) || (voltageMax !== null && voltageMax > 1.07)) return COLORS.accent4;
-  if ((voltageMin !== null && voltageMin < 0.95) || (voltageMax !== null && voltageMax > 1.05)) return COLORS.accent1;
-  return COLORS.accent2;
+  if ((voltageMin !== null && voltageMin < 0.93) || (voltageMax !== null && voltageMax > 1.07)) return SEMANTIC_COLORS.cost.primary;
+  if ((voltageMin !== null && voltageMin < 0.95) || (voltageMax !== null && voltageMax > 1.05)) return SEMANTIC_COLORS.cost.secondary;
+  return SEMANTIC_COLORS.feasible;
 }
 
 function topologyQualityLabel(dataQuality: string | undefined) {
@@ -2074,63 +2688,71 @@ function topologyQualityLabel(dataQuality: string | undefined) {
 }
 
 function topologyNodeColor(type: string) {
-  if (type === 'grid' || type === 'source') return '#b91c1c';
-  if (type === 'transformer') return COLORS.accent1;
-  if (type === 'load') return COLORS.accent2;
-  if (type === 'branch' || type === 'ring_main_unit') return COLORS.gray;
-  if (type === 'bus') return '#2563eb';
-  return COLORS.base;
+  if (type === 'grid' || type === 'source') return '#f87171';
+  if (type === 'transformer') return '#f59e0b';
+  if (type === 'load') return '#22c55e';
+  if (type === 'branch' || type === 'ring_main_unit') return '#38bdf8';
+  if (type === 'bus') return '#60a5fa';
+  return '#22d3ee';
 }
 
 function TopologyNodeSymbol(props: { type: string; isTarget: boolean; voltageColor: string; missingVoltage: boolean }) {
   const color = topologyNodeColor(props.type);
   const ringRadius = props.isTarget ? 22 : 17;
   const ringOpacity = props.missingVoltage ? 0.28 : 0.9;
-  const commonStroke = props.isTarget ? COLORS.accent1 : color;
+  const commonStroke = props.isTarget ? '#facc15' : color;
   return (
     <g filter="url(#topology-node-shadow)">
-      <ellipse cx={7} cy={12} rx={ringRadius + 9} ry={ringRadius * 0.48} fill="#0f172a" opacity={0.13} />
+      <ellipse cx={8} cy={14} rx={ringRadius + 10} ry={ringRadius * 0.5} fill="#020617" opacity={0.42} />
       <circle
         r={ringRadius + 5}
-        fill="#ffffff"
+        fill="#071827"
         stroke={props.voltageColor}
         strokeWidth={props.isTarget ? 4 : 3}
         opacity={ringOpacity}
       />
       {props.type === 'grid' || props.type === 'source' ? (
         <g>
-          <circle cx={5} cy={6} r={ringRadius} fill="#7f1d1d" opacity={0.2} />
-          <circle r={ringRadius} fill="#fff7ed" stroke={commonStroke} strokeWidth={2.4} />
+          <circle cx={5} cy={6} r={ringRadius} fill="#7f1d1d" opacity={0.38} />
+          <circle r={ringRadius} fill="#1f0d13" stroke={commonStroke} strokeWidth={2.4} />
           <path d="M -3 -10 L -11 2 H -3 L -6 11 L 8 -4 H 0 L 3 -10 Z" fill={commonStroke} />
         </g>
       ) : props.type === 'transformer' ? (
         <g>
-          <rect x={-13} y={-7} width={36} height={26} rx={6} fill="#92400e" opacity={0.22} />
-          <rect x={-18} y={-13} width={36} height={26} rx={6} fill="#fff7ed" stroke={commonStroke} strokeWidth={2.2} />
+          <rect x={-13} y={-7} width={36} height={26} rx={6} fill="#92400e" opacity={0.38} />
+          <rect x={-18} y={-13} width={36} height={26} rx={6} fill="#221307" stroke={commonStroke} strokeWidth={2.2} />
           <circle cx={-6} cy={0} r={6} fill="none" stroke={commonStroke} strokeWidth={2} />
           <circle cx={6} cy={0} r={6} fill="none" stroke={commonStroke} strokeWidth={2} />
         </g>
+      ) : props.isTarget ? (
+        <g>
+          <rect x={-20} y={-12} width={45} height={29} rx={6} fill="#713f12" opacity={0.5} />
+          <rect x={-24} y={-17} width={45} height={29} rx={6} fill="#1c1917" stroke={commonStroke} strokeWidth={2.6} />
+          <rect x={21} y={-8} width={5} height={11} rx={2} fill={commonStroke} />
+          <path d="M -15 -2 H 8 M -15 6 H 3" stroke={commonStroke} strokeWidth={2.2} strokeLinecap="round" />
+          <circle r={32} fill="none" stroke="#facc15" strokeWidth={2} strokeDasharray="7 5" opacity={0.75} />
+        </g>
       ) : props.type === 'load' ? (
         <g>
-          <rect x={-12} y={-6} width={34} height={24} rx={5} fill="#166534" opacity={0.2} />
-          <rect x={-17} y={-12} width={34} height={24} rx={5} fill="#ecfdf5" stroke={commonStroke} strokeWidth={2.2} />
+          <rect x={-12} y={-6} width={34} height={24} rx={5} fill="#166534" opacity={0.34} />
+          <rect x={-17} y={-12} width={34} height={24} rx={5} fill="#052e20" stroke={commonStroke} strokeWidth={2.2} />
           <path d="M -10 6 V -2 L -4 -7 L 2 -2 V 6 M 2 -2 L 8 -7 L 14 -2 V 6" fill="none" stroke={commonStroke} strokeWidth={2} strokeLinejoin="round" />
         </g>
       ) : props.type === 'branch' || props.type === 'ring_main_unit' || props.type === 'bus' ? (
         <g>
-          <rect x={-14} y={-4} width={38} height={20} rx={10} fill="#1e3a8a" opacity={0.18} />
-          <rect x={-19} y={-10} width={38} height={20} rx={10} fill="#eff6ff" stroke={commonStroke} strokeWidth={2.2} />
+          <rect x={-14} y={-4} width={38} height={20} rx={10} fill="#1e3a8a" opacity={0.34} />
+          <rect x={-19} y={-10} width={38} height={20} rx={10} fill="#082f49" stroke={commonStroke} strokeWidth={2.2} />
           <path d="M -12 0 H 12 M -7 -7 V 7 M 0 -7 V 7 M 7 -7 V 7" stroke={commonStroke} strokeWidth={2} strokeLinecap="round" />
         </g>
       ) : (
         <g>
-          <circle cx={5} cy={6} r={ringRadius} fill="#0f172a" opacity={0.18} />
-          <circle r={ringRadius} fill={color} stroke="#ffffff" strokeWidth={2.4} />
-          <circle r={4} fill="#ffffff" opacity={0.9} />
+          <circle cx={5} cy={6} r={ringRadius} fill="#020617" opacity={0.38} />
+          <circle r={ringRadius} fill="#082f49" stroke={color} strokeWidth={2.4} />
+          <circle r={4} fill={color} opacity={0.9} />
         </g>
       )}
       {props.isTarget ? (
-        <path d="M 0 -30 L 5 -20 H -5 Z" fill={COLORS.accent1} stroke="#ffffff" strokeWidth={1} />
+        <path d="M 0 -34 L 6 -23 H -6 Z" fill="#facc15" stroke="#ffffff" strokeWidth={1} />
       ) : null}
     </g>
   );
@@ -2518,15 +3140,23 @@ const plotGridStyle: React.CSSProperties = { display: 'grid', gridTemplateColumn
 const plotCardStyle: React.CSSProperties = { border: '1px solid #e5e7eb', borderRadius: 8, padding: 12, background: '#fff' };
 const plotImageStyle: React.CSSProperties = { width: '100%', height: 220, objectFit: 'contain', background: '#f8fafc', border: '1px solid #e5e7eb', borderRadius: 8 };
 const topologyToolbarStyle: React.CSSProperties = { display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, marginBottom: 10, flexWrap: 'wrap' };
-const topologyCanvasStyle: React.CSSProperties = { position: 'relative', height: 660, border: '1px solid #dbe3ef', borderRadius: 8, background: '#eef4f8', overflow: 'hidden' };
+const topologyCanvasStyle: React.CSSProperties = {
+  position: 'relative',
+  height: 680,
+  border: '1px solid rgba(56,189,248,0.32)',
+  borderRadius: 8,
+  background: '#020617',
+  overflow: 'hidden',
+  boxShadow: 'inset 0 0 42px rgba(14,165,233,0.12)',
+};
 const topologySvgStyle: React.CSSProperties = { cursor: 'grab', touchAction: 'none', userSelect: 'none', display: 'block' };
 const topologyViewHintStyle: React.CSSProperties = { margin: '-2px 0 8px 0', color: '#64748b', fontSize: 12 };
 const topologyLegendStripStyle: React.CSSProperties = {
   marginBottom: 10,
   padding: '8px 10px',
-  border: '1px solid #e5e7eb',
+  border: '1px solid rgba(56,189,248,0.22)',
   borderRadius: 8,
-  background: '#ffffff',
+  background: '#08152b',
 };
 const topologyFullscreenStyle: React.CSSProperties = {
   position: 'fixed',
@@ -2535,10 +3165,10 @@ const topologyFullscreenStyle: React.CSSProperties = {
   display: 'flex',
   flexDirection: 'column',
   padding: 14,
-  background: '#ffffff',
-  border: '1px solid #dbe3ef',
+  background: '#07111f',
+  border: '1px solid rgba(56,189,248,0.36)',
   borderRadius: 8,
-  boxShadow: '0 24px 70px rgba(15,23,42,0.24)',
+  boxShadow: '0 24px 70px rgba(2,6,23,0.55)',
 };
 const topologyCanvasFullscreenStyle: React.CSSProperties = {
   ...topologyCanvasStyle,
@@ -2550,18 +3180,142 @@ const topologySummaryStyle: React.CSSProperties = {
   position: 'absolute',
   top: 14,
   right: 14,
-  zIndex: 2,
-  width: 'min(420px, calc(100% - 28px))',
+  zIndex: 3,
+  width: 300,
   maxHeight: 'calc(100% - 28px)',
   overflow: 'auto',
-  border: '1px solid #e5e7eb',
+  border: '1px solid rgba(45,212,191,0.38)',
   borderRadius: 8,
   padding: 14,
-  background: 'rgba(255,255,255,0.96)',
-  boxShadow: '0 18px 42px rgba(15,23,42,0.16)',
+  background: 'linear-gradient(180deg, rgba(8,21,43,0.92), rgba(2,6,23,0.88))',
+  boxShadow: '0 18px 48px rgba(0,0,0,0.42)',
+  backdropFilter: 'blur(7px)',
 };
 const topologySummaryGridStyle: React.CSSProperties = { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: 10 };
-const legendStyle: React.CSSProperties = { display: 'flex', gap: '8px 14px', flexWrap: 'wrap', color: '#475569', fontSize: 12 };
+const topologyKpiStripStyle: React.CSSProperties = {
+  display: 'grid',
+  gridTemplateColumns: 'repeat(auto-fit, minmax(130px, 1fr))',
+  gap: 10,
+  marginBottom: 10,
+};
+const topologyKpiItemStyle: React.CSSProperties = {
+  border: '1px solid rgba(56,189,248,0.20)',
+  borderRadius: 8,
+  padding: '10px 12px',
+  background: 'linear-gradient(180deg, #0b1b33, #071427)',
+  boxShadow: 'inset 0 0 20px rgba(14,165,233,0.08)',
+};
+const topologyKpiLabelStyle: React.CSSProperties = { display: 'block', color: '#94a3b8', fontSize: 12, marginBottom: 5 };
+const topologyKpiValueStyle: React.CSSProperties = { display: 'block', fontSize: 18, lineHeight: 1.1 };
+const topologyLayerBarStyle: React.CSSProperties = {
+  position: 'absolute',
+  top: 14,
+  left: 14,
+  zIndex: 3,
+  width: 150,
+  padding: 12,
+  border: '1px solid rgba(45,212,191,0.36)',
+  borderRadius: 8,
+  background: 'linear-gradient(180deg, rgba(8,21,43,0.9), rgba(2,6,23,0.82))',
+  boxShadow: '0 18px 48px rgba(0,0,0,0.34)',
+  backdropFilter: 'blur(7px)',
+};
+const topologyLayerTitleStyle: React.CSSProperties = { color: '#dff7ff', fontWeight: 800, fontSize: 13, marginBottom: 10 };
+const topologyLayerButtonStyle: React.CSSProperties = {
+  width: '100%',
+  display: 'flex',
+  alignItems: 'center',
+  gap: 8,
+  padding: '7px 6px',
+  border: '1px solid transparent',
+  borderRadius: 6,
+  background: 'transparent',
+  color: '#9fb6cf',
+  fontSize: 12,
+  fontWeight: 700,
+  cursor: 'pointer',
+  textAlign: 'left',
+};
+const topologyLayerButtonActiveStyle: React.CSSProperties = {
+  ...topologyLayerButtonStyle,
+  border: '1px solid rgba(34,211,238,0.34)',
+  background: 'rgba(14,165,233,0.14)',
+  color: '#dff7ff',
+};
+const topologyLayerDotStyle: React.CSSProperties = { width: 7, height: 7, borderRadius: 99, background: '#475569', flex: '0 0 auto' };
+const topologyLayerDotActiveStyle: React.CSSProperties = { ...topologyLayerDotStyle, background: '#22d3ee', boxShadow: '0 0 10px rgba(34,211,238,0.8)' };
+const topologySideTitleStyle: React.CSSProperties = { margin: 0, color: '#dff7ff', fontSize: 17 };
+const topologyStatusPillStyle: React.CSSProperties = {
+  flex: '0 0 auto',
+  border: '1px solid',
+  borderRadius: 999,
+  padding: '4px 8px',
+  background: 'rgba(2,6,23,0.48)',
+  fontSize: 12,
+  fontWeight: 800,
+};
+const topologySideMetricGridStyle: React.CSSProperties = {
+  display: 'grid',
+  gridTemplateColumns: 'repeat(2, minmax(0, 1fr))',
+  gap: 9,
+  marginTop: 12,
+};
+const topologySideMetricItemStyle: React.CSSProperties = {
+  border: '1px solid rgba(56,189,248,0.16)',
+  borderRadius: 7,
+  padding: '8px 9px',
+  background: 'rgba(15,23,42,0.48)',
+  color: '#dff7ff',
+};
+const topologySideSectionTitleStyle: React.CSSProperties = {
+  marginTop: 14,
+  marginBottom: 8,
+  color: '#67e8f9',
+  fontSize: 12,
+  fontWeight: 900,
+  letterSpacing: 0,
+};
+const topologyRiskListStyle: React.CSSProperties = { display: 'grid', gap: 7 };
+const topologyRiskListItemStyle: React.CSSProperties = {
+  display: 'grid',
+  gridTemplateColumns: '24px minmax(0, 1fr) auto',
+  alignItems: 'center',
+  gap: 8,
+  width: '100%',
+  border: '1px solid rgba(56,189,248,0.16)',
+  borderRadius: 7,
+  padding: '7px 8px',
+  background: 'rgba(15,23,42,0.56)',
+  color: '#dff7ff',
+  textAlign: 'left',
+  cursor: 'pointer',
+};
+const topologyRiskListItemActiveStyle: React.CSSProperties = {
+  ...topologyRiskListItemStyle,
+  border: '1px solid rgba(250,204,21,0.72)',
+  background: 'rgba(113,63,18,0.42)',
+};
+const topologyRiskIndexStyle: React.CSSProperties = {
+  width: 22,
+  height: 22,
+  display: 'inline-flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  borderRadius: 99,
+  color: '#ffffff',
+  fontWeight: 900,
+  fontSize: 12,
+};
+const topologyRiskTextStyle: React.CSSProperties = {
+  display: 'grid',
+  gap: 2,
+  minWidth: 0,
+  color: '#dff7ff',
+  fontStyle: 'normal',
+};
+const topologyEmptyRiskStyle: React.CSSProperties = { color: '#9fb6cf', fontSize: 12, lineHeight: 1.5 };
+const topologyImpactTextStyle: React.CSSProperties = { color: '#dff7ff', fontSize: 12, lineHeight: 1.65 };
+const legendStyle: React.CSSProperties = { display: 'flex', gap: '8px 14px', flexWrap: 'wrap', color: '#dff7ff', fontSize: 12 };
 const legendSwatchStyle: React.CSSProperties = { display: 'inline-block', width: 12, height: 12, borderRadius: 2, marginRight: 8, verticalAlign: '-1px' };
 const btnStyle: React.CSSProperties = { padding: '10px 14px', borderRadius: 8, border: '1px solid #cbd5e1', background: '#f1f5f9', fontWeight: 600, cursor: 'pointer' };
 const taskSelectStyle: React.CSSProperties = { minWidth: 320, maxWidth: '100%', padding: '9px 12px', borderRadius: 8, border: '1px solid #d1d5db', background: '#fff', color: '#111827', fontWeight: 600 };

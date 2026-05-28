@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import FileResponse
@@ -29,12 +29,11 @@ class SolverConfigureRequest(BaseModel):
 
 class SolverRunRequest(BaseModel):
     task_name: str | None = None
-    disable_plots: bool | None = None
     output_subdir_name: str | None = None
     population_size: int | None = None
     generations: int | None = None
+    solver_tier: Literal["fast", "standard", "delivery"] | None = None
     target_id: str | None = None
-    enable_opendss_oracle: bool | None = None
     initial_soc: float | None = None
     terminal_soc_mode: str | None = None
     fixed_terminal_soc_target: float | None = None

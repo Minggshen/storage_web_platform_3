@@ -74,8 +74,8 @@ API 文档自动生成于 `http://localhost:8000/docs`。
 2. **拓扑建模** — 可视化搭建配电网拓扑（变压器、母线、线路、负荷）
 3. **资产绑定** — 上传电价表、设备策略库、运行时负荷数据
 4. **构建校验** — 编译为 OpenDSS 兼容的求解器工作目录
-5. **计算运行** — 配置遗传算法参数，启动多目标优化求解
-6. **结果展示** — 查看 Pareto 前沿、NPV/IRR/回收期等财务指标、导出分析报告
+5. **计算运行** — 选择求解精度（快速预览 / 标准求解 / 交付求解），启动多目标优化求解
+6. **结果展示** — 查看 Pareto 前沿、NPV/IRR/回收期等财务指标，导出 HTML / PDF 分析报告
 
 ## 依赖管理
 
@@ -98,8 +98,17 @@ pip install -e ".[web]"            # 仅后端 Web
 
 ```bash
 cd storage_engine_project
-python main.py --registry inputs/registry/node_registry.xlsx --generations 8 --population-size 16
+python main.py --registry inputs/registry/node_registry.xlsx --solver-tier standard
 ```
+
+三档求解精度：
+
+| 档位 | CLI 参数 | 种群 × 代数 | OpenDSS 策略 |
+|------|----------|------------|-------------|
+| 快速预览 | `--solver-tier fast` | 8 × 3 | GA 搜索阶段轻量代理，Top-3 OpenDSS 重校核 |
+| 标准求解 | `--solver-tier standard` | 12 × 5 | GA 搜索阶段轻量代理，Top-3 OpenDSS 重校核 |
+| 交付求解 | `--solver-tier delivery` | 16 × 8 | GA 全流程 OpenDSS 校核 |
+| 自定义 | （不传 `--solver-tier`） | `--population-size` / `--generations` 手动指定 | `--opendss-only-for-full-recheck` 控制 |
 
 ## 注意事项
 
@@ -111,7 +120,9 @@ python main.py --registry inputs/registry/node_registry.xlsx --generations 8 --p
 
 ## 性能优化（2026-05）
 
-求解器引擎进行了三轮 OpenDSS COM 调用优化，将 8 种群 × 1 代典型耗时从 4–5 小时降至约 1.5–2 小时：
+### 第一轮：OpenDSS COM 调用精简
+
+将 8 种群 × 1 代典型耗时从 4–5 小时降至约 1.5–2 小时：
 
 | 优化项 | 涉及文件 | 说明 |
 |--------|---------|------|
@@ -119,7 +130,17 @@ python main.py --registry inputs/registry/node_registry.xlsx --generations 8 --p
 | 合并日内滚动重复调用 | `simulation/rolling_dispatch.py` | `execute_day()` 中两轮逐小时 oracle 调用合并为一轮，小时 0–19 直接复用结果 |
 | 每日单次电路编译 | `simulation/opendss_network_constraint_oracle.py` | 同一天的后续小时用 OpenDSS `Edit` 命令原地更新负荷与储能参数，无需每小时间从零 `Compile` 电路 |
 
-三项优化均不改变仿真精度——潮流校验逻辑、SOC 递推公式、财务模型均保持不变。
+### 第二轮：求解器架构优化
+
+在保持仿真精度的前提下进一步缩短日常求解时间：
+
+| 优化项 | 涉及文件 | 说明 |
+|--------|---------|------|
+| 求解档位 | `main.py`, `SolverPage.tsx` | 三档预设（快速预览 8×3 / 标准求解 12×5 / 交付求解 16×8），GA 搜索阶段默认使用轻量代理约束，OpenDSS 仅用于最终 Top-K 重校核 |
+| 候选值量化 | `optimization/optimizer_bridge.py` | 功率按 50kW、时长按 0.25h 步长量化，提升缓存命中率与结果稳定性 |
+| Top-K Pareto 重校核 | `main.py` | GA 完成后对 Pareto 前沿 Top-K 候选统一 OpenDSS 全年校核，最终 best 闭环保证通过校核 |
+| Profiling 基础设施 | `storage_fitness_evaluator.py`, `lemming_optimizer.py` | 每代/每候选 wall-clock 计时、cache hit rate、OpenDSS trace 统计、Edit fallback 计数输出到 `engine_diagnostics.json` |
+| PDF 报告导出 | `ResultsPage.tsx`, `reportBuilder.ts` | 新增 PDF 导出按钮，A4 打印优化（表格分页、orphans/widows 控制） |
 
 ## 快速部署（无需 Node.js）
 

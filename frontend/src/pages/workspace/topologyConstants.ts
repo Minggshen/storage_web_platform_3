@@ -147,7 +147,6 @@ export const ECONOMIC_DEFAULT_PARAMS: Record<string, unknown> = {
   annual_cycle_limit: 0,
   calendar_life_years: 20,
   calendar_fade_share: 0.15,
-  min_degradation_cost_ratio: 0,
   replacement_cost_ratio: 0.6,
   replacement_year_override: 0,
   replacement_trigger_soh: 0.7,

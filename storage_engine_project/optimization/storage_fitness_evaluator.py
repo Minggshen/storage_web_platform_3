@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 from collections import OrderedDict
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from copy import deepcopy
@@ -99,6 +100,12 @@ class StorageFitnessEvaluator:
         self._cache_hits = 0
         self._cache_misses = 0
         self._eval_counter = 0
+        self._total_fast_proxy_time_s: float = 0.0
+        self._total_full_recheck_time_s: float = 0.0
+        self._total_full_year_time_s: float = 0.0
+        self._fast_proxy_count: int = 0
+        self._full_recheck_count: int = 0
+        self._full_year_count: int = 0
 
     def _resolve_context_for_decision(
         self,
@@ -225,6 +232,7 @@ class StorageFitnessEvaluator:
         if self.config.enable_result_cache:
             self._cache_misses += 1
 
+        _t0 = time.perf_counter()
         annual_result = self.annual_kernel.run_year(
             ctx=ctx,
             rated_power_kw=float(decision.rated_power_kw),
@@ -237,6 +245,16 @@ class StorageFitnessEvaluator:
             fast_proxy_selected_day_indices=self.config.fast_proxy_selected_day_indices,
             keep_daily_objects=(False if annual_mode == "fast_proxy" else True),
         )
+        _elapsed = time.perf_counter() - _t0
+        if annual_mode == "fast_proxy":
+            self._fast_proxy_count += 1
+            self._total_fast_proxy_time_s += _elapsed
+        elif annual_mode == "full_recheck":
+            self._full_recheck_count += 1
+            self._total_full_recheck_time_s += _elapsed
+        elif annual_mode == "full_year":
+            self._full_year_count += 1
+            self._total_full_year_time_s += _elapsed
 
         financial_result = self.financial_evaluator.evaluate(
             ctx=ctx,
@@ -494,6 +512,32 @@ class StorageFitnessEvaluator:
             "cache_hits": self._cache_hits,
             "cache_misses": self._cache_misses,
             "hit_rate": hit_rate,
+        }
+
+    def get_eval_counter(self) -> int:
+        return self._eval_counter
+
+    def get_timing_stats(self) -> dict:
+        return {
+            "total_fast_proxy_time_s": self._total_fast_proxy_time_s,
+            "total_full_recheck_time_s": self._total_full_recheck_time_s,
+            "total_full_year_time_s": self._total_full_year_time_s,
+            "fast_proxy_count": self._fast_proxy_count,
+            "full_recheck_count": self._full_recheck_count,
+            "full_year_count": self._full_year_count,
+            "avg_fast_proxy_time_s": (
+                self._total_fast_proxy_time_s / self._fast_proxy_count
+                if self._fast_proxy_count > 0 else None
+            ),
+            "avg_full_recheck_time_s": (
+                self._total_full_recheck_time_s / self._full_recheck_count
+                if self._full_recheck_count > 0 else None
+            ),
+            "avg_full_year_time_s": (
+                self._total_full_year_time_s / self._full_year_count
+                if self._full_year_count > 0 else None
+            ),
+            "total_eval_count": self._eval_counter,
         }
 
     @staticmethod

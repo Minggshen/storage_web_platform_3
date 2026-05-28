@@ -32,8 +32,8 @@ REGISTRY_REQUIRED_COLUMNS = [
 ]
 
 VALID_CATEGORIES = {"industrial", "commercial", "residential"}
-VALID_DISPATCH_MODES = {"tou_greedy", "lp_daily", "daily_lp", "rule_based", "none", "hybrid"}
-VALID_RUN_MODES = {"single_user", "multi_user", "template_only"}
+VALID_DISPATCH_MODES = {"hybrid"}
+VALID_RUN_MODES = {"single_user"}
 
 
 def _load_registry_dataframe(file_path: Path) -> pd.DataFrame:

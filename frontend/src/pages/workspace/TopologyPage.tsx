@@ -1151,7 +1151,6 @@ function createEdge(fromId: string, toId: string) {
               <EconomicNumberInput label="年循环上限 次/年" name="annual_cycle_limit" fallback={0} step="1" min={0} reference="0 表示不设硬约束；保守可填循环寿命/项目寿命，8000/20≈400" params={economicParams} onChange={applyEconomicParam} />
               <EconomicNumberInput label="日历寿命 年" name="calendar_life_years" fallback={20} step="1" min={1} reference="参考 15-20，默认 20" params={economicParams} onChange={applyEconomicParam} />
               <EconomicNumberInput label="日历衰减占比" name="calendar_fade_share" fallback={0.15} step="0.01" min={0} max={1} reference="参考 0.1-0.2，默认 0.15" params={economicParams} onChange={applyEconomicParam} />
-              <EconomicNumberInput label="最低成本比例" name="min_degradation_cost_ratio" fallback={0} step="0.01" min={0} reference="保守校核可设 0.02-0.05" params={economicParams} onChange={applyEconomicParam} />
             </EconomicParamGroup>
 
             <EconomicParamGroup
@@ -2254,8 +2253,6 @@ function createEdge(fromId: string, toId: string) {
                         style={storageControlledInputStyle}
                       >
                         <option value="hybrid">综合优化</option>
-                        <option value="price_arbitrage">电价套利</option>
-                        <option value="peak_shaving">削峰填谷</option>
                       </select>
 
                       <label style={labelStyle}>运行模式</label>
@@ -2266,7 +2263,6 @@ function createEdge(fromId: string, toId: string) {
                         style={storageControlledInputStyle}
                       >
                         <option value="single_user">单用户</option>
-                        <option value="multi_user">多用户</option>
                       </select>
 
                     </>

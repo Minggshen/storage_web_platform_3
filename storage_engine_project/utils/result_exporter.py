@@ -1366,6 +1366,8 @@ def export_optimization_run(
     run_result: LemmingOptimizationRunResult,
     case_name: str | None = None,
     enable_plots: bool = True,
+    *,
+    timing_stats: dict[str, Any] | None = None,
 ) -> dict[str, str]:
     out_dir = _ensure_dir(output_dir)
     case_name = case_name or out_dir.name
@@ -1478,6 +1480,7 @@ def export_optimization_run(
         "population_size": len(run_result.population_results),
         "all_evaluation_count": run_result.all_evaluation_count,
         "plot_count": len(plot_paths),
+        "timing": timing_stats or {},
     }
     _safe_write_json(out_dir / "run_meta.json", meta)
     _safe_write_json(run_health_report_path, _build_run_health_report(run_result, best_hourly_network_trace))

@@ -200,6 +200,13 @@ export type ResultChartsResponse = {
     annual_value_breakdown?: ResultChartPoint[];
     financial_metrics?: ResultChartPoint[];
     pareto?: ResultChartPoint[];
+    pareto_frontier?: ResultChartPoint[];
+    degradation_soh?: ResultChartPoint[];
+    lcos?: {
+      summary?: ResultChartPoint;
+      components?: ResultChartPoint[];
+      annual?: ResultChartPoint[];
+    };
     optimization_history?: ResultChartPoint[];
     storage_impact?: ResultChartPoint[];
     network_constraints?: {
@@ -323,6 +330,7 @@ export type ReportCashflowChartPoint = {
   netCashflowWan?: number | null;
   discountedNetCashflowWan?: number | null;
   cumulativeDiscountedWan?: number | null;
+  cumulativeUndiscountedWan?: number | null;
 };
 
 export type ReportCapitalBreakdownItem = {
@@ -353,6 +361,32 @@ export type ReportParetoCandidate = {
   annualCycles?: number | null;
   feasible?: boolean | null;
   totalViolation?: number | null;
+  paretoFrontier?: boolean | null;
+  frontierOrder?: number | null;
+};
+
+export type ReportDegradationSohPoint = {
+  year?: number | null;
+  batterySoh?: number | null;
+  batterySohPct?: number | null;
+  capacityFactor?: number | null;
+  capacityFactorPct?: number | null;
+  degradationCostWan?: number | null;
+  replacementCostWan?: number | null;
+  replacementEvent?: boolean | null;
+  annualThroughputKwh?: number | null;
+  annualCycles?: number | null;
+};
+
+export type ReportLcosChart = {
+  summary?: {
+    lcosYuanPerKwh?: number | null;
+    totalCostWan?: number | null;
+    totalThroughputMwh?: number | null;
+    averageRevenueYuanPerKwh?: number | null;
+  } | null;
+  components?: ReportAnnualValueBreakdownItem[];
+  annual?: Record<string, unknown>[];
 };
 
 export type ReportOptimizationHistoryChart = {
@@ -384,6 +418,9 @@ export type ReportCharts = {
   annual_value_breakdown?: ReportAnnualValueBreakdownItem[];
   financial_metrics?: ReportFinancialMetricItem[];
   pareto?: ReportParetoCandidate[];
+  pareto_frontier?: ReportParetoCandidate[];
+  degradation_soh?: ReportDegradationSohPoint[];
+  lcos?: ReportLcosChart | null;
   optimization_history?: ReportOptimizationHistoryChart | null;
   network_constraints?: ReportNetworkConstraintsChart | null;
   feasibility_diagnostics?: ReportFeasibilityDiagnosticsChart | null;

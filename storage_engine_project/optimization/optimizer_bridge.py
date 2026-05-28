@@ -14,6 +14,9 @@ from storage_engine_project.optimization.optimization_models import (
 from storage_engine_project.optimization.storage_fitness_evaluator import StorageFitnessEvaluator
 from storage_engine_project.simulation.network_constraint_oracle import NetworkConstraintOracle
 
+POWER_QUANTUM_KW: float = 50.0
+DURATION_QUANTUM_H: float = 0.25
+
 
 @dataclass(slots=True)
 class SearchSpaceConfig:
@@ -105,6 +108,16 @@ class OptimizerBridge:
 
         decision = self.vector_to_decision(x_clip)
         ss = self.search_spaces[decision.strategy_id]
+        x_clip[1] = np.clip(x_clip[1], ss.power_min_kw, ss.power_max_kw)
+        x_clip[2] = np.clip(x_clip[2], ss.duration_min_h, ss.duration_max_h)
+
+        # 量化功率和时长以提升缓存命中率与结果稳定性
+        if POWER_QUANTUM_KW > 0:
+            x_clip[1] = round(float(x_clip[1]) / POWER_QUANTUM_KW) * POWER_QUANTUM_KW
+        if DURATION_QUANTUM_H > 0:
+            x_clip[2] = round(float(x_clip[2]) / DURATION_QUANTUM_H) * DURATION_QUANTUM_H
+
+        # 量化后重新裁剪到策略边界
         x_clip[1] = np.clip(x_clip[1], ss.power_min_kw, ss.power_max_kw)
         x_clip[2] = np.clip(x_clip[2], ss.duration_min_h, ss.duration_max_h)
         return x_clip

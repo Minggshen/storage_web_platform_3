@@ -10,12 +10,11 @@ import type {
 
 export type SolverRunOptions = {
   task_name?: string;
-  disable_plots?: boolean;
   output_subdir_name?: string;
   population_size?: number;
   generations?: number;
+  solver_tier?: 'fast' | 'standard' | 'delivery';
   target_id?: string;
-  enable_opendss_oracle?: boolean;
   initial_soc?: number;
   terminal_soc_mode?: string;
   fixed_terminal_soc_target?: number;

@@ -51,8 +51,9 @@ export default function SolverPage() {
   const [rerunning, setRerunning] = useState(false);
   const [cancelling, setCancelling] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [populationSize, setPopulationSize] = useState('16');
-  const [generations, setGenerations] = useState('8');
+  const [populationSize, setPopulationSize] = useState('12');
+  const [generations, setGenerations] = useState('5');
+  const [solverTier, setSolverTier] = useState<'fast' | 'standard' | 'delivery' | 'custom'>('standard');
   const [targetId, setTargetId] = useState('');
   const [initialSoc, setInitialSoc] = useState('0.25');
   const [safetyTradeoff, setSafetyTradeoff] = useState(50);
@@ -135,8 +136,9 @@ export default function SolverPage() {
     try {
       await rerunSolver(projectId, {
         task_name: 'ui_solver_run',
-        population_size: Math.max(Number(populationSize) || 1, 1),
-        generations: Math.max(Number(generations) || 1, 1),
+        population_size: Math.max(Number(effectivePopulationSize) || 1, 1),
+        generations: Math.max(Number(effectiveGenerations) || 1, 1),
+        solver_tier: solverTier !== 'custom' ? solverTier : undefined,
         target_id: targetId.trim() || undefined,
         output_subdir_name: 'integrated_optimization',
         initial_soc: clampInputNumber(initialSoc, 0, 1, 0.25),
@@ -224,12 +226,28 @@ export default function SolverPage() {
 
   // When a task is running, display the actual parameters used by that task (not local defaults).
   const freezeInputs = taskIsActive && latestRunRequest != null;
+
+  const TIER_DEFAULTS: Record<string, { pop: string; gen: string }> = {
+    fast: { pop: '8', gen: '3' },
+    standard: { pop: '12', gen: '5' },
+    delivery: { pop: '16', gen: '8' },
+    custom: { pop: populationSize, gen: generations },
+  };
+
+  const effectiveSolverTier: 'fast' | 'standard' | 'delivery' | 'custom' = freezeInputs
+    ? (latestRunRequest?.solver_tier
+        ? String(latestRunRequest.solver_tier) as 'fast' | 'standard' | 'delivery'
+        : 'custom')
+    : solverTier;
+
+  const tierIsPreset = effectiveSolverTier !== 'custom';
+
   const effectivePopulationSize = freezeInputs
-    ? String(latestRunRequest?.population_size ?? populationSize)
-    : populationSize;
+    ? String(latestRunRequest?.population_size ?? (tierIsPreset ? TIER_DEFAULTS[effectiveSolverTier].pop : populationSize))
+    : (tierIsPreset ? TIER_DEFAULTS[effectiveSolverTier].pop : populationSize);
   const effectiveGenerations = freezeInputs
-    ? String(latestRunRequest?.generations ?? generations)
-    : generations;
+    ? String(latestRunRequest?.generations ?? (tierIsPreset ? TIER_DEFAULTS[effectiveSolverTier].gen : generations))
+    : (tierIsPreset ? TIER_DEFAULTS[effectiveSolverTier].gen : generations);
   const effectiveTargetId = freezeInputs
     ? String(latestRunRequest?.target_id ?? targetId)
     : targetId;
@@ -282,15 +300,37 @@ export default function SolverPage() {
             </div>
           )}
           <div className="grid gap-3" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 240px))' }}>
+            <label htmlFor="solver-tier" className="grid gap-1.5">
+              <span className="text-[13px] font-bold text-foreground/70">求解精度</span>
+              <select
+                id="solver-tier"
+                value={effectiveSolverTier}
+                onChange={(e) => { if (!freezeInputs) {
+                  const tier = e.target.value as 'fast' | 'standard' | 'delivery' | 'custom';
+                  setSolverTier(tier);
+                  if (tier !== 'custom') {
+                    setPopulationSize(TIER_DEFAULTS[tier].pop);
+                    setGenerations(TIER_DEFAULTS[tier].gen);
+                  }
+                }}}
+                disabled={freezeInputs}
+                className="h-10 rounded-xl border border-border bg-card px-2.5 text-sm"
+              >
+                <option value="fast">快速预览</option>
+                <option value="standard">标准求解（推荐）</option>
+                <option value="delivery">交付求解</option>
+                <option value="custom">自定义参数</option>
+              </select>
+            </label>
             <label htmlFor="solver-population-size" className="grid gap-1.5">
               <span className="text-[13px] font-bold text-foreground/70">population_size</span>
               <input
                 id="solver-population-size"
                 type="number" min={1} step={1}
                 value={effectivePopulationSize}
-                onChange={(e) => { if (!freezeInputs) setPopulationSize(e.target.value); }}
-                readOnly={freezeInputs}
-                className={`h-10 rounded-xl border px-2.5 text-sm ${freezeInputs ? 'border-border bg-muted/50 text-muted-foreground' : 'border-border bg-card'}`}
+                onChange={(e) => { if (!freezeInputs && !tierIsPreset) setPopulationSize(e.target.value); }}
+                readOnly={freezeInputs || tierIsPreset}
+                className={`h-10 rounded-xl border px-2.5 text-sm ${freezeInputs || tierIsPreset ? 'border-border bg-muted/50 text-muted-foreground' : 'border-border bg-card'}`}
               />
             </label>
             <label htmlFor="solver-generations" className="grid gap-1.5">
@@ -299,9 +339,9 @@ export default function SolverPage() {
                 id="solver-generations"
                 type="number" min={1} step={1}
                 value={effectiveGenerations}
-                onChange={(e) => { if (!freezeInputs) setGenerations(e.target.value); }}
-                readOnly={freezeInputs}
-                className={`h-10 rounded-xl border px-2.5 text-sm ${freezeInputs ? 'border-border bg-muted/50 text-muted-foreground' : 'border-border bg-card'}`}
+                onChange={(e) => { if (!freezeInputs && !tierIsPreset) setGenerations(e.target.value); }}
+                readOnly={freezeInputs || tierIsPreset}
+                className={`h-10 rounded-xl border px-2.5 text-sm ${freezeInputs || tierIsPreset ? 'border-border bg-muted/50 text-muted-foreground' : 'border-border bg-card'}`}
               />
             </label>
             <label htmlFor="solver-target-id" className="grid gap-1.5">
@@ -389,7 +429,10 @@ export default function SolverPage() {
           ) : null}
 
           <div className="mt-3 text-[13px] text-muted-foreground">
-            计算运行会在 fast_proxy 代表日和 full_recheck 全年重校核中调用 OpenDSS 全负荷潮流；页面会自动刷新任务状态和日志。
+            {tierIsPreset && effectiveSolverTier !== 'delivery'
+              ? 'GA 搜索阶段使用轻量代理约束，求解完成后对 Top 候选执行 OpenDSS 全年重校核。'
+              : '优化阶段与重校核均启用 OpenDSS 全负荷潮流。'}
+            页面会自动刷新任务状态和日志。
           </div>
           <div className="mt-2.5 text-[13px] text-muted-foreground">
             年度初始 SOC 只用于首日开局；进入全年逐日重校核后，次日初始 SOC 会自动继承前一日末 SOC，不再强制要求单日首尾回到固定值。

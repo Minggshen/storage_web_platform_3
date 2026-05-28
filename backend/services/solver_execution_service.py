@@ -572,6 +572,14 @@ class SolverExecutionService:
             "--population-size", str(self._safe_int(request.get("population_size"), 16)),
             "--generations", str(self._safe_int(request.get("generations"), 8)),
         ]
+
+        solver_tier = str(request.get("solver_tier") or "").strip().lower()
+        if solver_tier in {"fast", "standard", "delivery"}:
+            command.extend(["--solver-tier", solver_tier])
+
+        if request.get("opendss_only_for_full_recheck") is True:
+            command.append("--opendss-only-for-full-recheck")
+
         target_id = str(request.get("target_id") or "").strip()
         if not target_id:
             target_id = self._resolve_single_registry_target_id(registry_path)
@@ -1462,6 +1470,9 @@ class SolverExecutionService:
             warnings.append("未解析到现金流表。")
 
         operation = self._build_operation_charts(hourly_rows)
+        pareto_chart = self._build_pareto_chart(population_rows or archive_rows)
+        degradation_soh = self._build_degradation_soh_chart(cashflow_rows, financial_summary, annual_summary)
+        lcos = self._build_lcos_chart(cashflow_rows, financial_summary, annual_summary, degradation_soh)
         feasibility = self._build_feasibility_diagnostics(best_result_summary, population_rows or archive_rows, history_rows)
         if feasibility["summary"].get("status") == "infeasible":
             warnings.append("当前推荐方案不是严格可行解，请重点查看可行性诊断。")
@@ -1474,8 +1485,11 @@ class SolverExecutionService:
             "cashflow": self._build_cashflow_chart(cashflow_rows, financial_summary),
             "capital_breakdown": self._build_capital_breakdown(financial_summary),
             "annual_value_breakdown": self._build_annual_value_breakdown(financial_summary),
-            "financial_metrics": self._build_financial_metrics(financial_summary, annual_summary),
-            "pareto": self._build_pareto_chart(population_rows or archive_rows),
+            "financial_metrics": self._build_financial_metrics(financial_summary, annual_summary, lcos.get("summary")),
+            "lcos": lcos,
+            "degradation_soh": degradation_soh,
+            "pareto": pareto_chart,
+            "pareto_frontier": [point for point in pareto_chart if point.get("paretoFrontier")],
             "optimization_history": self._build_history_chart(history_rows),
             "storage_impact": self._build_storage_impact_chart(operation["representative_day"].get("rows", [])),
             "network_constraints": self._build_network_constraint_charts(hourly_rows, monthly_rows, annual_summary),
@@ -1515,6 +1529,14 @@ class SolverExecutionService:
             key=lambda x: (x.get("npvWan") or 0),
             reverse=True,
         )
+        pareto_frontier = [
+            p for p in pareto_raw
+            if isinstance(p, dict) and p.get("paretoFrontier")
+        ]
+        pareto_frontier = sorted(
+            pareto_frontier,
+            key=lambda x: (x.get("frontierOrder") if x.get("frontierOrder") is not None else 10**9),
+        )
 
         history_raw = charts.get("optimization_history") or []
         history_summary = self._summarize_history(history_raw)
@@ -1541,6 +1563,9 @@ class SolverExecutionService:
                 "annual_value_breakdown": charts.get("annual_value_breakdown"),
                 "financial_metrics": charts.get("financial_metrics"),
                 "pareto": pareto_sorted[:20],
+                "pareto_frontier": pareto_frontier[:20],
+                "lcos": charts.get("lcos"),
+                "degradation_soh": charts.get("degradation_soh"),
                 "optimization_history": history_summary,
                 "network_constraints": {
                     "monthly": nc.get("monthly", []),
@@ -2106,6 +2131,12 @@ class SolverExecutionService:
                 return self._number(row, key, default)
         return default
 
+    def _optional_number_any(self, row: Dict[str, Any], keys: List[str]) -> Optional[float]:
+        for key in keys:
+            if key in row and row.get(key) not in (None, ""):
+                return self._optional_number(row, key)
+        return None
+
     def _optional_number(self, row: Dict[str, Any], key: str) -> Optional[float]:
         value = row.get(key)
         if value in (None, ""):
@@ -2115,6 +2146,16 @@ class SolverExecutionService:
         except Exception:
             return None
         return number if math.isfinite(number) else None
+
+    @staticmethod
+    def _bool(value: Any) -> bool:
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, (int, float)):
+            return bool(value)
+        if isinstance(value, str):
+            return value.strip().lower() in {"1", "true", "yes", "y", "是"}
+        return bool(value)
 
     def _bool_value(self, value: Any) -> Optional[bool]:
         if isinstance(value, bool):
@@ -3402,11 +3443,15 @@ class SolverExecutionService:
             row[target_key] = sum(subset) / max(len(subset), 1)
 
     def _build_cashflow_chart(self, rows: List[Dict[str, Any]], financial_summary: Dict[str, Any]) -> List[Dict[str, Any]]:
-        cumulative = -self._number(financial_summary, "initial_investment_yuan") / 10000.0
+        initial_investment_wan = -self._number(financial_summary, "initial_investment_yuan") / 10000.0
+        cumulative_discounted = initial_investment_wan
+        cumulative_undiscounted = initial_investment_wan
         chart: List[Dict[str, Any]] = []
         for row in rows:
+            net = self._number(row, "net_cashflow_yuan") / 10000.0
             discounted = self._number(row, "discounted_net_cashflow_yuan") / 10000.0
-            cumulative += discounted
+            cumulative_undiscounted += net
+            cumulative_discounted += discounted
             chart.append(
                 {
                     "year": int(self._number(row, "year")),
@@ -3422,9 +3467,10 @@ class SolverExecutionService:
                     "omCostWan": -self._number(row, "om_cost_yuan") / 10000.0,
                     "replacementCostWan": -self._number(row, "replacement_cost_yuan") / 10000.0,
                     "salvageValueWan": self._number(row, "salvage_value_yuan") / 10000.0,
-                    "netCashflowWan": self._number(row, "net_cashflow_yuan") / 10000.0,
+                    "netCashflowWan": net,
                     "discountedNetCashflowWan": discounted,
-                    "cumulativeDiscountedWan": cumulative,
+                    "cumulativeUndiscountedWan": cumulative_undiscounted,
+                    "cumulativeDiscountedWan": cumulative_discounted,
                 }
             )
         return chart
@@ -3463,8 +3509,13 @@ class SolverExecutionService:
         ]
         return [{"name": name, "valueWan": value / 10000.0} for name, value in items]
 
-    def _build_financial_metrics(self, financial_row: Dict[str, Any], annual_row: Dict[str, Any]) -> List[Dict[str, Any]]:
-        return [
+    def _build_financial_metrics(
+        self,
+        financial_row: Dict[str, Any],
+        annual_row: Dict[str, Any],
+        lcos_summary: Optional[Dict[str, Any]] = None,
+    ) -> List[Dict[str, Any]]:
+        metrics = [
             {"name": "NPV", "value": self._number(financial_row, "npv_yuan") / 10000.0, "unit": "万元"},
             {"name": "IRR", "value": self._number(financial_row, "irr") * 100.0, "unit": "%"},
             {"name": "静态回收期", "value": self._optional_number(financial_row, "simple_payback_years"), "unit": "年"},
@@ -3479,6 +3530,219 @@ class SolverExecutionService:
             {"name": "额定容量", "value": self._number(financial_row, "rated_energy_kwh"), "unit": "kWh"},
             {"name": "年等效循环", "value": self._number(annual_row or financial_row, "annual_equivalent_full_cycles"), "unit": "次"},
         ]
+        if isinstance(lcos_summary, dict):
+            lcos_value = self._optional_number(lcos_summary, "lcosYuanPerKwh")
+            if lcos_value is not None:
+                metrics.append({"name": "LCOS", "value": lcos_value, "unit": "元/kWh吞吐"})
+        return metrics
+
+    def _build_degradation_soh_chart(
+        self,
+        rows: List[Dict[str, Any]],
+        financial_row: Dict[str, Any],
+        annual_row: Dict[str, Any],
+    ) -> List[Dict[str, Any]]:
+        if not rows:
+            return []
+
+        first_capacity = self._optional_number_any(
+            financial_row,
+            ["first_year_capacity_factor", "firstYearCapacityFactor", "capacity_factor", "capacityFactor"],
+        )
+        last_capacity = self._optional_number_any(
+            financial_row,
+            ["last_year_capacity_factor", "lastYearCapacityFactor"],
+        )
+        if first_capacity is None:
+            first_capacity = 1.0
+        if last_capacity is None:
+            last_capacity = first_capacity
+
+        annual_throughput = self._number_any(
+            annual_row or financial_row,
+            ["annual_battery_throughput_kwh", "battery_throughput_kwh", "annualBatteryThroughputKwh"],
+        )
+        annual_cycles = self._number_any(
+            annual_row or financial_row,
+            ["annual_equivalent_full_cycles", "equivalent_full_cycles", "annualCycles"],
+        )
+        total_rows = max(len(rows), 1)
+        chart: List[Dict[str, Any]] = []
+        for idx, row in enumerate(rows):
+            year = int(self._number_any(row, ["year", "year_index", "yearIndex"], float(idx + 1)))
+            soh = self._optional_number_any(row, ["battery_soh", "batterySoh", "soh", "SOH"])
+            capacity_factor = self._optional_number_any(row, ["capacity_factor", "capacityFactor"])
+            if capacity_factor is None and soh is not None:
+                capacity_factor = soh
+            if soh is None and capacity_factor is not None:
+                soh = capacity_factor
+            if soh is None or capacity_factor is None:
+                ratio = idx / max(total_rows - 1, 1)
+                derived_capacity = float(first_capacity) + (float(last_capacity) - float(first_capacity)) * ratio
+                if capacity_factor is None:
+                    capacity_factor = derived_capacity
+                if soh is None:
+                    soh = derived_capacity
+            capacity_factor = max(0.0, float(capacity_factor))
+            soh = max(0.0, float(soh))
+            throughput = self._optional_number_any(
+                row,
+                ["annual_battery_throughput_kwh", "battery_throughput_kwh", "throughput_kwh", "annualThroughputKwh"],
+            )
+            if throughput is None and annual_throughput > 0:
+                throughput = annual_throughput * capacity_factor
+            cycles = self._optional_number_any(
+                row,
+                ["annual_equivalent_full_cycles", "equivalent_full_cycles", "annualCycles"],
+            )
+            if cycles is None and annual_cycles > 0:
+                cycles = annual_cycles * capacity_factor
+            replacement_cost = self._number(row, "replacement_cost_yuan")
+            chart.append(
+                {
+                    "year": year,
+                    "batterySoh": soh,
+                    "batterySohPct": soh * 100.0,
+                    "capacityFactor": capacity_factor,
+                    "capacityFactorPct": capacity_factor * 100.0,
+                    "degradationCostWan": self._number(row, "degradation_cost_yuan") / 10000.0,
+                    "replacementCostWan": replacement_cost / 10000.0,
+                    "replacementEvent": replacement_cost > 0.0,
+                    "annualThroughputKwh": throughput or 0.0,
+                    "annualCycles": cycles or 0.0,
+                }
+            )
+        return chart
+
+    def _build_lcos_chart(
+        self,
+        cashflow_rows: List[Dict[str, Any]],
+        financial_row: Dict[str, Any],
+        annual_row: Dict[str, Any],
+        degradation_rows: List[Dict[str, Any]],
+    ) -> Dict[str, Any]:
+        if not cashflow_rows and not financial_row:
+            return {"summary": {}, "components": [], "annual": []}
+
+        initial_investment = self._number_any(
+            financial_row,
+            ["initial_net_investment_yuan", "initial_investment_yuan", "total_capex_yuan"],
+        )
+        project_life = int(self._number(financial_row, "project_life_years", float(len(cashflow_rows) or 0)))
+        project_life = max(project_life, len(cashflow_rows), 0)
+        replacement_total = sum(self._number(row, "replacement_cost_yuan") for row in cashflow_rows)
+        if replacement_total <= 0.0:
+            replacement_total = self._number(financial_row, "total_replacement_cost_yuan")
+        om_total = sum(self._number(row, "om_cost_yuan") for row in cashflow_rows)
+        if om_total <= 0.0:
+            om_total = self._number(financial_row, "annual_om_cost_yuan") * project_life
+        degradation_total = sum(self._number(row, "degradation_cost_yuan") for row in cashflow_rows)
+        if degradation_total <= 0.0:
+            degradation_total = self._number(financial_row, "annual_degradation_cost_yuan") * project_life
+        network_penalty_total = sum(self._number(row, "network_penalty_yuan") for row in cashflow_rows)
+        if network_penalty_total <= 0.0:
+            network_penalty_total = (
+                self._number(financial_row, "annual_transformer_penalty_yuan")
+                + self._number(financial_row, "annual_voltage_penalty_yuan")
+            ) * project_life
+        service_penalty_total = sum(self._number(row, "service_penalty_yuan") for row in cashflow_rows)
+        if service_penalty_total <= 0.0:
+            service_penalty_total = self._number(financial_row, "annual_service_penalty_yuan") * project_life
+        salvage_total = sum(self._number(row, "salvage_value_yuan") for row in cashflow_rows)
+        if salvage_total <= 0.0:
+            salvage_total = self._number(financial_row, "total_salvage_value_yuan")
+
+        annual_throughput = self._number_any(
+            annual_row or financial_row,
+            ["annual_battery_throughput_kwh", "battery_throughput_kwh", "annualBatteryThroughputKwh"],
+        )
+        explicit_throughput = sum(
+            self._number_any(row, ["annual_battery_throughput_kwh", "battery_throughput_kwh", "throughput_kwh", "annualThroughputKwh"])
+            for row in cashflow_rows
+        )
+        if explicit_throughput > 0.0:
+            total_throughput = explicit_throughput
+        elif degradation_rows and annual_throughput > 0.0:
+            total_throughput = sum(
+                annual_throughput * self._number(row, "capacityFactor", 1.0)
+                for row in degradation_rows
+            )
+        else:
+            total_throughput = annual_throughput * project_life
+
+        components = [
+            ("初始投资", initial_investment),
+            ("运维成本", om_total),
+            ("退化成本", degradation_total),
+            ("更换成本", replacement_total),
+            ("网侧/服务罚金", network_penalty_total + service_penalty_total),
+            ("残值抵扣", -salvage_total),
+        ]
+        component_rows = []
+        total_cost = 0.0
+        for name, amount in components:
+            if abs(amount) < 1e-9:
+                continue
+            total_cost += amount
+            component_rows.append(
+                {
+                    "name": name,
+                    "valueWan": amount / 10000.0,
+                    "lcosYuanPerKwh": amount / total_throughput if total_throughput > 0 else None,
+                }
+            )
+
+        gross_revenue = self._number_any(
+            financial_row,
+            ["annual_gross_revenue_yuan", "annual_arbitrage_revenue_yuan", "annual_net_operating_cashflow_yuan"],
+        )
+        average_revenue = gross_revenue / annual_throughput if annual_throughput > 0 else None
+        annual_rows = []
+        annual_degradation = self._number(financial_row, "annual_degradation_cost_yuan")
+        annual_network_penalty = self._number(financial_row, "annual_transformer_penalty_yuan") + self._number(financial_row, "annual_voltage_penalty_yuan")
+        annual_service_penalty = self._number(financial_row, "annual_service_penalty_yuan")
+        for idx, row in enumerate(cashflow_rows):
+            capacity_factor = (
+                self._number(degradation_rows[idx], "capacityFactor", 1.0)
+                if idx < len(degradation_rows)
+                else 1.0
+            )
+            degradation_cost = self._number(row, "degradation_cost_yuan")
+            if degradation_cost <= 0.0 and annual_degradation > 0.0:
+                degradation_cost = annual_degradation * capacity_factor
+            network_penalty = self._number(row, "network_penalty_yuan")
+            if network_penalty <= 0.0 and annual_network_penalty > 0.0:
+                network_penalty = annual_network_penalty * capacity_factor
+            service_penalty = self._number(row, "service_penalty_yuan")
+            if service_penalty <= 0.0 and annual_service_penalty > 0.0:
+                service_penalty = annual_service_penalty * capacity_factor
+            year_cost = (
+                self._number(row, "om_cost_yuan")
+                + degradation_cost
+                + self._number(row, "replacement_cost_yuan")
+                + network_penalty
+                + service_penalty
+                - self._number(row, "salvage_value_yuan")
+            )
+            annual_rows.append(
+                {
+                    "year": int(self._number_any(row, ["year", "year_index", "yearIndex"], float(idx + 1))),
+                    "capacityFactor": capacity_factor,
+                    "throughputKwh": annual_throughput * capacity_factor if annual_throughput > 0 else 0.0,
+                    "costWan": year_cost / 10000.0,
+                }
+            )
+
+        return {
+            "summary": {
+                "lcosYuanPerKwh": total_cost / total_throughput if total_throughput > 0 else None,
+                "totalCostWan": total_cost / 10000.0,
+                "totalThroughputMwh": total_throughput / 1000.0,
+                "averageRevenueYuanPerKwh": average_revenue,
+            },
+            "components": component_rows,
+            "annual": annual_rows,
+        }
 
     def _build_pareto_chart(self, rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         chart: List[Dict[str, Any]] = []
@@ -3494,11 +3758,56 @@ class SolverExecutionService:
                     "initialInvestmentWan": self._number(row, "initial_investment_yuan") / 10000.0,
                     "paybackYears": self._optional_number(row, "simple_payback_years"),
                     "annualCycles": self._number(row, "annual_equivalent_full_cycles"),
-                    "feasible": bool(row.get("feasible")),
+                    "feasible": self._bool(row.get("feasible")),
                     "totalViolation": self._number(row, "total_violation"),
                 }
             )
+        self._annotate_pareto_frontier(chart)
         return chart
+
+    def _annotate_pareto_frontier(self, chart: List[Dict[str, Any]]) -> None:
+        candidates: List[Tuple[int, float, float]] = []
+        for idx, point in enumerate(chart):
+            if not point.get("feasible"):
+                point["paretoFrontier"] = False
+                continue
+            investment = self._finite_number(point.get("initialInvestmentWan"), None)
+            npv = self._finite_number(point.get("npvWan"), None)
+            if investment is None or npv is None:
+                point["paretoFrontier"] = False
+                continue
+            candidates.append((idx, float(investment), float(npv)))
+
+        frontier_indices: List[int] = []
+        eps = 1e-9
+        for idx, investment, npv in candidates:
+            dominated = False
+            for other_idx, other_investment, other_npv in candidates:
+                if other_idx == idx:
+                    continue
+                if (
+                    other_investment <= investment + eps
+                    and other_npv >= npv - eps
+                    and (other_investment < investment - eps or other_npv > npv + eps)
+                ):
+                    dominated = True
+                    break
+            if not dominated:
+                frontier_indices.append(idx)
+
+        frontier_indices.sort(
+            key=lambda i: (
+                self._finite_number(chart[i].get("initialInvestmentWan"), 0.0) or 0.0,
+                self._finite_number(chart[i].get("npvWan"), 0.0) or 0.0,
+            )
+        )
+        frontier_set = set(frontier_indices)
+        order_by_index = {idx: order + 1 for order, idx in enumerate(frontier_indices)}
+        for idx, point in enumerate(chart):
+            is_frontier = idx in frontier_set
+            point["paretoFrontier"] = is_frontier
+            if is_frontier:
+                point["frontierOrder"] = order_by_index[idx]
 
     def _build_history_chart(self, rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         chart: List[Dict[str, Any]] = []

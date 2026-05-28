@@ -5,6 +5,7 @@ import json
 import math
 import os
 import sys
+import time
 from pathlib import Path
 from typing import Any
 
@@ -28,6 +29,7 @@ from storage_engine_project.optimization.lemming_optimizer import (
 )
 from storage_engine_project.optimization.optimization_models import FitnessEvaluationResult
 from storage_engine_project.optimization.optimizer_bridge import OptimizerBridge
+from storage_engine_project.optimization.pareto_utils import dominates, select_best_compromise
 from storage_engine_project.optimization.storage_fitness_evaluator import (
     FitnessEvaluatorConfig,
     StorageFitnessEvaluator,
@@ -87,6 +89,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output-dir", type=str, default="outputs/integrated_optimization", help="结果输出目录")
     parser.add_argument("--population-size", type=int, default=16, help="种群规模")
     parser.add_argument("--generations", type=int, default=8, help="优化代数")
+    parser.add_argument("--solver-tier", type=str, default="",
+                        choices=["fast", "standard", "delivery", ""],
+                        help="求解器预设档位：fast=快速预览(8×3,GA轻量代理,Top-3 OpenDSS重校核), standard=标准求解(12×5,GA轻量代理,Top-3 OpenDSS重校核), delivery=交付求解(16×8,GA全流程OpenDSS)")
     parser.add_argument("--disable-plots", action="store_true", help="不生成绘图文件")
     parser.add_argument("--safety-economy-tradeoff", type=float, default=0.5, help="安全-经济权衡系数：0=纯经济最优，1=纯安全最优（默认 0.5 并重）")
     parser.add_argument("--initial-soc", type=float, default=_env_float("STORAGE_INITIAL_SOC", 0.50), help="年度仿真的首日初始 SOC")
@@ -447,6 +452,117 @@ def _ensure_best_full_recheck(
     run_result.population_results = _replace_same_decision(run_result.population_results, rechecked)
 
 
+def _pareto_rank(results: list[FitnessEvaluationResult]) -> list[int]:
+    """Compute Pareto rank for each result (0 = non-dominated, higher = more dominated)."""
+    n = len(results)
+    ranks = [0] * n
+    for i in range(n):
+        for j in range(n):
+            if i != j and dominates(results[j], results[i]):
+                ranks[i] += 1
+    return ranks
+
+
+def _is_valid_full_recheck_result(
+    result: FitnessEvaluationResult,
+    network_oracle: object | None,
+) -> bool:
+    """Check that a result has full_recheck mode AND, if Oracle is active, exportable OpenDSS data."""
+    meta = getattr(result, "metadata", {}) or {}
+    ann = getattr(result, "annual_operation_result", None)
+    if not (bool(meta.get("recheck_performed", False))
+            and ann is not None
+            and getattr(ann, "evaluation_mode", "") == "full_recheck"):
+        return False
+    if network_oracle is not None:
+        trace_stats = _opendss_trace_stats(ann)
+        return _has_opendss_export_values(trace_stats)
+    return True
+
+
+def _ensure_topk_full_recheck(
+    evaluator: StorageFitnessEvaluator,
+    opt_case: Any,
+    run_result: LemmingOptimizationRunResult,
+    network_oracle=None,
+    k: int = 3,
+    safety_economy_tradeoff: float = 0.5,
+) -> None:
+    """GA 结束后对 archive 中 Top-K Pareto 候选执行 OpenDSS 全年重校核并重排。"""
+    archive = list(run_result.archive_results)
+    if not archive:
+        return
+
+    pareto_ranks = _pareto_rank(archive)
+    sorted_indices = sorted(range(len(archive)), key=lambda i: pareto_ranks[i])
+    top_k_indices = sorted_indices[: min(k, len(sorted_indices))]
+
+    logger.info("对 Top-%d 候选方案执行 OpenDSS 全年重校核...", len(top_k_indices))
+    for idx in top_k_indices:
+        candidate = archive[idx]
+        meta = getattr(candidate, "metadata", {}) or {}
+        ann = getattr(candidate, "annual_operation_result", None)
+        rechecked = (
+            bool(meta.get("recheck_performed", False))
+            and ann is not None
+            and getattr(ann, "evaluation_mode", "") == "full_recheck"
+        )
+        trace_stats = _opendss_trace_stats(ann)
+        if rechecked and _has_opendss_export_values(trace_stats):
+            logger.info(
+                "  候选 #%d 已有 OpenDSS 重校核数据，跳过（P=%.1fkW E=%.1fkWh）。",
+                idx + 1, candidate.decision.rated_power_kw, candidate.decision.rated_energy_kwh,
+            )
+            continue
+
+        logger.info(
+            "  重校核候选 #%d: %s P=%.1fkW E=%.1fkWh",
+            idx + 1, candidate.decision.strategy_id,
+            candidate.decision.rated_power_kw, candidate.decision.rated_energy_kwh,
+        )
+        rechecked_result = evaluator.evaluate_decision(
+            ctx=opt_case.context,
+            decision=candidate.decision,
+            network_oracle=network_oracle,
+            force_full_recheck=True,
+        )
+        run_result.archive_results = _replace_same_decision(run_result.archive_results, rechecked_result)
+        run_result.population_results = _replace_same_decision(run_result.population_results, rechecked_result)
+
+    # 闭环保证：最终 best 必须通过 _is_valid_full_recheck_result 校验。
+    # 每轮补做至多一个候选，archive 有限，上界为 archive 规模 + 1。
+    max_rounds = len(run_result.archive_results) + 1
+    for _round in range(max_rounds):
+        run_result.best_result = select_best_compromise(
+            run_result.archive_results, safety_economy_tradeoff=safety_economy_tradeoff,
+        )
+        best = run_result.best_result
+        if best is None:
+            break
+        if _is_valid_full_recheck_result(best, network_oracle):
+            break
+
+        logger.info(
+            "  补做 OpenDSS 全年校核: %s P=%.1fkW E=%.1fkWh (第%d轮)",
+            best.decision.strategy_id, best.decision.rated_power_kw, best.decision.rated_energy_kwh, _round + 1,
+        )
+        rechecked = evaluator.evaluate_decision(
+            ctx=opt_case.context,
+            decision=best.decision,
+            network_oracle=network_oracle,
+            force_full_recheck=True,
+        )
+        run_result.archive_results = _replace_same_decision(run_result.archive_results, rechecked)
+        run_result.population_results = _replace_same_decision(run_result.population_results, rechecked)
+    else:
+        raise RuntimeError(
+            f"重校核闭环未在 {max_rounds} 轮内收敛：archive 共 "
+            f"{len(run_result.archive_results)} 个候选，最终 best 仍未通过 OpenDSS 校核校验。"
+        )
+
+    logger.info("Top-%d 重校核完成，已更新最优折中解。", len(top_k_indices))
+
+
 def _best_summary_row(opt_case: Any, run_result: LemmingOptimizationRunResult) -> dict[str, Any] | None:
     best = run_result.best_result
     if best is None:
@@ -540,13 +656,44 @@ def _build_engine_diagnostics(
                 "feasible_count",
                 "archive_size",
                 "best_npv_yuan",
+                "generation_wall_time_s",
+                "evaluator_eval_count",
             ) if k in rec})
+
+    timing_stats: dict[str, Any] = {}
+    try:
+        timing_stats = evaluator.get_timing_stats()
+    except Exception:
+        pass
+
+    opendss_trace_stats: dict[str, Any] = {}
+    best_result = run_result.best_result
+    if best_result is not None:
+        ann = getattr(best_result, "annual_operation_result", None)
+        if ann is not None:
+            try:
+                opendss_trace_stats = _opendss_trace_stats(ann)
+            except Exception:
+                pass
+
+    best_edit_fallback_count = 0
+    if best_result is not None:
+        ann = getattr(best_result, "annual_operation_result", None)
+        if ann is not None:
+            for exec_result in getattr(ann, "daily_exec_objects", None) or []:
+                for trace in getattr(exec_result, "network_trace", None) or []:
+                    if isinstance(trace, dict):
+                        fb = int(trace.get("edit_fallback_count", 0))
+                        best_edit_fallback_count = max(best_edit_fallback_count, fb)
 
     return {
         "scenario": getattr(opt_case, "internal_model_id", None),
         "cache_stats": cache_stats,
         "constraint_breakdown": constraint_breakdown,
         "population_history": population_history,
+        "timing_stats": timing_stats,
+        "opendss_trace_stats": opendss_trace_stats,
+        "best_edit_fallback_count": best_edit_fallback_count,
     }
 
 
@@ -588,6 +735,8 @@ def run_one_case(
         safety_economy_tradeoff=safety_economy_tradeoff,
     )
 
+    _case_t0 = time.perf_counter()
+
     logger.info("=" * 88)
     logger.info("开始场景优化：%s", opt_case.internal_model_id)
     logger.info("候选策略：%s", opt_case.strategy_candidates)
@@ -595,16 +744,31 @@ def run_one_case(
 
     optimizer_oracle = None if opendss_only_for_full_recheck else network_oracle
     if network_oracle is not None:
-        scope = "仅最终 full_recheck" if optimizer_oracle is None else "fast_proxy 与 full_recheck"
+        scope = "仅最终 Top-K full_recheck" if optimizer_oracle is None else "fast_proxy 与 full_recheck"
         logger.info("OpenDSS 参与范围：%s；每次小时约束均加载 runtime manifest 中的全部启用负荷。", scope)
 
+    # 当 GA 搜索阶段不跑 OpenDSS 时，禁用逐候选 full_recheck
+    if opendss_only_for_full_recheck:
+        evaluator.config.full_recheck_for_fast_feasible_only = False
+
     run_result = optimizer.run(ctx=opt_case.context, network_oracle=optimizer_oracle)
-    _ensure_best_full_recheck(
-        evaluator=evaluator,
-        opt_case=opt_case,
-        run_result=run_result,
-        network_oracle=network_oracle,
-    )
+
+    if opendss_only_for_full_recheck:
+        _ensure_topk_full_recheck(
+            evaluator=evaluator,
+            opt_case=opt_case,
+            run_result=run_result,
+            network_oracle=network_oracle,
+            k=3,
+            safety_economy_tradeoff=safety_economy_tradeoff,
+        )
+    else:
+        _ensure_best_full_recheck(
+            evaluator=evaluator,
+            opt_case=opt_case,
+            run_result=run_result,
+            network_oracle=network_oracle,
+        )
 
     scenario_out_dir = output_root / opt_case.internal_model_id
     export_paths = export_optimization_run(
@@ -612,9 +776,11 @@ def run_one_case(
         run_result=run_result,
         case_name=opt_case.internal_model_id,
         enable_plots=generate_plots,
+        timing_stats=evaluator.get_timing_stats(),
     )
 
     diagnostics = _build_engine_diagnostics(opt_case, run_result, evaluator)
+    diagnostics["total_wall_time_s"] = time.perf_counter() - _case_t0
     try:
         scenario_out_dir.mkdir(parents=True, exist_ok=True)
         with open(scenario_out_dir / "engine_diagnostics.json", "w", encoding="utf-8") as f:
@@ -684,7 +850,39 @@ def main() -> None:
     logger.info("注册表：%s", registry_path)
     logger.info("策略库：%s", strategy_library_path)
     logger.info("输出目录：%s", output_root)
-    logger.info("优化参数：总代数=%d，每代种群=%d", args.generations, args.population_size)
+
+    # 求解器档位解析：显式设置 tier 时覆盖 population/generations/opendss/plots
+    tier = str(getattr(args, "solver_tier", "") or "").strip().lower()
+    tier_explicit = bool(tier)
+    if tier == "fast":
+        effective_pop, effective_gen = 8, 3
+        effective_opendss_only = True
+        effective_disable_plots = True
+    elif tier == "delivery":
+        effective_pop, effective_gen = 16, 8
+        effective_opendss_only = False
+        effective_disable_plots = bool(args.disable_plots)
+    else:
+        if tier_explicit:
+            tier = "standard"
+        effective_pop, effective_gen = 12, 5
+        effective_opendss_only = True
+        effective_disable_plots = bool(args.disable_plots)
+
+    if tier_explicit:
+        logger.info(
+            "求解器档位：%s (pop=%d, gen=%d, OpenDSS=%s, plots=%s)",
+            tier, effective_pop, effective_gen,
+            "仅Top-K重校核" if effective_opendss_only else "全流程",
+            "否" if effective_disable_plots else "是",
+        )
+    else:
+        effective_pop = int(args.population_size)
+        effective_gen = int(args.generations)
+        effective_opendss_only = bool(args.opendss_only_for_full_recheck)
+        effective_disable_plots = bool(args.disable_plots)
+
+    logger.info("优化参数：总代数=%d，每代种群=%d", effective_gen, effective_pop)
     logger.info(
         "SOC 参数："
         "年度初始SOC=%.3f，"
@@ -699,7 +897,7 @@ def main() -> None:
     logger.info("OpenDSS oracle：%s", '启用' if network_oracle is not None else '未启用')
     logger.info("安全-经济权衡系数：%.2f（0=纯经济，1=纯安全）", args.safety_economy_tradeoff)
     if network_oracle is not None:
-        opendss_scope = "仅最终 full_recheck" if bool(args.opendss_only_for_full_recheck) else "优化阶段 fast_proxy + full_recheck 全流程"
+        opendss_scope = "仅最终 Top-K full_recheck" if effective_opendss_only else "优化阶段 fast_proxy + full_recheck 全流程"
         logger.info("OpenDSS 调用范围：%s", opendss_scope)
     logger.info("=" * 88)
 
@@ -728,22 +926,37 @@ def main() -> None:
             "开始场景优化 [%d/%d]：%s | "
             "总代数=%d | 每代种群=%d",
             idx, len(cases), case.internal_model_id,
-            args.generations, args.population_size,
+            effective_gen, effective_pop,
         )
         logger.info("=" * 88)
         _, row = run_one_case(
             opt_case=case,
             output_root=output_root,
-            population_size=int(args.population_size),
-            generations=int(args.generations),
-            generate_plots=not args.disable_plots,
+            population_size=effective_pop,
+            generations=effective_gen,
+            generate_plots=not effective_disable_plots,
             network_oracle=network_oracle,
-            opendss_only_for_full_recheck=bool(args.opendss_only_for_full_recheck),
+            opendss_only_for_full_recheck=effective_opendss_only,
             solver_args=args,
             safety_economy_tradeoff=args.safety_economy_tradeoff,
         )
         if row is not None:
             overall_rows.append(row)
+
+        # 检查 OpenDSS Edit fallback 次数
+        diag_path = output_root / case.internal_model_id / "engine_diagnostics.json"
+        try:
+            if diag_path.exists():
+                with open(diag_path, "r", encoding="utf-8") as f:
+                    diag = json.load(f)
+                fb = int(diag.get("best_edit_fallback_count", 0))
+                if fb > 10:
+                    logger.warning(
+                        "场景 %s: OpenDSS Edit 回退次数较高（%d），建议检查 Master.dss 或负荷数据稳定性。",
+                        case.internal_model_id, fb,
+                    )
+        except Exception:
+            pass
 
     if overall_rows:
         overall_path = output_root / "overall_best_schemes.json"

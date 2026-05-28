@@ -20,9 +20,7 @@ inference_service = BuildInferenceService(project_service=project_service)
 
 
 class BuildGenerationRequest(BaseModel):
-    clean_build_dir: bool = True
-    package_zip: bool = True
-    export_registry_xlsx: bool = True
+    pass
 
 
 @router.get("/project/{project_id}/preview")
