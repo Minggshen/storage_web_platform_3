@@ -25,6 +25,18 @@ python/
 
 patent_outputs/
 
+# Local generated artifacts / agent scratch work
+.claude/worktrees/
+docs/patents/
+figures/
+fig_check.txt
+git_test_result.txt
+marketplaces_list.txt
+ssh_dir.txt
+ssh_test.txt
+test_ssh.bat
+frontend/*frontend_sync_result.txt
+
 # External test fixtures / brainstorming cache — not our source
 OpenDSS/
 .superpowers/

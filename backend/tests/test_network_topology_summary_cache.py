@@ -53,6 +53,28 @@ def _write_task(service: SolverExecutionService, project_id: str, task: dict) ->
     service._write_task_files(task_dir, task)
 
 
+def test_output_subdir_name_validation_accepts_safe_names() -> None:
+    assert SolverExecutionService._validate_output_subdir_name(None) == "integrated_optimization"
+    assert SolverExecutionService._validate_output_subdir_name("custom-run_1.2") == "custom-run_1.2"
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "../escape",
+        "..\\escape",
+        "C:\\escape",
+        "/tmp/escape",
+        ".",
+        "..",
+        "bad name",
+    ],
+)
+def test_output_subdir_name_validation_rejects_path_segments(name: str) -> None:
+    with pytest.raises(ValueError):
+        SolverExecutionService._validate_output_subdir_name(name)
+
+
 def test_network_topology_trace_summary_cache_hit_skips_trace_rescan(tmp_path: Path) -> None:
     service = SolverExecutionService(data_root=tmp_path)
     case_dir = tmp_path / "case"

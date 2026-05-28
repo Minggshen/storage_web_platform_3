@@ -62,6 +62,18 @@ class SolverExecutionService:
             raise ValueError(f"无效的项目 ID：{project_id}")
         return project_id.strip()
 
+    @staticmethod
+    def _validate_output_subdir_name(value: Any) -> str:
+        name = str(value or "integrated_optimization").strip() or "integrated_optimization"
+        if (
+            name in {".", ".."}
+            or "/" in name
+            or "\\" in name
+            or not re.fullmatch(r"[A-Za-z0-9_.-]{1,80}", name)
+        ):
+            raise ValueError(f"无效的输出目录名称：{name}")
+        return name
+
     def _project_dir(self, project_id: str) -> Path:
         self._validate_project_id(project_id)
         if self.project_service is not None and hasattr(self.project_service, "_project_dir"):
@@ -136,7 +148,7 @@ class SolverExecutionService:
 
         solver_project_root = self._resolve_solver_project_root(project_id)
         python_executable = self._resolve_python_executable(project_id, solver_project_root)
-        output_subdir = str(request.get("output_subdir_name") or "integrated_optimization").strip() or "integrated_optimization"
+        output_subdir = self._validate_output_subdir_name(request.get("output_subdir_name"))
         output_dir = task_workspace / "outputs" / output_subdir
         output_dir.mkdir(parents=True, exist_ok=True)
 
