@@ -4,7 +4,6 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
-import numpy as np
 
 from storage_engine_project.data.annual_context_builder import AnnualOperationContext
 

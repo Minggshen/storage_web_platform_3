@@ -5,7 +5,7 @@ import csv
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Sequence
+from typing import Any, Dict, List, Optional, Sequence
 
 from fastapi import UploadFile
 from openpyxl import load_workbook

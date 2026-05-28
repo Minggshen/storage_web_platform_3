@@ -104,7 +104,7 @@ def plot_pareto_front(case_name: str, run_result: LemmingOptimizationRunResult, 
 
     df = _records(run_result)
     if not df.empty:
-        feasible = df[df["feasible"] == True].copy()
+        feasible = df[df["feasible"]].copy()
         if feasible.empty:
             feasible = df.copy()
 

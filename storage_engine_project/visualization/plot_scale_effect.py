@@ -130,7 +130,10 @@ def _best_idx(npv: np.ndarray) -> int:
 
 
 def _plot_core(case_name: str, data: dict[str, np.ndarray], output_dir: Path) -> str:
-    x = data["scale_factor"]; npv = data["npv_wan"]; pb = data["payback_years"]; capex = data["initial_capex_wan"]
+    x = data["scale_factor"]
+    npv = data["npv_wan"]
+    pb = data["payback_years"]
+    capex = data["initial_capex_wan"]
     idx = _best_idx(npv)
     fig, axes = plt.subplots(3, 1, figsize=(7.0, 7.2), sharex=True)
     series = [
@@ -149,7 +152,10 @@ def _plot_core(case_name: str, data: dict[str, np.ndarray], output_dir: Path) ->
 
 
 def _plot_tradeoff(case_name: str, data: dict[str, np.ndarray], output_dir: Path) -> str:
-    x = data["scale_factor"]; npv = data["npv_wan"]; pb = data["payback_years"]; idx = _best_idx(npv)
+    x = data["scale_factor"]
+    npv = data["npv_wan"]
+    pb = data["payback_years"]
+    idx = _best_idx(npv)
     fig, ax1 = plt.subplots(figsize=(6.8, 4.4))
     ax1.plot(x, npv, color=_COLORS["base"], marker="o", label="NPV")
     ax1.scatter(x[idx], npv[idx], s=120, marker="*", color="#c44e52", edgecolors="black", zorder=5)
@@ -159,14 +165,16 @@ def _plot_tradeoff(case_name: str, data: dict[str, np.ndarray], output_dir: Path
     ax2.plot(x, pb, color=_COLORS["accent1"], marker="s", label="回收期")
     ax2.set_ylabel("回收期 / 年")
     ax2.spines["top"].set_visible(False)
-    lines1, labels1 = ax1.get_legend_handles_labels(); lines2, labels2 = ax2.get_legend_handles_labels()
+    lines1, labels1 = ax1.get_legend_handles_labels()
+    lines2, labels2 = ax2.get_legend_handles_labels()
     ax1.legend(lines1 + lines2, labels1 + labels2, loc="upper right", fontsize=8)
     ax1.set_title(_pretty_title(case_name, "规模-经济性权衡"), pad=8)
     return _finalize_and_save(fig, output_dir / f"{_sanitize_filename(case_name)}_scale_tradeoff_dual_axis.png")
 
 
 def _plot_frontier(case_name: str, data: dict[str, np.ndarray], output_dir: Path) -> str:
-    x = data["initial_capex_wan"]; y = data["annual_net_cashflow_wan"]
+    x = data["initial_capex_wan"]
+    y = data["annual_net_cashflow_wan"]
     if y.size == 0 or np.all(~np.isfinite(y)):
         y = data["npv_wan"]
     c = data["scale_factor"]
@@ -218,11 +226,14 @@ def _plot_revenue(case_name: str, data: dict[str, np.ndarray], output_dir: Path)
 
 
 def _plot_marginal(case_name: str, data: dict[str, np.ndarray], output_dir: Path) -> str | None:
-    x = data["scale_factor"]; capex = data["initial_capex_wan"]; net = data["annual_net_cashflow_wan"]
+    x = data["scale_factor"]
+    capex = data["initial_capex_wan"]
+    net = data["annual_net_cashflow_wan"]
     if capex.size == 0 or net.size == 0:
         return None
     ratio = np.divide(net, capex, out=np.full_like(net, np.nan), where=np.abs(capex) > 1e-12)
-    d_cap = np.diff(capex); d_net = np.diff(net)
+    d_cap = np.diff(capex)
+    d_net = np.diff(net)
     marginal = np.divide(d_net, d_cap, out=np.full_like(d_net, np.nan), where=np.abs(d_cap) > 1e-12)
     fig, axes = plt.subplots(2, 1, figsize=(7.4, 6.0), sharex=True)
     axes[0].plot(x, ratio, color=_COLORS["base"], marker="o")
@@ -238,7 +249,9 @@ def _plot_marginal(case_name: str, data: dict[str, np.ndarray], output_dir: Path
 
 
 def _plot_penalty_cycles(case_name: str, data: dict[str, np.ndarray], output_dir: Path) -> str | None:
-    x = data["scale_factor"]; penalty = data.get("annual_voltage_penalty_wan", np.array([])); cycles = data.get("annual_cycles", np.array([]))
+    x = data["scale_factor"]
+    penalty = data.get("annual_voltage_penalty_wan", np.array([]))
+    cycles = data.get("annual_cycles", np.array([]))
     if (penalty.size == 0 or np.all(~np.isfinite(penalty))) and (cycles.size == 0 or np.all(~np.isfinite(cycles))):
         return None
     fig, axes = plt.subplots(2, 1, figsize=(7.4, 6.0), sharex=True)

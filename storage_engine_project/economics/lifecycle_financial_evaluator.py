@@ -296,7 +296,6 @@ class LifecycleFinancialEvaluator:
         battery_soh = np.ones(n, dtype=float)
         capacity_factor = np.ones(n, dtype=float)
 
-        replacement_year = self._resolve_replacement_year(strategy, ctx, annual_result)
         explicit_replacement_year = self._resolve_explicit_replacement_year(strategy, ctx)
         replacement_cost_ratio = self._resolve_replacement_cost_ratio(strategy, ctx)
         discount_rate = self._resolve_discount_rate(ctx)

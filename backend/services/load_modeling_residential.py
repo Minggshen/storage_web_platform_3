@@ -520,7 +520,7 @@ def save_summary_txt(
     lines.append(f"居民典型日模型数：{len(model_summary_df)}")
     lines.append(f"手动节假日数量：{len(HOLIDAY_SET)}")
     lines.append("")
-    adopted = eval_df[eval_df["是否采用"] == True]
+    adopted = eval_df[eval_df["是否采用"]]
     if not adopted.empty:
         row = adopted.iloc[0]
         lines.append(f"采用聚类数：{row['聚类数k']}")

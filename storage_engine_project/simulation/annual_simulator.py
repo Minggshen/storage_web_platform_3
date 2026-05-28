@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 """
 兼容入口：把你原工程里 simulation.annual_simulator 的调用，
 切换到第三层 AnnualOperationKernel。
@@ -7,6 +5,8 @@ from __future__ import annotations
 推荐使用：
     run_annual_simulation(...)
 """
+
+from __future__ import annotations
 
 from dataclasses import dataclass
 import numpy as np

@@ -118,7 +118,8 @@ def _save_scheme_delta_csv(scenario_name: str, common_row: Mapping[str, Any], sa
     row = _build_scheme_delta_row(scenario_name, common_row, safe_row)
     with open(save_path, "w", newline="", encoding="utf-8-sig") as f:
         writer = csv.DictWriter(f, fieldnames=list(row.keys()))
-        writer.writeheader(); writer.writerow(row)
+        writer.writeheader()
+        writer.writerow(row)
     return str(save_path)
 
 

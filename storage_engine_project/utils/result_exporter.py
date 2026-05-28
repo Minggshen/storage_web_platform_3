@@ -199,9 +199,7 @@ def _build_financial_audit_ledger(summary: dict[str, Any], ann_summary: dict[str
         audit_meta = {}
 
     rated_power = _safe_float(summary.get("rated_power_kw"))
-    rated_energy = _safe_float(summary.get("rated_energy_kwh"))
     throughput = _safe_float(ann_summary.get("annual_battery_throughput_kwh"))
-    charge_kwh = _sum_attr_array(ann, "exec_charge_kw")
     discharge_kwh = _sum_attr_array(ann, "exec_discharge_kw")
     service_kw_h = _sum_attr_array(ann, "exec_service_kw")
 

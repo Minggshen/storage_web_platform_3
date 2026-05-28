@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 """
 兼容入口：把你原工程里 simulation.dispatch_solver 的调用，
 切换到第二层 DayAheadScheduler。
@@ -8,8 +6,9 @@ from __future__ import annotations
     solve_daily_dispatch(...)
 """
 
+from __future__ import annotations
+
 from dataclasses import dataclass
-from typing import Any
 
 from storage_engine_project.data.annual_context_builder import AnnualOperationContext
 from storage_engine_project.simulation.day_ahead_scheduler import (

@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 """
 统一结果模型入口。
 
@@ -8,6 +6,8 @@ from __future__ import annotations
 2. 把新五层用到的结果对象统一重新导出；
 3. 避免后续 visualization / analysis / main / optimizer 中出现导入分裂。
 """
+
+from __future__ import annotations
 
 from storage_engine_project.economics.economic_result_models import (
     AnnualRevenueAuditResult,

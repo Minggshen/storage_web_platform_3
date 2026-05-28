@@ -100,7 +100,6 @@ def plot_scheme_overview(case_name: str, best_result: FitnessEvaluationResult, o
 
     summary = best_result.summary_dict()
     fin = best_result.lifecycle_financial_result
-    ann = best_result.annual_operation_result
 
     fig, axes = plt.subplots(2, 2, figsize=(13.6, 9.8))
     fig.suptitle(f"{case_name}：最优储能设备选型与方案总览", fontsize=_SUPTITLE, fontweight="bold", y=0.992)

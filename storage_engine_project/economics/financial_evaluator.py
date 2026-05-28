@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 """
 兼容入口：把你原工程 economics.financial_evaluator 的调用，
 切换到第四层生命周期财务评价器。
@@ -7,6 +5,8 @@ from __future__ import annotations
 推荐使用：
     evaluate_financials(...)
 """
+
+from __future__ import annotations
 
 from dataclasses import dataclass
 

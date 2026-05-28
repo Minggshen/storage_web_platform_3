@@ -67,7 +67,6 @@ class DayAheadScheduler:
 
         strategy = ctx.strategy
         safe_cfg = ctx.safety_config
-        op_cfg = ctx.operation_config
 
         if self.config.validate_candidate_before_solve:
             errors = strategy.validate_candidate(rated_power_kw, rated_energy_kwh)

@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 """
 兼容入口：把你原工程 optimization.fitness_evaluator 的调用，
 切换到第五层 StorageFitnessEvaluator。
@@ -7,6 +5,8 @@ from __future__ import annotations
 推荐使用：
     evaluate_candidate(...)
 """
+
+from __future__ import annotations
 
 from dataclasses import dataclass
 import numpy as np
