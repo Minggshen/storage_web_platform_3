@@ -6,6 +6,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+import numpy as np
+
 from storage_engine_project.data.runtime_loader import load_runtime_bundle
 from storage_engine_project.logging_config import get_logger
 from storage_engine_project.simulation.network_constraint_oracle import HourlyNetworkConstraint, NetworkConstraintOracle
@@ -26,6 +28,9 @@ class OpenDSSOracleConfig:
     compile_each_call: bool = True
     allow_engine_fallback: bool = True
     log_failures: bool = True
+    engine_recycle_solve_interval: int = 480
+    engine_recycle_compile_interval: int = 240
+    engine_error_retry_count: int = 1
 
 
 class _ComBackend:
@@ -45,6 +50,23 @@ class _ComBackend:
         self.text.Command = f'Compile [{master_path}]'
         self.circuit = self._dss.ActiveCircuit
         self.solution = self.circuit.Solution
+
+    def close(self) -> None:
+        try:
+            self.text.Command = "Clear"
+        except Exception:
+            pass
+        self._temp_generators.clear()
+        self.solution = None
+        self.circuit = None
+        self.text = None
+        self._dss = None
+        try:
+            import gc
+
+            gc.collect()
+        except Exception:
+            pass
 
     def clear_temp(self) -> None:
         # Each hour recompiles Master.dss, whose circuit starts from Clear. Some OpenDSS COM
@@ -412,6 +434,9 @@ class OpenDSSConstraintOracle(NetworkConstraintOracle):
         self._runtime_manifest_cache: dict[str, list[dict[str, Any]]] = {}
         self._current_dss_day: int | None = None
         self._edit_fallback_count: int = 0
+        self._backend_solve_calls: int = 0
+        self._backend_compile_calls: int = 0
+        self._backend_recycle_count: int = 0
 
     def _init_backend(self):
         pref = str(self.config.engine_preference).strip().lower()
@@ -424,6 +449,78 @@ class OpenDSSConstraintOracle(NetworkConstraintOracle):
         if self.config.allow_engine_fallback:
             return None
         raise RuntimeError(f"OpenDSS 引擎初始化失败：{last_error}")
+
+    def _backend_call_limit(self, value: Any) -> int:
+        try:
+            parsed = int(float(value))
+        except Exception:
+            return 0
+        return max(0, parsed)
+
+    def _maybe_recycle_backend(self, reason: str) -> None:
+        if self._backend is None:
+            return
+        solve_limit = self._backend_call_limit(self.config.engine_recycle_solve_interval)
+        compile_limit = self._backend_call_limit(self.config.engine_recycle_compile_interval)
+        if solve_limit > 0 and self._backend_solve_calls >= solve_limit:
+            self._recycle_backend(f"{reason}: solve_calls={self._backend_solve_calls}")
+            return
+        if compile_limit > 0 and self._backend_compile_calls >= compile_limit:
+            self._recycle_backend(f"{reason}: compile_calls={self._backend_compile_calls}")
+
+    def _recycle_backend(self, reason: str) -> None:
+        old_backend = self._backend
+        self._backend = None
+        if old_backend is not None:
+            close = getattr(old_backend, "close", None)
+            if callable(close):
+                try:
+                    close()
+                except Exception as exc:
+                    if self.config.log_failures:
+                        logger.warning("关闭 OpenDSS 引擎失败，将继续重建：%s", exc)
+        self._backend_solve_calls = 0
+        self._backend_compile_calls = 0
+        self._current_dss_day = None
+        self._backend_recycle_count += 1
+        self._backend = self._init_backend()
+        if self._backend is None and not self.config.allow_engine_fallback:
+            raise RuntimeError("OpenDSS 引擎重建失败。")
+        logger.info(
+            "OpenDSS 引擎已重建：reason=%s, recycle_count=%d",
+            reason,
+            self._backend_recycle_count,
+        )
+
+    def _backend_compile(self) -> None:
+        if self._backend is None:
+            raise RuntimeError("OpenDSS 后端不可用，无法 Compile。")
+        self._backend.compile(self.master_dss_path)
+        self._backend_compile_calls += 1
+
+    def _backend_solve(self) -> bool:
+        if self._backend is None:
+            raise RuntimeError("OpenDSS 后端不可用，无法 Solve。")
+        try:
+            return bool(self._backend.solve())
+        finally:
+            self._backend_solve_calls += 1
+
+    @staticmethod
+    def _is_recyclable_backend_error(exc: Exception) -> bool:
+        text = f"{type(exc).__name__}: {exc}".lower()
+        return (
+            "out of memory" in text
+            or "error 482" in text
+            or "(482)" in text
+            or "opendss error encountered in solve" in text
+        )
+
+    def _should_retry_backend_error(self, exc: Exception, retry_attempt: int) -> bool:
+        retry_limit = self._backend_call_limit(self.config.engine_error_retry_count)
+        if retry_attempt >= retry_limit:
+            return False
+        return self._is_recyclable_backend_error(exc)
 
     def _resolve_target_bus(self, ctx) -> str:
         return (
@@ -526,6 +623,7 @@ class OpenDSSConstraintOracle(NetworkConstraintOracle):
                 project_root=None,
                 expected_days=365,
             )
+            pv_capacity_kw = self._to_float(raw.get("pv_capacity_kw"), 0.0)
             entries.append(
                 {
                     "internal_model_id": str(raw.get("internal_model_id") or ""),
@@ -535,16 +633,50 @@ class OpenDSSConstraintOracle(NetworkConstraintOracle):
                     "phases": 3,
                     "kv_ln": self._to_float(raw.get("target_kv_ln"), self.config.target_kv_ln),
                     "q_to_p_ratio": self._to_float(raw.get("q_to_p_ratio"), 0.25),
-                    "pv_capacity_kw": self._to_float(raw.get("pv_capacity_kw"), 0.0),
+                    "pv_capacity_kw": pv_capacity_kw,
                     "year_model_map": payload["year_model_map"],
                     "model_library": payload["model_library"],
+                    "runtime_net_load_matrix_kw": self._build_runtime_net_load_matrix(
+                        payload["year_model_map"],
+                        payload["model_library"],
+                        pv_capacity_kw,
+                    ),
                 }
             )
 
         self._runtime_manifest_cache[cache_key] = entries
         return entries
 
+    def _build_runtime_net_load_matrix(
+        self,
+        year_model_map: Any,
+        model_library: dict[int, Any],
+        pv_capacity_kw: float,
+    ) -> np.ndarray:
+        day_model_ids = np.asarray(year_model_map, dtype=int).reshape(-1)
+        rows = [
+            np.asarray(model_library[int(model_id)], dtype=float).reshape(24)
+            for model_id in day_model_ids
+        ]
+        load_matrix = np.vstack(rows) if rows else np.zeros((0, 24), dtype=float)
+        if float(pv_capacity_kw) <= 1e-9:
+            return load_matrix
+        pv_profile = np.array(
+            [self._pv_kw_for_hour(float(pv_capacity_kw), hour) for hour in range(24)],
+            dtype=float,
+        )
+        return load_matrix - pv_profile.reshape(1, 24)
+
     def _runtime_kw_for_hour(self, entry: dict[str, Any], day_index: int, hour_index: int) -> float:
+        precomputed = entry.get("runtime_net_load_matrix_kw")
+        if precomputed is not None:
+            matrix = np.asarray(precomputed, dtype=float)
+            if day_index < 0 or day_index >= matrix.shape[0]:
+                raise IndexError(f"day_index 超出 runtime 范围：{day_index}")
+            if hour_index < 0 or hour_index >= matrix.shape[1]:
+                raise IndexError(f"hour_index 超出 runtime 范围：{hour_index}")
+            return float(matrix[int(day_index), int(hour_index)])
+
         year_model_map = entry["year_model_map"]
         if day_index < 0 or day_index >= len(year_model_map):
             raise IndexError(f"day_index 超出 runtime 范围：{day_index}")
@@ -674,6 +806,12 @@ class OpenDSSConstraintOracle(NetworkConstraintOracle):
         current_soc: float,
         extra: dict[str, Any] | None = None,
     ) -> HourlyNetworkConstraint:
+        retry_attempt = self._to_int((extra or {}).get("_opendss_backend_retry_attempt"), 0)
+        if self._backend is None:
+            if not self.config.allow_engine_fallback:
+                raise RuntimeError("OpenDSS oracle 已启用，但 OpenDSS 后端不可用。")
+            return self._build_proxy_constraint(ctx, actual_net_load_kw, effective_power_cap_kw)
+        self._maybe_recycle_backend("hour_boundary")
         if self._backend is None:
             if not self.config.allow_engine_fallback:
                 raise RuntimeError("OpenDSS oracle 已启用，但 OpenDSS 后端不可用。")
@@ -703,13 +841,18 @@ class OpenDSSConstraintOracle(NetworkConstraintOracle):
             "target_load": target_load,
             "reference_kw": reference_kw,
             "network_runtime_manifest_path": str(runtime_manifest_path) if runtime_manifest_path else None,
+            "opendss_backend_recycle_count": self._backend_recycle_count,
+            "opendss_backend_solve_calls_since_recycle": self._backend_solve_calls,
+            "opendss_backend_compile_calls_since_recycle": self._backend_compile_calls,
         }
+        if retry_attempt > 0:
+            metadata["opendss_backend_retry_attempt"] = retry_attempt
 
         try:
             runtime_entries = self._load_network_runtime_entries(ctx) if runtime_manifest_path else []
             is_first_hour_of_day = (self._current_dss_day != int(day_index))
             if is_first_hour_of_day:
-                self._backend.compile(self.master_dss_path)
+                self._backend_compile()
                 self._current_dss_day = int(day_index)
             else:
                 self._backend.disable_temp_generators()
@@ -745,10 +888,10 @@ class OpenDSSConstraintOracle(NetworkConstraintOracle):
                     q_to_p_ratio=q_to_p_ratio,
                     reference_kw=None if reference_kw in {None, ""} else float(reference_kw),
                 )
-            baseline_converged = self._backend.solve()
+            baseline_converged = self._backend_solve()
             if not baseline_converged and not is_first_hour_of_day:
                 # Edit may have left circuit in bad state; fall back to full compile
-                self._backend.compile(self.master_dss_path)
+                self._backend_compile()
                 self._current_dss_day = int(day_index)
                 is_first_hour_of_day = True
                 self._edit_fallback_count += 1
@@ -782,7 +925,7 @@ class OpenDSSConstraintOracle(NetworkConstraintOracle):
                         q_to_p_ratio=q_to_p_ratio,
                         reference_kw=None if reference_kw in {None, ""} else float(reference_kw),
                     )
-                baseline_converged = self._backend.solve()
+                baseline_converged = self._backend_solve()
                 metadata["edit_fallback"] = True
             metadata["opendss_baseline_converged"] = bool(baseline_converged)
             loss_base_kw, loss_base_kvar = self._backend.total_losses_kw_kvar()
@@ -859,7 +1002,7 @@ class OpenDSSConstraintOracle(NetworkConstraintOracle):
                     rated_energy_kwh=float(rated_energy_kwh),
                     current_soc=float(current_soc),
                 )
-            storage_converged = self._backend.solve()
+            storage_converged = self._backend_solve()
             metadata["opendss_storage_converged"] = bool(storage_converged)
             metadata["opendss_solve_converged"] = bool(baseline_converged and storage_converged)
             loss_with_storage_kw, loss_with_storage_kvar = self._backend.total_losses_kw_kvar()
@@ -959,6 +1102,9 @@ class OpenDSSConstraintOracle(NetworkConstraintOracle):
 
             service_cap = min(float(effective_power_cap_kw), max_charge_kw if planned_charge_kw > planned_discharge_kw else max_discharge_kw)
             metadata["edit_fallback_count"] = self._edit_fallback_count
+            metadata["opendss_backend_recycle_count"] = self._backend_recycle_count
+            metadata["opendss_backend_solve_calls_since_recycle"] = self._backend_solve_calls
+            metadata["opendss_backend_compile_calls_since_recycle"] = self._backend_compile_calls
             return HourlyNetworkConstraint(
                 max_charge_kw=max_charge_kw,
                 max_discharge_kw=max_discharge_kw,
@@ -969,6 +1115,29 @@ class OpenDSSConstraintOracle(NetworkConstraintOracle):
                 metadata=metadata,
             )
         except Exception as exc:  # pragma: no cover
+            if self._should_retry_backend_error(exc, retry_attempt):
+                if self.config.log_failures:
+                    logger.warning(
+                        "OpenDSS 小时约束评估遇到可重试后端错误，正在重建引擎后重算：%s",
+                        exc,
+                    )
+                self._recycle_backend(f"backend_error_retry: {type(exc).__name__}")
+                retry_extra = dict(extra or {})
+                retry_extra["_opendss_backend_retry_attempt"] = retry_attempt + 1
+                return self.get_hour_constraint(
+                    ctx=ctx,
+                    day_index=day_index,
+                    hour_index=hour_index,
+                    actual_net_load_kw=actual_net_load_kw,
+                    planned_charge_kw=planned_charge_kw,
+                    planned_discharge_kw=planned_discharge_kw,
+                    planned_service_kw=planned_service_kw,
+                    rated_power_kw=rated_power_kw,
+                    rated_energy_kwh=rated_energy_kwh,
+                    effective_power_cap_kw=effective_power_cap_kw,
+                    current_soc=current_soc,
+                    extra=retry_extra,
+                )
             if not self.config.allow_engine_fallback:
                 raise
             if self.config.log_failures:
@@ -977,4 +1146,7 @@ class OpenDSSConstraintOracle(NetworkConstraintOracle):
             proxy.notes.append(f"OpenDSS 小时约束失败：{type(exc).__name__}: {exc}")
             proxy.metadata.update(metadata)
             proxy.metadata["opendss_used"] = False
+            proxy.metadata["opendss_backend_recycle_count"] = self._backend_recycle_count
+            proxy.metadata["opendss_backend_solve_calls_since_recycle"] = self._backend_solve_calls
+            proxy.metadata["opendss_backend_compile_calls_since_recycle"] = self._backend_compile_calls
             return proxy

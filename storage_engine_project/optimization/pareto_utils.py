@@ -1,9 +1,13 @@
 from __future__ import annotations
 
-from typing import Iterable
+from typing import Iterable, Mapping
 
 import numpy as np
 
+from storage_engine_project.optimization.objective_scoring import (
+    compute_weighted_objective_scores,
+    device_strategy_safety_metric,
+)
 from storage_engine_project.optimization.optimization_models import FitnessEvaluationResult
 
 
@@ -48,6 +52,8 @@ def update_archive(
 def select_best_compromise(
     archive: list[FitnessEvaluationResult],
     safety_economy_tradeoff: float = 0.5,
+    economic_metric_weights: Mapping[str, float] | None = None,
+    safety_metric_weights: Mapping[str, float] | None = None,
 ) -> FitnessEvaluationResult | None:
     if not archive:
         return None
@@ -58,51 +64,25 @@ def select_best_compromise(
     if len(feasible) == 1:
         return feasible[0]
 
-    invest = np.array([x.lifecycle_financial_result.initial_investment_yuan for x in feasible], dtype=float)
-    npv = np.array([x.lifecycle_financial_result.npv_yuan for x in feasible], dtype=float)
-    payback = np.array([
-        float(x.lifecycle_financial_result.simple_payback_years)
-        if x.lifecycle_financial_result.simple_payback_years is not None else 99.0
-        for x in feasible
-    ], dtype=float)
-    safety = np.array([float(x.objective_vector.obj_safety) for x in feasible], dtype=float)
+    invest = np.array([_investment_metric(x) for x in feasible], dtype=float)
+    npv = np.array([_npv_metric(x) for x in feasible], dtype=float)
+    irr = np.array([_irr_metric(x) for x in feasible], dtype=float)
+    payback = np.array([_payback_metric(x) for x in feasible], dtype=float)
 
-    idx_min_invest = int(np.argmin(invest))
-    idx_max_npv = int(np.argmax(npv))
-    p0 = np.array([invest[idx_min_invest], npv[idx_min_invest]], dtype=float)
-    p1 = np.array([invest[idx_max_npv], npv[idx_max_npv]], dtype=float)
-
-    if np.allclose(p0, p1):
-        return min(
-            feasible,
-            key=lambda x: (
-                _normalize_scalar(x.lifecycle_financial_result.simple_payback_years, payback),
-                _normalize_scalar(x.objective_vector.obj_safety, safety),
-                _normalize_scalar(-x.lifecycle_financial_result.npv_yuan, -npv),
-            ),
-        )
-
-    distances = []
-    line_vec = p1 - p0
-    denom = np.linalg.norm(line_vec)
-    for inv, n in zip(invest, npv):
-        p = np.array([inv, n], dtype=float)
-        dist = abs(np.cross(line_vec, p - p0)) / max(denom, 1e-12)
-        distances.append(float(dist))
-    distances = np.asarray(distances, dtype=float)
-
-    dist_norm = _normalize_array(distances, reverse=True)
-    payback_norm = _normalize_array(payback, reverse=False)
-    safety_norm = _normalize_array(safety, reverse=False)
-    npv_norm = _normalize_array(-npv, reverse=False)
-
-    s = float(safety_economy_tradeoff)
-    dist_w = 0.45 - 0.15 * s
-    payback_w = 0.35 - 0.30 * s
-    safety_w = 0.00 + 0.50 * s
-    npv_w = 0.20 - 0.15 * s
-    scores = dist_w * dist_norm + payback_w * payback_norm + safety_w * safety_norm + npv_w * npv_norm
-    best_idx = int(np.argmin(scores))
+    scores = compute_weighted_objective_scores(
+        npv=npv,
+        irr=irr,
+        payback=payback,
+        investment=invest,
+        transformer=np.array([x.constraint_vector.transformer_violation_hours for x in feasible], dtype=float),
+        voltage=np.array([x.constraint_vector.voltage_violation_pu for x in feasible], dtype=float),
+        line=np.array([x.constraint_vector.line_loading_violation_pct for x in feasible], dtype=float),
+        cycle=np.array([device_strategy_safety_metric(x) for x in feasible], dtype=float),
+        safety_economy_tradeoff=safety_economy_tradeoff,
+        economic_metric_weights=economic_metric_weights,
+        safety_metric_weights=safety_metric_weights,
+    )
+    best_idx = int(np.argmin(scores.compromise_cost))
     return feasible[best_idx]
 
 
@@ -116,25 +96,29 @@ def _same_solution(a: FitnessEvaluationResult, b: FitnessEvaluationResult) -> bo
     )
 
 
-def _normalize_array(x: np.ndarray, reverse: bool = False) -> np.ndarray:
-    x = np.asarray(x, dtype=float).reshape(-1)
-    lo = float(np.min(x))
-    hi = float(np.max(x))
-    if hi - lo <= 1e-12:
-        out = np.zeros_like(x)
-    else:
-        out = (x - lo) / (hi - lo)
-    if reverse:
-        out = 1.0 - out
-    return out
+def _investment_metric(result: FitnessEvaluationResult) -> float:
+    financial = result.lifecycle_financial_result
+    if financial is not None:
+        return float(financial.initial_investment_yuan)
+    return float(result.objective_vector.obj_investment)
 
 
-def _normalize_scalar(value: float | None, ref: np.ndarray) -> float:
-    if value is None:
-        return 1.0
-    arr = np.asarray(ref, dtype=float).reshape(-1)
-    lo = float(np.min(arr))
-    hi = float(np.max(arr))
-    if hi - lo <= 1e-12:
-        return 0.0
-    return float((float(value) - lo) / (hi - lo))
+def _npv_metric(result: FitnessEvaluationResult) -> float:
+    financial = result.lifecycle_financial_result
+    if financial is not None:
+        return float(financial.npv_yuan)
+    return -float(result.objective_vector.obj_npv)
+
+
+def _irr_metric(result: FitnessEvaluationResult) -> float:
+    financial = result.lifecycle_financial_result
+    if financial is not None and financial.irr is not None:
+        return float(financial.irr)
+    return 0.0
+
+
+def _payback_metric(result: FitnessEvaluationResult) -> float:
+    financial = result.lifecycle_financial_result
+    if financial is not None and financial.simple_payback_years is not None:
+        return float(financial.simple_payback_years)
+    return float(result.objective_vector.obj_payback)

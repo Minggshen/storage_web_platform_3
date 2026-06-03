@@ -2,13 +2,20 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Callable
 
 import numpy as np
 
 from storage_engine_project.data.annual_context_builder import AnnualOperationContext
 from storage_engine_project.logging_config import get_logger
-from storage_engine_project.optimization.optimizer_bridge import OptimizerBridge
+from storage_engine_project.optimization.optimizer_bridge import (
+    DecisionCacheKey,
+    OptimizerBridge,
+)
+from storage_engine_project.optimization.objective_scoring import (
+    compute_weighted_objective_scores,
+    device_strategy_safety_metric,
+)
 from storage_engine_project.optimization.optimization_models import FitnessEvaluationResult
 from storage_engine_project.optimization.pareto_utils import select_best_compromise, update_archive
 from storage_engine_project.simulation.network_constraint_oracle import NetworkConstraintOracle
@@ -54,10 +61,14 @@ class LemmingOptimizer:
         bridge: OptimizerBridge,
         config: LemmingOptimizerConfig | None = None,
         safety_economy_tradeoff: float = 0.5,
+        economic_metric_weights: dict[str, float] | None = None,
+        safety_metric_weights: dict[str, float] | None = None,
     ) -> None:
         self.bridge = bridge
         self.config = config or LemmingOptimizerConfig()
         self.safety_economy_tradeoff = float(safety_economy_tradeoff)
+        self.economic_metric_weights = dict(economic_metric_weights or {})
+        self.safety_metric_weights = dict(safety_metric_weights or {})
         self.rng = np.random.default_rng(self.config.random_seed)
 
     def run(
@@ -66,6 +77,7 @@ class LemmingOptimizer:
         actual_load_matrix_kw: np.ndarray | None = None,
         actual_pv_matrix_kw: np.ndarray | None = None,
         network_oracle: NetworkConstraintOracle | None = None,
+        progress_callback: Callable[[dict[str, Any]], None] | None = None,
     ) -> LemmingOptimizationRunResult:
         cfg = self.config
 
@@ -73,21 +85,47 @@ class LemmingOptimizer:
         archive: list[FitnessEvaluationResult] = []
         history: list[dict[str, Any]] = []
         all_eval_count = 0
+        run_evaluation_cache: dict[DecisionCacheKey, FitnessEvaluationResult] = {}
 
         for gen in range(cfg.generations):
             _gen_t0 = time.perf_counter()
+            if progress_callback is not None:
+                progress_callback({
+                    "event": "ga_generation_start",
+                    "generation": gen + 1,
+                    "generations": cfg.generations,
+                    "population_size": len(population),
+                    "evaluator_eval_count": all_eval_count,
+                })
+
+            def _population_progress(event: dict[str, Any]) -> None:
+                if progress_callback is None:
+                    return
+                progress_callback({
+                    **event,
+                    "generation": gen + 1,
+                    "generations": cfg.generations,
+                })
+
             results = self.bridge.evaluate_population(
                 ctx=ctx,
                 population=population,
                 actual_load_matrix_kw=actual_load_matrix_kw,
                 actual_pv_matrix_kw=actual_pv_matrix_kw,
                 network_oracle=network_oracle,
+                evaluation_cache=run_evaluation_cache,
+                progress_callback=_population_progress if progress_callback is not None else None,
             )
-            all_eval_count += len(results)
+            all_eval_count += self.bridge.last_population_evaluation_count
             _gen_elapsed = time.perf_counter() - _gen_t0
 
             archive = update_archive(archive, results)
-            best_compromise = select_best_compromise(archive, safety_economy_tradeoff=self.safety_economy_tradeoff)
+            best_compromise = select_best_compromise(
+                archive,
+                safety_economy_tradeoff=self.safety_economy_tradeoff,
+                economic_metric_weights=self.economic_metric_weights,
+                safety_metric_weights=self.safety_metric_weights,
+            )
 
             gen_record = self._build_generation_record(
                 generation=gen + 1,
@@ -102,10 +140,26 @@ class LemmingOptimizer:
             if cfg.verbose:
                 self._print_generation_record(gen_record)
 
+            if progress_callback is not None:
+                progress_callback({
+                    "event": "ga_generation_complete",
+                    "generation": gen + 1,
+                    "generations": cfg.generations,
+                    "population_size": len(results),
+                    "unique_evaluation_count": self.bridge.last_population_evaluation_count,
+                    "evaluator_eval_count": all_eval_count,
+                    "generation_wall_time_s": _gen_elapsed,
+                })
+
             target_pop_size = self._adaptive_population_size(gen, history) if cfg.enable_adaptive_population else cfg.population_size
             population = self._next_population(results, target_size=target_pop_size)
 
-        final_best = select_best_compromise(archive, safety_economy_tradeoff=self.safety_economy_tradeoff)
+        final_best = select_best_compromise(
+            archive,
+            safety_economy_tradeoff=self.safety_economy_tradeoff,
+            economic_metric_weights=self.economic_metric_weights,
+            safety_metric_weights=self.safety_metric_weights,
+        )
 
         return LemmingOptimizationRunResult(
             archive_results=archive,
@@ -143,7 +197,8 @@ class LemmingOptimizer:
         if target_size is None:
             target_size = cfg.population_size
 
-        ranked = sorted(results, key=self._ranking_key)
+        ranking_keys = self._build_ranking_keys(results)
+        ranked = sorted(results, key=lambda result: ranking_keys[id(result)])
         elites = ranked[: max(1, cfg.elite_count)]
 
         next_pop: list[np.ndarray] = []
@@ -155,8 +210,8 @@ class LemmingOptimizer:
                 next_pop.append(self._random_candidate())
                 continue
 
-            p1 = self._tournament_select(ranked)
-            p2 = self._tournament_select(ranked)
+            p1 = self._tournament_select(ranked, ranking_keys)
+            p2 = self._tournament_select(ranked, ranking_keys)
 
             x1 = self.bridge.decision_to_vector(p1.decision)
             x2 = self.bridge.decision_to_vector(p2.decision)
@@ -169,26 +224,85 @@ class LemmingOptimizer:
 
         return next_pop[:target_size]
 
-    def _ranking_key(self, result: FitnessEvaluationResult) -> tuple[float, float, float, float, float, float]:
-        """分层约束排序：硬约束 > 中等约束 > 软约束 > 目标函数"""
-        cv = result.constraint_vector
-        feasible_penalty = 0.0 if result.feasible else 1.0
-        hard_viol = cv.hard_constraint_violation()
-        medium_viol = cv.medium_constraint_violation()
-        soft_viol = cv.soft_constraint_violation()
-        obj = result.objective_vector.as_tuple()
-        return (
-            feasible_penalty,
-            hard_viol,
-            medium_viol,
-            soft_viol,
-            obj[0],
-            sum(obj),
+    def _build_ranking_keys(
+        self,
+        results: list[FitnessEvaluationResult],
+    ) -> dict[int, tuple[float, float, float, float, float, float]]:
+        """分层约束排序：约束优先，严格可行解内用用户设置的经济/安全加权目标。"""
+        feasible = [result for result in results if result.feasible]
+        compromise_costs: dict[int, float] = {}
+        if feasible:
+            compromise_costs = self._weighted_compromise_costs(feasible)
+
+        keys: dict[int, tuple[float, float, float, float, float, float]] = {}
+        for result in results:
+            cv = result.constraint_vector
+            feasible_penalty = 0.0 if result.feasible else 1.0
+            obj = result.objective_vector.as_tuple()
+            keys[id(result)] = (
+                feasible_penalty,
+                cv.hard_constraint_violation(),
+                cv.medium_constraint_violation(),
+                cv.soft_constraint_violation(),
+                compromise_costs.get(id(result), float(sum(obj))),
+                obj[0],
+            )
+        return keys
+
+    def _weighted_compromise_costs(
+        self,
+        feasible: list[FitnessEvaluationResult],
+    ) -> dict[int, float]:
+        scores = compute_weighted_objective_scores(
+            npv=[self._npv_metric(result) for result in feasible],
+            irr=[self._irr_metric(result) for result in feasible],
+            payback=[self._payback_metric(result) for result in feasible],
+            investment=[self._investment_metric(result) for result in feasible],
+            transformer=[result.constraint_vector.transformer_violation_hours for result in feasible],
+            voltage=[result.constraint_vector.voltage_violation_pu for result in feasible],
+            line=[result.constraint_vector.line_loading_violation_pct for result in feasible],
+            cycle=[device_strategy_safety_metric(result) for result in feasible],
+            safety_economy_tradeoff=self.safety_economy_tradeoff,
+            economic_metric_weights=self.economic_metric_weights,
+            safety_metric_weights=self.safety_metric_weights,
         )
+        return {
+            id(result): float(scores.compromise_cost[index])
+            for index, result in enumerate(feasible)
+        }
+
+    @staticmethod
+    def _investment_metric(result: FitnessEvaluationResult) -> float:
+        financial = result.lifecycle_financial_result
+        if financial is not None:
+            return float(financial.initial_investment_yuan)
+        return float(result.objective_vector.obj_investment)
+
+    @staticmethod
+    def _npv_metric(result: FitnessEvaluationResult) -> float:
+        financial = result.lifecycle_financial_result
+        if financial is not None:
+            return float(financial.npv_yuan)
+        return -float(result.objective_vector.obj_npv)
+
+    @staticmethod
+    def _irr_metric(result: FitnessEvaluationResult) -> float:
+        financial = result.lifecycle_financial_result
+        if financial is not None and financial.irr is not None:
+            return float(financial.irr)
+        return 0.0
+
+    @staticmethod
+    def _payback_metric(result: FitnessEvaluationResult) -> float:
+        financial = result.lifecycle_financial_result
+        if financial is not None and financial.simple_payback_years is not None:
+            return float(financial.simple_payback_years)
+        return float(result.objective_vector.obj_payback)
 
     def _tournament_select(
         self,
         ranked_results: list[FitnessEvaluationResult],
+        ranking_keys: dict[int, tuple[float, float, float, float, float, float]],
     ) -> FitnessEvaluationResult:
         idxs = self.rng.choice(
             len(ranked_results),
@@ -196,7 +310,7 @@ class LemmingOptimizer:
             replace=False,
         )
         subset = [ranked_results[i] for i in idxs]
-        return min(subset, key=self._ranking_key)
+        return min(subset, key=lambda result: ranking_keys[id(result)])
 
     def _crossover(self, x1: np.ndarray, x2: np.ndarray) -> np.ndarray:
         alpha = self.rng.uniform(0.0, 1.0)

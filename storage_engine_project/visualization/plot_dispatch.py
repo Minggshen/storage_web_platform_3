@@ -53,8 +53,9 @@ def _panel(ax: plt.Axes, tag: str) -> None:
 
 
 def _save(fig: plt.Figure, path: Path) -> str:
+    path = path.with_suffix(".svg")
     fig.tight_layout(rect=(0.02, 0.02, 0.98, 0.97), pad=0.9)
-    fig.savefig(path, dpi=320, bbox_inches="tight")
+    fig.savefig(path, format="svg", bbox_inches="tight")
     plt.close(fig)
     return str(path)
 
@@ -232,7 +233,7 @@ def plot_dispatch_profiles(case_name: str, annual_result: AnnualOperationResult,
     ax.legend(loc="upper right")
     _panel(ax, "f")
 
-    p = out_dir / f"{safe_case}_运行总览六联图.png"
+    p = out_dir / f"{safe_case}_运行总览六联图.svg"
     saved.append(_save(fig, p))
 
     fig, axes = plt.subplots(4, 1, figsize=(12.0, 11.2), sharex=True)
@@ -264,7 +265,7 @@ def plot_dispatch_profiles(case_name: str, annual_result: AnnualOperationResult,
     axes[3].set_xticks(np.arange(0, 25, 2))
     _panel(axes[3], "d")
 
-    p = out_dir / f"{safe_case}_代表日详细运行图.png"
+    p = out_dir / f"{safe_case}_代表日详细运行图.svg"
     saved.append(_save(fig, p))
 
     rep_df = pd.DataFrame(

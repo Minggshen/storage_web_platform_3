@@ -75,6 +75,55 @@ def test_output_subdir_name_validation_rejects_path_segments(name: str) -> None:
         SolverExecutionService._validate_output_subdir_name(name)
 
 
+def test_structured_progress_marker_refines_candidate_span_with_proxy_progress(tmp_path: Path) -> None:
+    service = SolverExecutionService(data_root=tmp_path)
+    stdout = "\n".join(
+        [
+            '2026-06-01 10:00:00 [INFO] storage_engine_project.main: SOLVER_PROGRESS {"percent":20,"label":"GA 候选评估","detail":"第 1/1 个场景，候选 3/12。","phase":"ga_candidate","span_start_percent":20,"span_end_percent":30}',
+            "2026-06-01 10:00:01 [INFO] storage_engine_project.simulation.annual_operation_kernel: 年度运行 代表日 5/10 | rep_day=57 | 覆盖天数=14 | 当前日初SOC=0.2500",
+        ]
+    )
+
+    progress = service._parse_stdout_progress(stdout, requested_generations=5)
+
+    assert progress["source"] == "solver_progress_marker"
+    assert progress["percent"] == 25
+    assert progress["label"] == "GA 候选评估"
+    assert "代表日运行 5/10" in progress["detail"]
+
+
+def test_structured_progress_marker_refines_recheck_span_with_annual_days(tmp_path: Path) -> None:
+    service = SolverExecutionService(data_root=tmp_path)
+    stdout = "\n".join(
+        [
+            '2026-06-01 10:00:00 [INFO] storage_engine_project.main: SOLVER_PROGRESS {"percent":44,"label":"OpenDSS 全年重校核","detail":"正在重校核 Top-1/3 候选。","phase":"topk_recheck_candidate","span_start_percent":44,"span_end_percent":60}',
+            "2026-06-01 10:00:01 [INFO] storage_engine_project.simulation.annual_operation_kernel: 年度运行 进度 183/365 | 当前日初SOC=0.4821 | 策略=S1",
+        ]
+    )
+
+    progress = service._parse_stdout_progress(stdout, requested_generations=5)
+
+    assert progress["source"] == "solver_progress_marker"
+    assert progress["percent"] == 52
+    assert "183/365" in progress["detail"]
+
+
+def test_legacy_progress_no_longer_reports_fake_final_population_eval(tmp_path: Path) -> None:
+    service = SolverExecutionService(data_root=tmp_path)
+    stdout = "\n".join(
+        [
+            "2026-06-01 10:00:00 [INFO] storage_engine_project.main: 共加载 1 个待优化场景。",
+            "2026-06-01 10:00:01 [INFO] storage_engine_project.main: 开始场景优化 [1/1]：load_01 | 总代数=5 | 每代种群=12",
+            "2026-06-01 10:05:00 [INFO] storage_engine_project.optimization.lemming_optimizer: 优化迭代 5 | 种群=12 | 可行解=4 | Archive=6",
+        ]
+    )
+
+    progress = service._parse_stdout_progress(stdout, requested_generations=5)
+
+    assert progress["label"] == "GA 搜索已完成"
+    assert "准备全年重校核" in progress["detail"]
+
+
 def test_network_topology_trace_summary_cache_hit_skips_trace_rescan(tmp_path: Path) -> None:
     service = SolverExecutionService(data_root=tmp_path)
     case_dir = tmp_path / "case"

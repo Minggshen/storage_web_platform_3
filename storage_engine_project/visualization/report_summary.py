@@ -152,8 +152,8 @@ def _save_scheme_delta_plot(scenario_name: str, common_row: Mapping[str, Any], s
     for i, v in zip(order, vals):
         ax.text(v + (xpad if v >= 0 else -xpad), i, f"{v:.2f}", va="center", ha="left" if v >= 0 else "right", fontsize=8)
     fig.tight_layout(pad=0.9)
-    save_path = output_dir / f"{_sanitize_filename(scenario_name)}_common_vs_high_safety_delta.png"
-    fig.savefig(save_path, dpi=320, bbox_inches="tight")
+    save_path = output_dir / f"{_sanitize_filename(scenario_name)}_common_vs_high_safety_delta.svg"
+    fig.savefig(save_path, format="svg", bbox_inches="tight")
     plt.close(fig)
     return str(save_path)
 

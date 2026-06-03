@@ -20,6 +20,14 @@ export type SolverRunOptions = {
   fixed_terminal_soc_target?: number;
   daily_terminal_soc_tolerance?: number;
   safety_economy_tradeoff?: number;
+  economic_weight_npv?: number;
+  economic_weight_irr?: number;
+  economic_weight_payback?: number;
+  economic_weight_investment?: number;
+  safety_weight_transformer?: number;
+  safety_weight_voltage?: number;
+  safety_weight_line?: number;
+  safety_weight_cycle?: number;
 };
 
 export async function fetchLatestSolverTask(projectId: string): Promise<SolverTask | null> {

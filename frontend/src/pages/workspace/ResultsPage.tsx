@@ -4,7 +4,6 @@ import { ErrorBanner } from '@/components/common/ErrorBanner';
 import {
   Bar,
   BarChart,
-  Brush,
   CartesianGrid,
   Cell,
   ComposedChart,
@@ -478,6 +477,8 @@ export default function ResultsPage() {
     || toFiniteNumber(lcosSummary?.totalThroughputMwh) !== null;
   const degradationSoh = chartRows(chartData.degradation_soh);
   const pareto = chartRows(chartData.pareto);
+  const investmentEconomics = chartRows(chartData.investment_economics);
+  const investmentEconomicsSummary = chartData.investment_economics_summary;
   const history = chartRows(chartData.optimization_history);
   const storageImpact = chartRows(chartData.storage_impact);
   const networkConstraints = chartData.network_constraints;
@@ -886,6 +887,14 @@ export default function ResultsPage() {
             {pareto.length ? <ParetoChart data={pareto} /> : <EmptyChart />}
           </ChartCard>
 
+          <ChartCard title="投资变化下的经济指标与适应度" fullWidth>
+            {investmentEconomics.length ? (
+              <InvestmentEconomicsChart data={investmentEconomics} summary={investmentEconomicsSummary} />
+            ) : (
+              <EmptyChart />
+            )}
+          </ChartCard>
+
           <ChartCard title="优化收敛过程">
             {history.length ? <HistoryChart data={history} /> : <EmptyChart />}
           </ChartCard>
@@ -1237,8 +1246,14 @@ function YearlySocChart(props: { data: ResultChartPoint[] }) {
   const dataLen = props.data.length;
   const [startIndex, setStartIndex] = useState(0);
   const [endIndex, setEndIndex] = useState(Math.max(0, dataLen - 1));
+  const userZoomedRef = useRef(false);
   const containerRef = useRef<HTMLDivElement>(null);
   const rangeRef = useRef({ start: startIndex, end: endIndex });
+  const visibleData = useMemo(
+    () => props.data.slice(startIndex, Math.min(endIndex + 1, dataLen)),
+    [props.data, startIndex, endIndex, dataLen],
+  );
+  const isZoomed = startIndex > 0 || endIndex < Math.max(0, dataLen - 1);
 
   useEffect(() => {
     rangeRef.current = { start: startIndex, end: endIndex };
@@ -1246,9 +1261,14 @@ function YearlySocChart(props: { data: ResultChartPoint[] }) {
 
   useEffect(() => {
     const max = Math.max(0, dataLen - 1);
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- intentional reset on data change
-    setStartIndex(0);
-    setEndIndex(max);
+    if (!userZoomedRef.current) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- intentional reset before the user zooms
+      setStartIndex(0);
+      setEndIndex(max);
+      return;
+    }
+    setStartIndex((current) => Math.min(current, max));
+    setEndIndex((current) => Math.min(Math.max(current, 0), max));
   }, [dataLen]);
 
   useEffect(() => {
@@ -1274,6 +1294,7 @@ function YearlySocChart(props: { data: ResultChartPoint[] }) {
       if (newEnd >= dataLen) { newStart -= newEnd - (dataLen - 1); newEnd = dataLen - 1; }
       newStart = Math.max(0, newStart);
       newEnd = Math.min(dataLen - 1, newEnd);
+      userZoomedRef.current = true;
       setStartIndex(newStart);
       setEndIndex(newEnd);
     };
@@ -1284,7 +1305,7 @@ function YearlySocChart(props: { data: ResultChartPoint[] }) {
   return (
     <div ref={containerRef} style={{ overflow: 'hidden' }}>
       <ResponsiveContainer width="100%" height={310}>
-        <ComposedChart data={props.data} margin={{ top: 10, right: 18, bottom: 8, left: 0 }}>
+        <ComposedChart data={visibleData} margin={{ top: 10, right: 18, bottom: 8, left: 0 }}>
           <CartesianGrid stroke={SEMANTIC_COLORS.grid} strokeDasharray="3 3" />
           <XAxis
             dataKey="hourOfYear"
@@ -1303,20 +1324,26 @@ function YearlySocChart(props: { data: ResultChartPoint[] }) {
             dot={false}
             isAnimationActive={false}
           />
-          <Brush
-            dataKey="hourOfYear"
-            height={22}
-            travellerWidth={8}
-            tickFormatter={formatHourOfYearTick}
-            startIndex={startIndex}
-            endIndex={endIndex}
-            onChange={(e) => {
-              setStartIndex(e.startIndex ?? 0);
-              setEndIndex(e.endIndex ?? dataLen - 1);
-            }}
-          />
         </ComposedChart>
       </ResponsiveContainer>
+      <div style={socZoomFooterStyle}>
+        <span>
+          显示范围：{metricText(toFiniteNumber(props.data[startIndex]?.hourOfYear), ' h')} - {metricText(toFiniteNumber(props.data[endIndex]?.hourOfYear), ' h')}
+        </span>
+        {isZoomed ? (
+          <button
+            type="button"
+            style={socZoomResetButtonStyle}
+            onClick={() => {
+              userZoomedRef.current = false;
+              setStartIndex(0);
+              setEndIndex(Math.max(0, dataLen - 1));
+            }}
+          >
+            重置缩放
+          </button>
+        ) : null}
+      </div>
     </div>
   );
 }
@@ -1516,6 +1543,8 @@ function ParetoChart(props: { data: ResultChartPoint[] }) {
     }
     return front;
   }, [props.data]);
+  const hasFrontier = frontier.length >= 2;
+  const hasInfeasible = props.data.some((entry) => entry.feasible === false);
 
   return (
     <ResponsiveContainer width="100%" height={310}>
@@ -1525,11 +1554,30 @@ function ParetoChart(props: { data: ResultChartPoint[] }) {
         <YAxis dataKey="npvWan" name="NPV" type="number" />
         <ZAxis dataKey="ratedEnergyKwh" range={[70, 220]} />
         <Tooltip formatter={numberTooltipFormatter} cursor={{ strokeDasharray: '3 3' }} />
-        <Legend />
-        <ReferenceLine y={0} stroke={SEMANTIC_COLORS.constraint} strokeDasharray={LINE_STYLES.dashed} strokeWidth={1} />
-        {/* Pareto frontier line */}
-        {frontier.length >= 2 && (
-          <Scatter data={frontier} name="Pareto 前沿" line={{ stroke: SEMANTIC_COLORS.recommended, strokeWidth: 2, strokeDasharray: LINE_STYLES.dashDot }} shape={() => <circle r={0} />} />
+        <Legend content={<ParetoLegend hasFrontier={hasFrontier} hasInfeasible={hasInfeasible} />} />
+        <ReferenceLine
+          y={0}
+          stroke={SEMANTIC_COLORS.constraint}
+          strokeDasharray={LINE_STYLES.dashed}
+          strokeWidth={1}
+          label={{ value: 'NPV=0', position: 'insideTopRight', fill: SEMANTIC_COLORS.constraint, fontSize: 12 }}
+        />
+        {hasFrontier && (
+          <Scatter
+            data={frontier}
+            name="Pareto 前沿辅助线"
+            line={{ stroke: SEMANTIC_COLORS.recommended, strokeWidth: 2.5, strokeDasharray: LINE_STYLES.dashDot }}
+            shape={() => <circle r={0} fill="transparent" stroke="transparent" />}
+            legendType="none"
+          />
+        )}
+        {frontier.length > 0 && (
+          <Scatter
+            data={frontier}
+            name="Pareto 前沿候选"
+            shape={ParetoFrontierDot}
+            legendType="none"
+          />
         )}
         <Scatter data={props.data} name="候选方案">
           {props.data.map((entry, idx) => (
@@ -1538,6 +1586,302 @@ function ParetoChart(props: { data: ResultChartPoint[] }) {
         </Scatter>
       </ScatterChart>
     </ResponsiveContainer>
+  );
+}
+
+function ParetoFrontierDot(props: unknown) {
+  const record = toRecord(props);
+  const cx = toFiniteNumber(record?.cx);
+  const cy = toFiniteNumber(record?.cy);
+  if (cx === null || cy === null) return null;
+  return (
+    <circle
+      cx={cx}
+      cy={cy}
+      r={7}
+      fill="#fff"
+      stroke={SEMANTIC_COLORS.recommended}
+      strokeWidth={2.5}
+    />
+  );
+}
+
+function ParetoLegend(props: { hasFrontier: boolean; hasInfeasible: boolean }) {
+  return (
+    <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', gap: 16, flexWrap: 'wrap', paddingTop: 8 }}>
+      {props.hasFrontier ? (
+        <span style={legendItemStyle}>
+          <svg width="30" height="10" viewBox="0 0 30 10" aria-hidden="true">
+            <line x1="1" y1="5" x2="29" y2="5" stroke={SEMANTIC_COLORS.recommended} strokeWidth="2.5" strokeDasharray={LINE_STYLES.dashDot} />
+          </svg>
+          Pareto 前沿辅助线
+        </span>
+      ) : null}
+      <span style={legendItemStyle}>
+        <svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true">
+          <circle cx="7" cy="7" r="5" fill="#fff" stroke={SEMANTIC_COLORS.recommended} strokeWidth="2.5" />
+        </svg>
+        Pareto 前沿候选
+      </span>
+      <span style={legendItemStyle}>
+        <svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true">
+          <circle cx="7" cy="7" r="5" fill={SEMANTIC_COLORS.feasible} />
+        </svg>
+        可行候选
+      </span>
+      {props.hasInfeasible ? (
+        <span style={legendItemStyle}>
+          <svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true">
+            <circle cx="7" cy="7" r="5" fill={SEMANTIC_COLORS.infeasible} />
+          </svg>
+          不可行候选
+        </span>
+      ) : null}
+      <span style={legendItemStyle}>
+        <svg width="30" height="10" viewBox="0 0 30 10" aria-hidden="true">
+          <line x1="1" y1="5" x2="29" y2="5" stroke={SEMANTIC_COLORS.constraint} strokeWidth="1.4" strokeDasharray={LINE_STYLES.dashed} />
+        </svg>
+        NPV=0
+      </span>
+    </div>
+  );
+}
+
+function InvestmentEconomicsChart(props: { data: ResultChartPoint[]; summary?: ResultChartPoint }) {
+  const trendData = useMemo(() => {
+    const sorted = props.data
+      .filter((row) => toFiniteNumber(row.initialInvestmentWan) !== null)
+      .sort((a, b) => {
+        const investDiff = (toFiniteNumber(a.initialInvestmentWan) ?? 0) - (toFiniteNumber(b.initialInvestmentWan) ?? 0);
+        if (Math.abs(investDiff) > 1e-9) return investDiff;
+        return (toFiniteNumber(a.npvWan) ?? 0) - (toFiniteNumber(b.npvWan) ?? 0);
+      });
+    const feasible = sorted.filter((row) => row.feasible !== false);
+    return feasible.length ? feasible : sorted;
+  }, [props.data]);
+  const best = useMemo(() => {
+    const recommended = trendData.find((row) => row.recommendedCandidate === true);
+    if (recommended) return recommended;
+    const marked = trendData.find((row) => row.objectiveBest === true);
+    if (marked) return marked;
+    return trendData.reduce<ResultChartPoint | null>((current, row) => {
+      const score = toFiniteNumber(row.fitnessScorePct);
+      if (score === null) return current;
+      const currentScore = current ? toFiniteNumber(current.fitnessScorePct) : null;
+      return currentScore === null || score > currentScore ? row : current;
+    }, null);
+  }, [trendData]);
+  const bestInvestment = toFiniteNumber(best?.initialInvestmentWan);
+  const hasAnnualCashflow = trendData.some((row) => toFiniteNumber(row.annualizedNetCashflowWan) !== null);
+  const hasIrr = trendData.some((row) => toFiniteNumber(row.irrPercent) !== null);
+  const hasPayback = trendData.some((row) => toFiniteNumber(row.paybackYears) !== null);
+  const hasDiscountedPayback = trendData.some((row) => toFiniteNumber(row.discountedPaybackYears) !== null);
+  const hasFitness = trendData.some((row) => toFiniteNumber(row.fitnessScorePct) !== null);
+
+  if (!trendData.length) return <EmptyChart />;
+
+  return (
+    <div>
+      <div style={investmentTrendGridStyle}>
+        <div>
+          <div style={subChartTitleStyle}>收益指标</div>
+          <ResponsiveContainer width="100%" height={310}>
+            <ComposedChart data={trendData} margin={{ top: 10, right: 52, bottom: 0, left: 0 }}>
+              <CartesianGrid stroke={SEMANTIC_COLORS.grid} strokeDasharray="3 3" />
+              <XAxis
+                dataKey="initialInvestmentWan"
+                name="初始投资"
+                type="number"
+                tickFormatter={compactTickFormatter}
+              />
+              <YAxis yAxisId="money" tickFormatter={compactTickFormatter} />
+              <YAxis yAxisId="pct" orientation="right" tickFormatter={(value) => `${compactTickFormatter(value)}%`} />
+              <Tooltip formatter={investmentEconomicsTooltipFormatter} labelFormatter={(value) => `初始投资 ${metricText(value, ' 万元')}`} />
+              <Legend />
+              <ReferenceLine yAxisId="money" y={0} stroke={SEMANTIC_COLORS.zeroLine} strokeWidth={1} />
+              {bestInvestment !== null ? (
+                <ReferenceLine
+                  x={bestInvestment}
+                  stroke={SEMANTIC_COLORS.recommended}
+                  strokeDasharray={LINE_STYLES.dashDot}
+                  strokeWidth={1.6}
+                  label={{ value: '推荐方案', position: 'top', fill: SEMANTIC_COLORS.recommended, fontSize: 12 }}
+                />
+              ) : null}
+              <Line yAxisId="money" type="monotone" dataKey="npvWan" name="NPV（万元）" stroke={SEMANTIC_COLORS.optimized} strokeWidth={2.4} dot={renderInvestmentSeriesDot('circle', SEMANTIC_COLORS.optimized)} activeDot={renderInvestmentSeriesDot('circle', SEMANTIC_COLORS.optimized, 6)} />
+              {hasAnnualCashflow ? (
+                <Line yAxisId="money" type="monotone" dataKey="annualizedNetCashflowWan" name="年净现金流（万元）" stroke={SEMANTIC_COLORS.revenue.secondary} strokeWidth={2} dot={renderInvestmentSeriesDot('square', SEMANTIC_COLORS.revenue.secondary)} activeDot={renderInvestmentSeriesDot('square', SEMANTIC_COLORS.revenue.secondary, 6)} />
+              ) : null}
+              {hasIrr ? (
+                <Line yAxisId="pct" type="monotone" dataKey="irrPercent" name="IRR（%）" stroke={SEMANTIC_COLORS.tariff} strokeWidth={2} dot={renderInvestmentSeriesDot('diamond', SEMANTIC_COLORS.tariff)} activeDot={renderInvestmentSeriesDot('diamond', SEMANTIC_COLORS.tariff, 6)} />
+              ) : null}
+            </ComposedChart>
+          </ResponsiveContainer>
+        </div>
+
+        <div>
+          <div style={subChartTitleStyle}>回收期与目标函数</div>
+          <ResponsiveContainer width="100%" height={310}>
+            <ComposedChart data={trendData} margin={{ top: 10, right: 52, bottom: 0, left: 0 }}>
+              <CartesianGrid stroke={SEMANTIC_COLORS.grid} strokeDasharray="3 3" />
+              <XAxis
+                dataKey="initialInvestmentWan"
+                name="初始投资"
+                type="number"
+                tickFormatter={compactTickFormatter}
+              />
+              <YAxis yAxisId="years" tickFormatter={compactTickFormatter} />
+              <YAxis yAxisId="pct" orientation="right" domain={[0, 100]} tickFormatter={(value) => `${compactTickFormatter(value)}%`} />
+              <Tooltip formatter={investmentEconomicsTooltipFormatter} labelFormatter={(value) => `初始投资 ${metricText(value, ' 万元')}`} />
+              <Legend />
+              {bestInvestment !== null ? (
+                <ReferenceLine
+                  x={bestInvestment}
+                  stroke={SEMANTIC_COLORS.recommended}
+                  strokeDasharray={LINE_STYLES.dashDot}
+                  strokeWidth={1.6}
+                  label={{ value: '推荐方案', position: 'top', fill: SEMANTIC_COLORS.recommended, fontSize: 12 }}
+                />
+              ) : null}
+              {hasPayback ? (
+                <Line yAxisId="years" type="monotone" dataKey="paybackYears" name="回收期（年）" stroke={SEMANTIC_COLORS.cost.secondary} strokeWidth={2} dot={renderInvestmentSeriesDot('circle', SEMANTIC_COLORS.cost.secondary)} activeDot={renderInvestmentSeriesDot('circle', SEMANTIC_COLORS.cost.secondary, 6)} />
+              ) : null}
+              {hasDiscountedPayback ? (
+                <Line yAxisId="years" type="monotone" dataKey="discountedPaybackYears" name="折现回收期（年）" stroke={DISCOUNTED_PAYBACK_COLOR} strokeWidth={2} dot={renderInvestmentSeriesDot('triangle', DISCOUNTED_PAYBACK_COLOR)} activeDot={renderInvestmentSeriesDot('triangle', DISCOUNTED_PAYBACK_COLOR, 6)} />
+              ) : null}
+              {hasFitness ? (
+                <Line
+                  yAxisId="pct"
+                  type="monotone"
+                  dataKey="fitnessScorePct"
+                  name="综合适应度（%）"
+                  stroke={SEMANTIC_COLORS.recommended}
+                  strokeWidth={2.4}
+                  dot={InvestmentFitnessDot}
+                  activeDot={renderInvestmentSeriesDot('diamond', SEMANTIC_COLORS.recommended, 6)}
+                />
+              ) : null}
+            </ComposedChart>
+          </ResponsiveContainer>
+        </div>
+      </div>
+
+      <InvestmentObjectiveExplanation summary={props.summary} best={best} />
+    </div>
+  );
+}
+
+function compactTickFormatter(value: unknown): string {
+  const number = toFiniteNumber(value);
+  if (number === null) return '';
+  return number.toLocaleString('zh-CN', { maximumFractionDigits: Math.abs(number) >= 100 ? 0 : 1 });
+}
+
+function investmentEconomicsTooltipFormatter(value: unknown, name: unknown): [string, string] {
+  const label = String(name);
+  if (label.includes('万元')) return [metricText(value, ' 万元'), label];
+  if (label.includes('%')) return [metricText(value, '%'), label];
+  if (label.includes('年')) return [metricText(value, ' 年'), label];
+  return [metricText(value), label];
+}
+
+type InvestmentDotShape = 'circle' | 'square' | 'diamond' | 'triangle';
+const DISCOUNTED_PAYBACK_COLOR = '#0891b2';
+
+function renderInvestmentSeriesDot(shape: InvestmentDotShape, color: string, size = 4) {
+  return (props: unknown) => {
+    const record = toRecord(props);
+    const cx = toFiniteNumber(record?.cx);
+    const cy = toFiniteNumber(record?.cy);
+    if (cx === null || cy === null) return null;
+    const strokeWidth = size >= 6 ? 2.2 : 1.8;
+    if (shape === 'circle') {
+      return <circle cx={cx} cy={cy} r={size} fill="#ffffff" stroke={color} strokeWidth={strokeWidth} />;
+    }
+    if (shape === 'square') {
+      return <rect x={cx - size} y={cy - size} width={size * 2} height={size * 2} rx={1.5} fill="#ffffff" stroke={color} strokeWidth={strokeWidth} />;
+    }
+    if (shape === 'triangle') {
+      const points = `${cx},${cy - size * 1.2} ${cx + size * 1.15},${cy + size} ${cx - size * 1.15},${cy + size}`;
+      return <polygon points={points} fill="#ffffff" stroke={color} strokeWidth={strokeWidth} strokeLinejoin="round" />;
+    }
+    const points = `${cx},${cy - size * 1.25} ${cx + size * 1.25},${cy} ${cx},${cy + size * 1.25} ${cx - size * 1.25},${cy}`;
+    return <polygon points={points} fill="#ffffff" stroke={color} strokeWidth={strokeWidth} strokeLinejoin="round" />;
+  };
+}
+
+function InvestmentFitnessDot(props: unknown) {
+  const record = toRecord(props);
+  const cx = toFiniteNumber(record?.cx);
+  const cy = toFiniteNumber(record?.cy);
+  if (cx === null || cy === null) return null;
+  const payload = toRecord(record?.payload);
+  const highlighted = payload?.objectiveBest === true || payload?.recommendedCandidate === true;
+  if (!highlighted) {
+    const points = `${cx},${cy - 5} ${cx + 5},${cy} ${cx},${cy + 5} ${cx - 5},${cy}`;
+    return <polygon points={points} fill="#ffffff" stroke={SEMANTIC_COLORS.recommended} strokeWidth={1.8} strokeLinejoin="round" />;
+  }
+  const highlightedPoints = `${cx},${cy - 9} ${cx + 9},${cy} ${cx},${cy + 9} ${cx - 9},${cy}`;
+  return (
+    <g>
+      <polygon points={highlightedPoints} fill="#ffffff" stroke={SEMANTIC_COLORS.recommended} strokeWidth={2.8} strokeLinejoin="round" />
+    </g>
+  );
+}
+
+function InvestmentObjectiveExplanation(props: { summary?: ResultChartPoint; best: ResultChartPoint | null }) {
+  const summary = toRecord(props.summary);
+  const best = props.best ?? summary;
+  const bestFeasible = best?.bestFeasible ?? best?.feasible;
+  const matchesFitness = summary?.recommendationMatchesFitness !== false;
+  const scoreSource = String(summary?.scoreSource ?? best?.objectiveScoreSource ?? '');
+  const isLegacyScore = scoreSource === 'legacy_compromise_v1';
+  const feasibleText = bestFeasible === false
+    ? '当前无严格可行候选时，按约束违反量最小作为回退排序。'
+    : '先筛选严格可行候选，再比较综合适应度。';
+  const totalWeightText = `经济性 ${metricText((toFiniteNumber(summary?.economicWeight) ?? 0.5) * 100, '%')} / 安全性 ${metricText((toFiniteNumber(summary?.safetyWeight) ?? 0.5) * 100, '%')}`;
+  const economicWeightText = [
+    ['NPV', summary?.economicWeightNpv],
+    ['IRR', summary?.economicWeightIrr],
+    ['回收期', summary?.economicWeightPayback],
+    ['初始投资', summary?.economicWeightInvestment],
+  ]
+    .map(([label, value]) => `${label} ${metricText((toFiniteNumber(value) ?? 0) * 100, '%')}`)
+    .join(' / ');
+  const safetyWeightText = [
+    ['变压器', summary?.safetyWeightTransformer],
+    ['电压', summary?.safetyWeightVoltage],
+    ['线路', summary?.safetyWeightLine],
+    ['设备策略', summary?.safetyWeightCycle],
+  ]
+    .map(([label, value]) => `${label} ${metricText((toFiniteNumber(value) ?? 0) * 100, '%')}`)
+    .join(' / ');
+  const strategy = String(best?.bestStrategyId ?? best?.strategyId ?? '--');
+  const investment = best?.bestInvestmentWan ?? best?.initialInvestmentWan;
+  const npv = best?.bestNpvWan ?? best?.npvWan;
+  const fitness = best?.bestFitnessScorePct ?? best?.fitnessScorePct;
+  const explanationText = isLegacyScore
+    ? '该历史任务没有引擎预计算分数字段，页面按旧版折中公式还原当时求解器排序：综合投资-NPV前沿距离、回收期、安全代理和NPV成本。新任务会直接读取引擎导出的当前加权目标评分。'
+    : `${feasibleText} 综合适应度 = 100 × (经济性总权重 × 经济性评分 + 安全性总权重 × 安全性评分)。总权重：${totalWeightText}；经济子权重：${economicWeightText}；安全子权重：${safetyWeightText}。`;
+  const matchText = isLegacyScore
+    ? ' 推荐方案即历史折中评分最高的候选。'
+    : ' 推荐方案即当前权重下综合适应度最高的候选。';
+  const mismatchText = isLegacyScore
+    ? ' 当前历史结果的推荐方案与可还原的历史折中评分仍不一致，通常是候选集缺少最终 archive 推荐点导致。'
+    : ' 当前历史结果的推荐方案与按本公式重算的最高适应度候选不同，通常是旧版本结果或候选集缺少最终 archive 推荐点导致。';
+  return (
+    <div style={objectiveExplainerStyle}>
+      <div style={objectiveMetricRowStyle}>
+        <span>推荐方案：{strategy}</span>
+        <span>投资 {metricText(investment, ' 万元')}</span>
+        <span>NPV {metricText(npv, ' 万元')}</span>
+        <span>适应度 {metricText(fitness, '%')}</span>
+      </div>
+      <div style={{ color: '#475569', lineHeight: 1.6, marginTop: 8 }}>
+        {explanationText}
+        {matchesFitness ? matchText : mismatchText}
+      </div>
+    </div>
   );
 }
 
@@ -1656,8 +2000,8 @@ function EngineDiagnosticsScenarioBlock(props: { scenario: EngineDiagnosticsScen
 
 function projectTopologyPoint(x: number, y: number, depth = 0) {
   return {
-    x: x + y * 0.18,
-    y: y * 0.62 - depth,
+    x: x + y * 0.10,
+    y: y * 0.54 - depth,
   };
 }
 
@@ -2143,9 +2487,9 @@ function NetworkTopologyPanel(props: { data: NetworkTopologyChart | null }) {
         >
             <defs>
               <linearGradient id="topology-floor-gradient" x1="0" y1="0" x2="1" y2="1">
-                <stop offset="0%" stopColor="#04111f" />
-                <stop offset="55%" stopColor="#071a33" />
-                <stop offset="100%" stopColor="#020617" />
+                <stop offset="0%" stopColor="#081524" />
+                <stop offset="55%" stopColor="#0b1a2e" />
+                <stop offset="100%" stopColor="#050b14" />
               </linearGradient>
               <radialGradient id="topology-storage-glow">
                 <stop offset="0%" stopColor="#22d3ee" stopOpacity="0.42" />
@@ -2153,7 +2497,7 @@ function NetworkTopologyPanel(props: { data: NetworkTopologyChart | null }) {
                 <stop offset="100%" stopColor="#020617" stopOpacity="0" />
               </radialGradient>
               <pattern id="topology-grid" width="92" height="64" patternUnits="userSpaceOnUse">
-                <path d="M 0 64 L 92 0 M 0 0 L 92 64 M 0 32 H 92" fill="none" stroke="#38bdf8" strokeWidth="0.85" opacity="0.22" />
+                <path d="M 0 32 H 92 M 46 0 V 64" fill="none" stroke="#7dd3fc" strokeWidth="0.72" opacity="0.16" />
               </pattern>
               <filter id="topology-line-glow" x="-35%" y="-35%" width="170%" height="170%">
                 <feGaussianBlur stdDeviation="4" result="blur" />
@@ -2171,26 +2515,13 @@ function NetworkTopologyPanel(props: { data: NetworkTopologyChart | null }) {
             </defs>
             <rect x={minX - baseWidth} y={minY - baseHeight} width={baseWidth * 3} height={baseHeight * 3} fill="url(#topology-floor-gradient)" />
             <rect x={minX - baseWidth} y={minY - baseHeight} width={baseWidth * 3} height={baseHeight * 3} fill="url(#topology-grid)" opacity={0.72} />
-            <polygon
-              points={`${minX + baseWidth * 0.12},${minY + baseHeight * 0.68} ${minX + baseWidth * 0.42},${minY + baseHeight * 0.48} ${minX + baseWidth * 0.62},${minY + baseHeight * 0.58} ${minX + baseWidth * 0.28},${minY + baseHeight * 0.81}`}
-              fill="#0b2444"
-              stroke="#38bdf8"
-              strokeOpacity={0.28}
-              opacity={0.45}
-            />
-            <polygon
-              points={`${minX + baseWidth * 0.39},${minY + baseHeight * 0.28} ${minX + baseWidth * 0.76},${minY + baseHeight * 0.22} ${minX + baseWidth * 0.88},${minY + baseHeight * 0.42} ${minX + baseWidth * 0.51},${minY + baseHeight * 0.52}`}
-              fill="#082f49"
-              stroke="#22d3ee"
-              strokeOpacity={0.22}
-              opacity={0.36}
-            />
-            <polygon
-              points={`${minX + baseWidth * 0.08},${minY + baseHeight * 0.33} ${minX + baseWidth * 0.31},${minY + baseHeight * 0.20} ${minX + baseWidth * 0.44},${minY + baseHeight * 0.32} ${minX + baseWidth * 0.19},${minY + baseHeight * 0.48}`}
-              fill="#0f172a"
-              stroke="#60a5fa"
-              strokeOpacity={0.18}
-              opacity={0.48}
+            <path
+              d={`M ${minX + baseWidth * 0.08} ${minY + baseHeight * 0.42} H ${minX + baseWidth * 0.92} M ${minX + baseWidth * 0.08} ${minY + baseHeight * 0.58} H ${minX + baseWidth * 0.92}`}
+              fill="none"
+              stroke="#93c5fd"
+              strokeOpacity={0.14}
+              strokeWidth={5}
+              strokeLinecap="round"
             />
             {storageNode ? (
               <circle cx={storageNode.projectedX} cy={storageNode.projectedY} r={150} fill="url(#topology-storage-glow)" opacity={layers.storageImpact ? 1 : 0.35} />
@@ -2223,6 +2554,7 @@ function NetworkTopologyPanel(props: { data: NetworkTopologyChart | null }) {
               const isTransformerLink = edge.isTransformerLink === true;
               const isTopLoadedLine = topLoadedLineIds.has(String(edge.id ?? ''));
               const isOverloadedLine = loadRate !== null && loadRate > 100;
+              const isHighlightedFlow = isStoragePath || isTopLoadedLine || isOverloadedLine || isSelectedRiskEdge;
               const shouldLabelLine = showDetailedLabels || isOverloadedLine || (showSummaryLabels && isTopLoadedLine);
               const flowDirection = String(edge.flowDirection ?? 'forward') === 'reverse' ? 'reverse' : 'forward';
               const lineDx = x2 - x1;
@@ -2236,14 +2568,17 @@ function NetworkTopologyPanel(props: { data: NetworkTopologyChart | null }) {
               const flowSign = flowDirection === 'reverse' ? -1 : 1;
               const flowUx = lineLength > 0 ? (lineDx / lineLength) * flowSign : 0;
               const flowUy = lineLength > 0 ? (lineDy / lineLength) * flowSign : 0;
+              const arrowTipOffset = isHighlightedFlow ? 11 : 8;
+              const arrowBackOffset = isHighlightedFlow ? 8 : 6;
+              const arrowHalfWidth = isHighlightedFlow ? 5 : 3.5;
               const arrowCenterX = (x1 + x2) / 2;
               const arrowCenterY = (y1 + y2) / 2;
-              const arrowTipX = arrowCenterX + flowUx * 10;
-              const arrowTipY = arrowCenterY + flowUy * 10;
-              const arrowBackX = arrowCenterX - flowUx * 8;
-              const arrowBackY = arrowCenterY - flowUy * 8;
-              const arrowPerpX = -flowUy * 5;
-              const arrowPerpY = flowUx * 5;
+              const arrowTipX = arrowCenterX + flowUx * arrowTipOffset;
+              const arrowTipY = arrowCenterY + flowUy * arrowTipOffset;
+              const arrowBackX = arrowCenterX - flowUx * arrowBackOffset;
+              const arrowBackY = arrowCenterY - flowUy * arrowBackOffset;
+              const arrowPerpX = -flowUy * arrowHalfWidth;
+              const arrowPerpY = flowUx * arrowHalfWidth;
               const flowArrowPoints = [
                 `${arrowTipX},${arrowTipY}`,
                 `${arrowBackX + arrowPerpX},${arrowBackY + arrowPerpY}`,
@@ -2338,13 +2673,13 @@ function NetworkTopologyPanel(props: { data: NetworkTopologyChart | null }) {
                       opacity={isTransformerLink ? 0.28 : 0.45}
                     />
                   ) : null}
-                  {!isOpen && lineLength > 1 && layers.flowDirection && (isStoragePath || isTopLoadedLine || isOverloadedLine || isSelectedRiskEdge) ? (
+                  {!isOpen && lineLength > 1 && layers.flowDirection ? (
                     <polygon
                       points={flowArrowPoints}
                       fill={flowDirection === 'reverse' ? SEMANTIC_COLORS.cost.secondary : '#67e8f9'}
                       stroke="#082f49"
-                      strokeWidth={1.2}
-                      opacity={0.96}
+                      strokeWidth={isHighlightedFlow ? 1.2 : 0.8}
+                      opacity={isHighlightedFlow ? 0.96 : 0.66}
                     />
                   ) : null}
                   {edgeLabelPlacement ? (
@@ -2662,7 +2997,7 @@ function TopologyLegend() {
       <div><span style={{ ...legendSwatchStyle, background: SEMANTIC_COLORS.neutral }} />估算/缺少实测</div>
       <div><span style={{ ...legendSwatchStyle, background: '#22d3ee' }} />储能影响路径</div>
       <div><span style={{ ...legendSwatchStyle, background: '#facc15' }} />储能接入点</div>
-      <div style={{ color: '#9fb6cf' }}>箭头仅显示主干、储能影响路径与风险线路的潮流方向</div>
+      <div style={{ color: '#9fb6cf' }}>箭头显示全部闭合线路潮流方向，重点线路箭头加粗</div>
     </div>
   );
 }
@@ -3133,6 +3468,12 @@ const chartGridStyle: React.CSSProperties = { display: 'grid', gridTemplateColum
 const sectionStyle: React.CSSProperties = { background: '#fff', border: '1px solid #e5e7eb', borderRadius: 8, padding: 20 };
 const chartCardStyle: React.CSSProperties = { background: '#fff', border: '1px solid #e5e7eb', borderRadius: 8, padding: 18, minHeight: 380 };
 const fullWidthChartCardStyle: React.CSSProperties = { ...chartCardStyle, gridColumn: '1 / -1' };
+const investmentTrendGridStyle: React.CSSProperties = { display: 'grid', gridTemplateColumns: 'minmax(0, 1fr)', gap: 20 };
+const subChartTitleStyle: React.CSSProperties = { fontSize: 13, fontWeight: 700, color: '#334155', marginBottom: 4 };
+const objectiveExplainerStyle: React.CSSProperties = { marginTop: 12, padding: '12px 14px', borderRadius: 8, background: '#f8fafc', fontSize: 13 };
+const objectiveMetricRowStyle: React.CSSProperties = { display: 'flex', gap: 14, flexWrap: 'wrap', color: '#0f172a', fontWeight: 700 };
+const socZoomFooterStyle: React.CSSProperties = { display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, flexWrap: 'wrap', marginTop: 8, color: '#64748b', fontSize: 12 };
+const socZoomResetButtonStyle: React.CSSProperties = { border: '1px solid #cbd5e1', borderRadius: 6, background: '#fff', color: '#0f172a', padding: '4px 8px', fontSize: 12, cursor: 'pointer' };
 const sectionTitleStyle: React.CSSProperties = { margin: '0 0 14px 0', fontSize: 24 };
 const sectionHeaderRowStyle: React.CSSProperties = { display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, flexWrap: 'wrap' };
 const chartTitleStyle: React.CSSProperties = { margin: '0 0 12px 0', fontSize: 18 };
@@ -3143,11 +3484,11 @@ const topologyToolbarStyle: React.CSSProperties = { display: 'flex', justifyCont
 const topologyCanvasStyle: React.CSSProperties = {
   position: 'relative',
   height: 680,
-  border: '1px solid rgba(56,189,248,0.32)',
+  border: '1px solid rgba(125,159,190,0.32)',
   borderRadius: 8,
-  background: '#020617',
+  background: '#06101f',
   overflow: 'hidden',
-  boxShadow: 'inset 0 0 42px rgba(14,165,233,0.12)',
+  boxShadow: 'inset 0 0 38px rgba(15,23,42,0.45)',
 };
 const topologySvgStyle: React.CSSProperties = { cursor: 'grab', touchAction: 'none', userSelect: 'none', display: 'block' };
 const topologyViewHintStyle: React.CSSProperties = { margin: '-2px 0 8px 0', color: '#64748b', fontSize: 12 };
@@ -3316,6 +3657,7 @@ const topologyRiskTextStyle: React.CSSProperties = {
 const topologyEmptyRiskStyle: React.CSSProperties = { color: '#9fb6cf', fontSize: 12, lineHeight: 1.5 };
 const topologyImpactTextStyle: React.CSSProperties = { color: '#dff7ff', fontSize: 12, lineHeight: 1.65 };
 const legendStyle: React.CSSProperties = { display: 'flex', gap: '8px 14px', flexWrap: 'wrap', color: '#dff7ff', fontSize: 12 };
+const legendItemStyle: React.CSSProperties = { display: 'inline-flex', alignItems: 'center', gap: 5, color: '#374151', fontSize: 13, fontWeight: 600 };
 const legendSwatchStyle: React.CSSProperties = { display: 'inline-block', width: 12, height: 12, borderRadius: 2, marginRight: 8, verticalAlign: '-1px' };
 const btnStyle: React.CSSProperties = { padding: '10px 14px', borderRadius: 8, border: '1px solid #cbd5e1', background: '#f1f5f9', fontWeight: 600, cursor: 'pointer' };
 const taskSelectStyle: React.CSSProperties = { minWidth: 320, maxWidth: '100%', padding: '9px 12px', borderRadius: 8, border: '1px solid #d1d5db', background: '#fff', color: '#111827', fontWeight: 600 };

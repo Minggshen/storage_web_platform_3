@@ -43,6 +43,31 @@ function Mini(props: { label: string; value: string }) {
   );
 }
 
+function WeightField(props: {
+  id: string;
+  label: string;
+  value: number;
+  disabled: boolean;
+  onChange: (value: number) => void;
+}) {
+  return (
+    <label htmlFor={props.id} className="grid gap-1.5">
+      <span className="text-xs font-semibold text-muted-foreground">{props.label}</span>
+      <input
+        id={props.id}
+        type="number"
+        min={0}
+        max={100}
+        step={1}
+        value={Number.isFinite(props.value) ? props.value : 0}
+        disabled={props.disabled}
+        onChange={(event) => props.onChange(Math.max(0, Number(event.target.value) || 0))}
+        className={`h-9 rounded-lg border px-2.5 text-sm ${props.disabled ? 'border-border bg-muted/50 text-muted-foreground' : 'border-border bg-card'}`}
+      />
+    </label>
+  );
+}
+
 export default function SolverPage() {
   const { projectId = '' } = useParams();
   const [latestTask, setLatestTask] = useState<SolverTask | null>(null);
@@ -57,6 +82,8 @@ export default function SolverPage() {
   const [targetId, setTargetId] = useState('');
   const [initialSoc, setInitialSoc] = useState('0.25');
   const [safetyTradeoff, setSafetyTradeoff] = useState(50);
+  const [economicWeights, setEconomicWeights] = useState({ npv: 45, irr: 20, payback: 25, investment: 10 });
+  const [safetyWeights, setSafetyWeights] = useState({ transformer: 25, voltage: 25, line: 25, cycle: 25 });
   const [targetOptions, setTargetOptions] = useState<TargetOption[]>([]);
   const [lastUpdatedAt, setLastUpdatedAt] = useState<Date | null>(null);
   const [displayProgress, setDisplayProgress] = useState<ProgressSnapshot>({
@@ -143,6 +170,14 @@ export default function SolverPage() {
         output_subdir_name: 'integrated_optimization',
         initial_soc: clampInputNumber(initialSoc, 0, 1, 0.25),
         safety_economy_tradeoff: safetyTradeoff / 100,
+        economic_weight_npv: Math.max(economicWeights.npv, 0) / 100,
+        economic_weight_irr: Math.max(economicWeights.irr, 0) / 100,
+        economic_weight_payback: Math.max(economicWeights.payback, 0) / 100,
+        economic_weight_investment: Math.max(economicWeights.investment, 0) / 100,
+        safety_weight_transformer: Math.max(safetyWeights.transformer, 0) / 100,
+        safety_weight_voltage: Math.max(safetyWeights.voltage, 0) / 100,
+        safety_weight_line: Math.max(safetyWeights.line, 0) / 100,
+        safety_weight_cycle: Math.max(safetyWeights.cycle, 0) / 100,
       });
       await refreshTask(true);
       // 重新执行后恢复轮询（此前可能因上一任务终态已停止）
@@ -257,6 +292,22 @@ export default function SolverPage() {
   const effectiveSafetyTradeoff = freezeInputs
     ? Math.round(Number(latestRunRequest?.safety_economy_tradeoff ?? 0.5) * 100)
     : safetyTradeoff;
+  const effectiveEconomicWeights = freezeInputs
+    ? {
+        npv: Math.round(Number(latestRunRequest?.economic_weight_npv ?? 0.45) * 100),
+        irr: Math.round(Number(latestRunRequest?.economic_weight_irr ?? 0.20) * 100),
+        payback: Math.round(Number(latestRunRequest?.economic_weight_payback ?? 0.25) * 100),
+        investment: Math.round(Number(latestRunRequest?.economic_weight_investment ?? 0.10) * 100),
+      }
+    : economicWeights;
+  const effectiveSafetyWeights = freezeInputs
+    ? {
+        transformer: Math.round(Number(latestRunRequest?.safety_weight_transformer ?? 0.25) * 100),
+        voltage: Math.round(Number(latestRunRequest?.safety_weight_voltage ?? 0.25) * 100),
+        line: Math.round(Number(latestRunRequest?.safety_weight_line ?? 0.25) * 100),
+        cycle: Math.round(Number(latestRunRequest?.safety_weight_cycle ?? 0.25) * 100),
+      }
+    : safetyWeights;
 
   function tradeoffLabel(value: number): string {
     if (value <= 10) return '纯经济最优';
@@ -405,6 +456,78 @@ export default function SolverPage() {
             </div>
           </div>
 
+          <div className="mt-4 grid gap-3 lg:grid-cols-2">
+            <div className="rounded-xl border border-border bg-card p-4">
+              <div className="mb-3 text-[13px] font-bold text-foreground/70">经济性子指标权重</div>
+              <div className="grid gap-3 sm:grid-cols-2">
+                <WeightField
+                  id="economic-weight-npv"
+                  label="NPV"
+                  value={effectiveEconomicWeights.npv}
+                  disabled={freezeInputs}
+                  onChange={(value) => setEconomicWeights((current) => ({ ...current, npv: value }))}
+                />
+                <WeightField
+                  id="economic-weight-irr"
+                  label="IRR"
+                  value={effectiveEconomicWeights.irr}
+                  disabled={freezeInputs}
+                  onChange={(value) => setEconomicWeights((current) => ({ ...current, irr: value }))}
+                />
+                <WeightField
+                  id="economic-weight-payback"
+                  label="回收期"
+                  value={effectiveEconomicWeights.payback}
+                  disabled={freezeInputs}
+                  onChange={(value) => setEconomicWeights((current) => ({ ...current, payback: value }))}
+                />
+                <WeightField
+                  id="economic-weight-investment"
+                  label="初始投资"
+                  value={effectiveEconomicWeights.investment}
+                  disabled={freezeInputs}
+                  onChange={(value) => setEconomicWeights((current) => ({ ...current, investment: value }))}
+                />
+              </div>
+              <div className="mt-2 text-[12px] text-muted-foreground">权重会自动归一化；NPV、IRR 越高越好，回收期和初始投资越低越好。</div>
+            </div>
+
+            <div className="rounded-xl border border-border bg-card p-4">
+              <div className="mb-3 text-[13px] font-bold text-foreground/70">安全性子指标权重</div>
+              <div className="grid gap-3 sm:grid-cols-2">
+                <WeightField
+                  id="safety-weight-transformer"
+                  label="变压器越限"
+                  value={effectiveSafetyWeights.transformer}
+                  disabled={freezeInputs}
+                  onChange={(value) => setSafetyWeights((current) => ({ ...current, transformer: value }))}
+                />
+                <WeightField
+                  id="safety-weight-voltage"
+                  label="电压越限"
+                  value={effectiveSafetyWeights.voltage}
+                  disabled={freezeInputs}
+                  onChange={(value) => setSafetyWeights((current) => ({ ...current, voltage: value }))}
+                />
+                <WeightField
+                  id="safety-weight-line"
+                  label="线路过载"
+                  value={effectiveSafetyWeights.line}
+                  disabled={freezeInputs}
+                  onChange={(value) => setSafetyWeights((current) => ({ ...current, line: value }))}
+                />
+                <WeightField
+                  id="safety-weight-cycle"
+                  label="设备策略约束"
+                  value={effectiveSafetyWeights.cycle}
+                  disabled={freezeInputs}
+                  onChange={(value) => setSafetyWeights((current) => ({ ...current, cycle: value }))}
+                />
+              </div>
+              <div className="mt-2 text-[12px] text-muted-foreground">设备策略约束使用策略库的年循环上限、时长边界等约束生成违反量；其他指标来自 OpenDSS 或代理潮流约束。</div>
+            </div>
+          </div>
+
           {hasNoTargetOptions ? (
             <div className="mt-2.5 text-[13px] font-semibold text-amber-600">
               拓扑建模中没有设置为候选配储目标的负荷节点，请先把目标用户负荷的 optimize_storage 设置为"是"。
@@ -544,6 +667,8 @@ function estimateSolverProgress(task: SolverTask | null, stdoutText: string, req
 
 function parseStdoutProgress(stdoutText: string, requestedGenerations: number): ProgressInfo {
   if (!stdoutText.trim()) return { percent: 0, label: '等待日志', detail: 'stdout 暂无进度输出。' };
+  const structured = parseStructuredProgress(stdoutText);
+  if (structured) return structured;
   if (stdoutText.includes('已导出总体最优方案汇总')) return { percent: 100, label: '结果汇总已导出', detail: '求解流程已完成。' };
 
   const totalCases = lastNumber(stdoutText, /共加载\s+(\d+)\s+个待优化场景/g);
@@ -563,31 +688,32 @@ function parseStdoutProgress(stdoutText: string, requestedGenerations: number): 
 
   const total = caseMatch ? Number(caseMatch[2]) : totalCases;
   const current = caseMatch ? Number(caseMatch[1]) : Math.min(completedCases + 1, total || 1);
+  const caseStartPercent = total && current ? 8 + (Math.max(current - 1, 0) / total) * 88 : 8;
+  const caseEndPercent = total && current ? 8 + (Math.min(current, total) / total) * 88 : 96;
+  const casePercent = (relative: number) => clampProgress(caseStartPercent + (caseEndPercent - caseStartPercent) * Math.max(0, Math.min(relative, 1)));
 
   if (inExport && total && completedCases >= total) {
-    return { percent: 95, label: '正在导出结果', detail: `全部 ${total} 个场景已完成，正在写入结果文件。` };
+    return { percent: 97, label: '正在导出结果', detail: `全部 ${total} 个场景已完成，正在写入结果文件。` };
   }
   if (inFinalRecheck && annualDay > 0) {
-    return { percent: clampProgress(35 + (annualDay / 365) * 55), label: '全年重校核（最耗时阶段）', detail: `OpenDSS 全年逐日潮流重校核 ${annualDay}/365 天。` };
+    return { percent: casePercent(0.40 + (annualDay / 365) * 0.53), label: '全年重校核（最耗时阶段）', detail: `OpenDSS 全年逐日潮流重校核 ${annualDay}/365 天。` };
   }
   if (inFullRecheck && annualDay > 0 && iteration >= generations) {
-    return { percent: clampProgress(35 + (annualDay / 365) * 55), label: '全年重校核（最耗时阶段）', detail: `全年逐日重校核 ${annualDay}/365 天。` };
+    return { percent: casePercent(0.40 + (annualDay / 365) * 0.53), label: '全年重校核（最耗时阶段）', detail: `全年逐日重校核 ${annualDay}/365 天。` };
   }
   if (iteration >= generations && !inFullRecheck && !inFinalRecheck) {
-    let detail = `GA 迭代已完成 ${generations} 代，正在评估最终种群。`;
-    let percent = 32;
-    if (proxyCurrent > 0 && proxyTotal > 0) { percent = clampProgress(30 + (proxyCurrent / proxyTotal) * 5); detail = `最终种群评估，代表日 ${proxyCurrent}/${proxyTotal}。`; }
-    return { percent, label: '评估最终种群', detail };
+    return {
+      percent: casePercent(0.40),
+      label: 'GA 搜索已完成',
+      detail: `GA 迭代已完成 ${generations} 代，正在准备全年重校核或结果导出。`,
+    };
   }
   if (total && current) {
     const iterationFraction = iteration > 0 ? iteration / generations : 0;
     const proxyFraction = (proxyCurrent > 0 && proxyTotal > 0) ? proxyCurrent / proxyTotal : 0;
     const inIterationFraction = iteration < generations ? iterationFraction + proxyFraction / generations : iterationFraction;
     const inCaseFraction = Math.min(inIterationFraction, 1.0);
-    const completedFraction = completedCases / total;
-    const runningFraction = (Math.max(current - 1, 0) + inCaseFraction) / total;
-    const overallFraction = Math.max(completedFraction, runningFraction);
-    const percent = clampProgress(5 + overallFraction * 25);
+    const percent = casePercent(0.04 + inCaseFraction * 0.36);
     let detail: string;
     if (proxyCurrent > 0 && proxyTotal > 0 && iteration > 0) detail = `第 ${current}/${total} 个场景，迭代 ${iteration}/${generations}，代表日 ${proxyCurrent}/${proxyTotal}。`;
     else if (iteration > 0) detail = `第 ${current}/${total} 个场景，优化迭代 ${iteration}/${generations}。`;
@@ -595,9 +721,59 @@ function parseStdoutProgress(stdoutText: string, requestedGenerations: number): 
     return { percent, label: '正在运行 GA 优化', detail };
   }
   if (iteration > 0) {
-    return { percent: clampProgress(5 + (iteration / generations) * 25), label: '正在运行 GA 优化', detail: `优化迭代 ${iteration}/${generations}。` };
+    return { percent: casePercent(0.04 + (iteration / generations) * 0.36), label: '正在运行 GA 优化', detail: `优化迭代 ${iteration}/${generations}。` };
   }
   return { percent: 5, label: '求解器已启动', detail: '已捕获 stdout 日志，正在解析后续进度。' };
+}
+
+function parseStructuredProgress(stdoutText: string): ProgressInfo | null {
+  const markerPattern = /SOLVER_PROGRESS\s+({[^\r\n]+})/g;
+  let marker: RegExpExecArray | null = null;
+  let current: RegExpExecArray | null;
+  markerPattern.lastIndex = 0;
+  while ((current = markerPattern.exec(stdoutText)) !== null) marker = current;
+  if (!marker) return null;
+
+  let payload: Record<string, unknown>;
+  try {
+    const parsed = JSON.parse(marker[1]);
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
+    payload = parsed as Record<string, unknown>;
+  } catch {
+    return null;
+  }
+
+  let percent = numberValue(payload.percent, 0);
+  const label = String(payload.label ?? '求解器运行中').trim() || '求解器运行中';
+  let detail = String(payload.detail ?? '后台已返回结构化进度。').trim();
+  const spanStart = numberValue(payload.span_start_percent, Number.NaN);
+  const spanEnd = numberValue(payload.span_end_percent, Number.NaN);
+  if (Number.isFinite(spanStart) && Number.isFinite(spanEnd) && spanEnd > spanStart) {
+    const suffix = stdoutText.slice(marker.index + marker[0].length);
+    const sub = parseAnnualSubprogress(suffix);
+    if (sub) {
+      const fraction = Math.max(0, Math.min(sub.current / Math.max(sub.total, 1), 1));
+      percent = spanStart + (spanEnd - spanStart) * fraction;
+      detail = sub.kind === 'annual'
+        ? `${detail} OpenDSS 全年逐日校核 ${sub.current}/${sub.total} 天。`
+        : `${detail} 代表日运行 ${sub.current}/${sub.total}。`;
+    }
+  }
+  return { percent: clampProgress100(percent), label, detail };
+}
+
+function parseAnnualSubprogress(text: string): { kind: 'annual' | 'proxy'; current: number; total: number } | null {
+  const annualMatch = lastMatch(text, /年度运行[^\n]*进度\s+(\d+)\/365/g);
+  if (annualMatch) return { kind: 'annual', current: Math.min(Number(annualMatch[1]) || 0, 365), total: 365 };
+  const proxyMatch = lastMatch(text, /年度运行[^\n]*代表日\s+(\d+)\/(\d+)/g);
+  if (!proxyMatch) return null;
+  const total = Math.max(Number(proxyMatch[2]) || 1, 1);
+  return { kind: 'proxy', current: Math.min(Number(proxyMatch[1]) || 0, total), total };
+}
+
+function numberValue(value: unknown, fallback: number): number {
+  const number = Number(value);
+  return Number.isFinite(number) ? number : fallback;
 }
 
 function lastMatch(text: string, pattern: RegExp): RegExpExecArray | null {
@@ -623,6 +799,11 @@ function countMatches(text: string, pattern: RegExp): number {
 function clampProgress(value: number): number {
   if (!Number.isFinite(value)) return 0;
   return Math.max(0, Math.min(99, value));
+}
+
+function clampProgress100(value: number): number {
+  if (!Number.isFinite(value)) return 0;
+  return Math.max(0, Math.min(100, value));
 }
 
 function clampInputNumber(value: string, min: number, max: number, fallback: number): number {

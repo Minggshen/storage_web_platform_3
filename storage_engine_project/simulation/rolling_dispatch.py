@@ -139,6 +139,8 @@ class RollingDispatchController:
 
         notes: list[str] = []
         saved_constraints: list = []  # cache oracle results per hour
+        saved_constraint_soc: list[float] = []
+        plan_summary = plan.summary_dict()
 
         for t in range(h):
             planned_net_power = float(pdis_plan[t] - pch_plan[t])
@@ -163,9 +165,10 @@ class RollingDispatchController:
                 rated_energy_kwh=float(plan.rated_energy_kwh),
                 effective_power_cap_kw=eff_power_cap,
                 current_soc=float(soc[t]),
-                extra={"plan_summary": plan.summary_dict(), "capture_network_trace": True},
+                extra={"plan_summary": plan_summary, "capture_network_trace": True},
             )
             saved_constraints.append(constraint)
+            saved_constraint_soc.append(float(soc[t]))
 
             service_cap = max(0.0, min(planned_service, constraint.service_power_cap_kw, eff_power_cap))
             base_power_cap = max(0.0, eff_power_cap - service_cap)
@@ -260,6 +263,8 @@ class RollingDispatchController:
             pdis_exec=pdis_exec,
             psrv_exec=psrv_exec,
             saved_constraints=saved_constraints,
+            saved_constraint_soc=saved_constraint_soc,
+            plan_summary=plan_summary,
         )
 
         after_error: float | None = None
@@ -404,6 +409,8 @@ class RollingDispatchController:
         pdis_exec,
         psrv_exec,
         saved_constraints=None,
+        saved_constraint_soc: list[float] | None = None,
+        plan_summary: dict[str, Any] | None = None,
     ):
         eta_c = float(ctx.strategy.eta_charge)
         eta_d = float(ctx.strategy.eta_discharge)
@@ -422,6 +429,7 @@ class RollingDispatchController:
         deg_cost = np.zeros(24)
         tr_pen = np.zeros(24)
         network_trace: list[dict[str, Any]] = []
+        plan_summary = plan_summary or plan.summary_dict()
 
         for t in range(24):
             ge = float(actual_net[t] + pch_exec[t] - pdis_exec[t])
@@ -442,7 +450,11 @@ class RollingDispatchController:
                 or abs(float(pdis_exec[t]) - planned_discharge) > 1e-6
                 or abs(float(psrv_exec[t]) - planned_service) > 1e-6
             )
-            if saved_constraints is not None and t < len(saved_constraints) and not exec_differs:
+            soc_matches_saved = (
+                saved_constraint_soc is None
+                or (t < len(saved_constraint_soc) and abs(float(soc[t]) - float(saved_constraint_soc[t])) <= 1e-9)
+            )
+            if saved_constraints is not None and t < len(saved_constraints) and not exec_differs and soc_matches_saved:
                 constraint = saved_constraints[t]
             else:
                 constraint = oracle.get_hour_constraint(
@@ -457,7 +469,7 @@ class RollingDispatchController:
                     rated_energy_kwh=float(plan.rated_energy_kwh),
                     effective_power_cap_kw=float(plan.effective_power_cap_kw),
                     current_soc=float(soc[t]),
-                    extra={"plan_summary": plan.summary_dict(), "capture_network_trace": True},
+                    extra={"plan_summary": plan_summary, "capture_network_trace": True},
                 )
             meta = constraint.metadata or {}
             has_loss_trace = any(

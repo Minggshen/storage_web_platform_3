@@ -60,8 +60,9 @@ def _panel(ax: plt.Axes, tag: str) -> None:
 
 
 def _save(fig: plt.Figure, path: Path) -> str:
+    path = path.with_suffix(".svg")
     fig.tight_layout(rect=(0.02, 0.02, 0.98, 0.97), pad=0.9)
-    fig.savefig(path, dpi=320, bbox_inches="tight")
+    fig.savefig(path, format="svg", bbox_inches="tight")
     plt.close(fig)
     return str(path)
 
@@ -182,7 +183,7 @@ def plot_scheme_overview(case_name: str, best_result: FitnessEvaluationResult, o
     ax.set_title("年度价值贡献")
     _panel(ax, "d")
 
-    p = out_dir / f"{safe_case}_设备选型与方案总览.png"
+    p = out_dir / f"{safe_case}_设备选型与方案总览.svg"
     saved.append(_save(fig, p))
 
     # 摘要表

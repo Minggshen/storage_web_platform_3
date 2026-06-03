@@ -201,6 +201,8 @@ export type ResultChartsResponse = {
     financial_metrics?: ResultChartPoint[];
     pareto?: ResultChartPoint[];
     pareto_frontier?: ResultChartPoint[];
+    investment_economics?: ResultChartPoint[];
+    investment_economics_summary?: ResultChartPoint;
     degradation_soh?: ResultChartPoint[];
     lcos?: {
       summary?: ResultChartPoint;
@@ -363,6 +365,8 @@ export type ReportParetoCandidate = {
   totalViolation?: number | null;
   paretoFrontier?: boolean | null;
   frontierOrder?: number | null;
+  recommendedCandidate?: boolean | null;
+  objectiveBest?: boolean | null;
 };
 
 export type ReportDegradationSohPoint = {
@@ -419,6 +423,8 @@ export type ReportCharts = {
   financial_metrics?: ReportFinancialMetricItem[];
   pareto?: ReportParetoCandidate[];
   pareto_frontier?: ReportParetoCandidate[];
+  investment_economics?: Record<string, unknown>[];
+  investment_economics_summary?: Record<string, unknown> | null;
   degradation_soh?: ReportDegradationSohPoint[];
   lcos?: ReportLcosChart | null;
   optimization_history?: ReportOptimizationHistoryChart | null;

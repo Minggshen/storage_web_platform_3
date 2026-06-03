@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 from services.project_model_service import ProjectModelService
+from storage_engine_project.optimization.objective_scoring import compute_weighted_objective_scores
 
 
 class SolverExecutionService:
@@ -618,6 +619,19 @@ class SolverExecutionService:
         safety_tradeoff = self._safe_float(request.get("safety_economy_tradeoff"), math.nan)
         if math.isfinite(safety_tradeoff):
             command.extend(["--safety-economy-tradeoff", self._format_float(min(max(safety_tradeoff, 0.0), 1.0))])
+        for request_key, option_name in [
+            ("economic_weight_npv", "--economic-weight-npv"),
+            ("economic_weight_irr", "--economic-weight-irr"),
+            ("economic_weight_payback", "--economic-weight-payback"),
+            ("economic_weight_investment", "--economic-weight-investment"),
+            ("safety_weight_transformer", "--safety-weight-transformer"),
+            ("safety_weight_voltage", "--safety-weight-voltage"),
+            ("safety_weight_line", "--safety-weight-line"),
+            ("safety_weight_cycle", "--safety-weight-cycle"),
+        ]:
+            weight = self._safe_float(request.get(request_key), math.nan)
+            if math.isfinite(weight):
+                command.extend([option_name, self._format_float(min(max(weight, 0.0), 1.0))])
 
         dss_master = task_workspace / "inputs" / "dss" / "visual_model" / "Master.dss"
         voltage_penalty_coeff = self._resolve_registry_target_float(
@@ -940,15 +954,84 @@ class SolverExecutionService:
             "source": "backend_log_parser",
         }
 
+    def _parse_structured_progress(self, stdout_text: str) -> Optional[Dict[str, Any]]:
+        marker = self._last_structured_progress_marker(stdout_text)
+        if marker is None:
+            return None
+        payload, marker_end = marker
+        percent = self._safe_float(payload.get("percent"), 0.0)
+        label = str(payload.get("label") or "求解器运行中").strip() or "求解器运行中"
+        detail = str(payload.get("detail") or "后台已返回结构化进度。").strip()
+
+        span_start = self._safe_float(payload.get("span_start_percent"), math.nan)
+        span_end = self._safe_float(payload.get("span_end_percent"), math.nan)
+        if math.isfinite(span_start) and math.isfinite(span_end) and span_end > span_start:
+            sub_progress = self._parse_annual_subprogress(stdout_text[marker_end:])
+            if sub_progress is not None:
+                sub_kind, current, total = sub_progress
+                fraction = min(max(current / max(total, 1), 0.0), 1.0)
+                percent = span_start + (span_end - span_start) * fraction
+                if sub_kind == "annual":
+                    detail = f"{detail} OpenDSS 全年逐日校核 {current}/{total} 天。"
+                else:
+                    detail = f"{detail} 代表日运行 {current}/{total}。"
+
+        return {
+            "percent": self._clamp_structured_progress(percent),
+            "label": label,
+            "detail": detail,
+            "source": "solver_progress_marker",
+            "phase": str(payload.get("phase") or ""),
+        }
+
+    @staticmethod
+    def _last_structured_progress_marker(stdout_text: str) -> Optional[Tuple[Dict[str, Any], int]]:
+        last_payload: Dict[str, Any] | None = None
+        last_end = 0
+        for match in re.finditer(r"SOLVER_PROGRESS\s+({[^\r\n]+})", stdout_text):
+            try:
+                payload = json.loads(match.group(1))
+            except Exception:
+                continue
+            if isinstance(payload, dict):
+                last_payload = payload
+                last_end = match.end()
+        if last_payload is None:
+            return None
+        return last_payload, last_end
+
+    def _parse_annual_subprogress(self, text: str) -> Optional[Tuple[str, int, int]]:
+        annual_match = self._last_match(text, r"年度运行[^\n]*进度\s+(\d+)\/365")
+        if annual_match:
+            return "annual", min(self._safe_int(annual_match[0], 0), 365), 365
+
+        proxy_match = self._last_match(text, r"年度运行[^\n]*代表日\s+(\d+)\/(\d+)")
+        if proxy_match:
+            current = max(0, self._safe_int(proxy_match[0], 0))
+            total = max(1, self._safe_int(proxy_match[1], 1))
+            return "proxy", min(current, total), total
+        return None
+
+    @staticmethod
+    def _clamp_structured_progress(value: float) -> int:
+        try:
+            parsed = float(value)
+        except Exception:
+            return 0
+        if not math.isfinite(parsed):
+            return 0
+        return max(0, min(int(round(parsed)), 100))
+
     def _parse_stdout_progress(self, stdout_text: str, requested_generations: int) -> Dict[str, Any]:
         """解析 stdout 日志估算求解进度。
 
         求解器实际执行阶段与进度权重分配：
-          阶段 1 — 初始化（加载数据、构建 OpenDSS oracle）:  0% ~  5%
-          阶段 2 — GA 迭代（fast_proxy 代表日评估）:          5% ~ 30%
-          阶段 3 — GA 最终种群评估（额外一轮 evaluate）:     30% ~ 35%
-          阶段 4 — full_recheck（365 天全年 OpenDSS 潮流）:  35% ~ 90%
-          阶段 5 — 结果导出（写 CSV/JSON/图表）:             90% ~100%
+          优先读取求解器输出的 SOLVER_PROGRESS 结构化标记。
+          旧日志兜底模型：
+          阶段 1 — 初始化（加载数据、构建 OpenDSS oracle）:  0% ~  8%
+          阶段 2 — GA 候选搜索（逐代/逐候选评估）:           8% ~ 40%
+          阶段 3 — Top-K / 最终 full_recheck:               40% ~ 93%
+          阶段 4 — 结果导出（写 CSV/JSON/图表）:             93% ~100%
         """
         if not stdout_text.strip():
             return {
@@ -957,6 +1040,9 @@ class SolverExecutionService:
                 "detail": "stdout 暂无进度输出。",
                 "source": "backend_log_parser",
             }
+        structured = self._parse_structured_progress(stdout_text)
+        if structured is not None:
+            return structured
         if "已导出总体最优方案汇总" in stdout_text:
             return {
                 "percent": 100,
@@ -990,20 +1076,28 @@ class SolverExecutionService:
 
         total = self._safe_int(case_match[1], 0) if case_match else total_cases
         current = self._safe_int(case_match[0], 0) if case_match else min(completed_cases + 1, total or 1)
+        case_start_percent = 8.0
+        case_end_percent = 96.0
+        if total and current:
+            case_start_percent = 8.0 + max(current - 1, 0) / total * 88.0
+            case_end_percent = 8.0 + min(current, total) / total * 88.0
 
-        # --- 阶段 5：结果导出 (90-100%) ---
+        def case_percent(relative: float) -> int:
+            return self._clamp_progress(case_start_percent + (case_end_percent - case_start_percent) * relative)
+
+        # --- 阶段 4：结果导出 (93-100%) ---
         if in_export and total and completed_cases >= total:
             return {
-                "percent": 95,
+                "percent": 97,
                 "label": "正在导出结果",
                 "detail": f"全部 {total} 个场景已完成，正在写入结果文件。",
                 "source": "backend_log_parser",
             }
 
-        # --- 阶段 4：full_recheck (35-90%) ---
+        # --- 阶段 3：full_recheck (40-93%) ---
         if in_final_recheck and annual_day > 0:
             recheck_fraction = annual_day / 365.0
-            percent = self._clamp_progress(35 + recheck_fraction * 55)
+            percent = case_percent(0.40 + recheck_fraction * 0.53)
             return {
                 "percent": percent,
                 "label": "全年重校核（最耗时阶段）",
@@ -1013,7 +1107,7 @@ class SolverExecutionService:
 
         if in_full_recheck and annual_day > 0 and iteration >= generations:
             recheck_fraction = annual_day / 365.0
-            percent = self._clamp_progress(35 + recheck_fraction * 55)
+            percent = case_percent(0.40 + recheck_fraction * 0.53)
             return {
                 "percent": percent,
                 "label": "全年重校核（最耗时阶段）",
@@ -1021,24 +1115,17 @@ class SolverExecutionService:
                 "source": "backend_log_parser",
             }
 
-        # --- 阶段 3：GA 最终种群评估 (30-35%) ---
+        # --- 阶段 3：GA 完成后等待/准备重校核 (约 40%) ---
         if iteration >= generations and not in_full_recheck and not in_final_recheck:
-            # 迭代已完成但还没进入 full_recheck，说明在做最终种群评估
-            detail = f"GA 迭代已完成 {generations} 代，正在评估最终种群。"
-            if proxy_current > 0 and proxy_total > 0:
-                proxy_fraction = proxy_current / proxy_total
-                percent = self._clamp_progress(30 + proxy_fraction * 5)
-                detail = f"最终种群评估，代表日 {proxy_current}/{proxy_total}。"
-            else:
-                percent = 32
+            detail = f"GA 迭代已完成 {generations} 代，正在准备全年重校核或结果导出。"
             return {
-                "percent": percent,
-                "label": "评估最终种群",
+                "percent": case_percent(0.40),
+                "label": "GA 搜索已完成",
                 "detail": detail,
                 "source": "backend_log_parser",
             }
 
-        # --- 阶段 2：GA 迭代 (5-30%) ---
+        # --- 阶段 2：GA 迭代 (4-40%/场景) ---
         if total and current:
             iteration_fraction = iteration / generations if iteration > 0 else 0
             # fast_proxy 代表日进度作为迭代内的细粒度指标
@@ -1046,10 +1133,7 @@ class SolverExecutionService:
             # 迭代内进度：迭代完成比例 + 当前迭代内的代表日进度
             in_iteration_fraction = (iteration_fraction + proxy_fraction / generations) if iteration < generations else iteration_fraction
             in_case_fraction = min(in_iteration_fraction, 1.0)
-            completed_fraction = completed_cases / total
-            running_fraction = (max(current - 1, 0) + in_case_fraction) / total
-            overall_fraction = max(completed_fraction, running_fraction)
-            percent = self._clamp_progress(5 + overall_fraction * 25)
+            percent = case_percent(0.04 + in_case_fraction * 0.36)
             if proxy_current > 0 and proxy_total > 0 and iteration > 0:
                 detail = f"第 {current}/{total} 个场景，迭代 {iteration}/{generations}，代表日 {proxy_current}/{proxy_total}。"
             elif iteration > 0:
@@ -1066,13 +1150,13 @@ class SolverExecutionService:
         if iteration > 0:
             iteration_fraction = iteration / generations
             return {
-                "percent": self._clamp_progress(5 + iteration_fraction * 25),
+                "percent": case_percent(0.04 + iteration_fraction * 0.36),
                 "label": "正在运行 GA 优化",
                 "detail": f"优化迭代 {iteration}/{generations}。",
                 "source": "backend_log_parser",
             }
 
-        # --- 阶段 1：初始化 (0-5%) ---
+        # --- 阶段 1：初始化 (0-8%) ---
         return {
             "percent": 5,
             "label": "求解器已启动",
@@ -1481,8 +1565,35 @@ class SolverExecutionService:
         if not cashflow_rows:
             warnings.append("未解析到现金流表。")
 
+        candidate_rows = archive_rows or population_rows
         operation = self._build_operation_charts(hourly_rows)
-        pareto_chart = self._build_pareto_chart(population_rows or archive_rows)
+        safety_economy_tradeoff = self._task_safety_economy_tradeoff(latest_task)
+        economic_metric_weights = self._task_metric_weights(
+            latest_task,
+            {
+                "npv": ("economic_weight_npv", "--economic-weight-npv", 0.45),
+                "irr": ("economic_weight_irr", "--economic-weight-irr", 0.20),
+                "payback": ("economic_weight_payback", "--economic-weight-payback", 0.25),
+                "investment": ("economic_weight_investment", "--economic-weight-investment", 0.10),
+            },
+        )
+        safety_metric_weights = self._task_metric_weights(
+            latest_task,
+            {
+                "transformer": ("safety_weight_transformer", "--safety-weight-transformer", 0.25),
+                "voltage": ("safety_weight_voltage", "--safety-weight-voltage", 0.25),
+                "line": ("safety_weight_line", "--safety-weight-line", 0.25),
+                "cycle": ("safety_weight_cycle", "--safety-weight-cycle", 0.25),
+            },
+        )
+        pareto_chart = self._build_pareto_chart(
+            candidate_rows,
+            safety_economy_tradeoff=safety_economy_tradeoff,
+            economic_metric_weights=economic_metric_weights,
+            safety_metric_weights=safety_metric_weights,
+            best_result_summary=best_result_summary,
+        )
+        investment_economics = self._build_investment_economics_chart(pareto_chart)
         degradation_soh = self._build_degradation_soh_chart(cashflow_rows, financial_summary, annual_summary)
         lcos = self._build_lcos_chart(cashflow_rows, financial_summary, annual_summary, degradation_soh)
         feasibility = self._build_feasibility_diagnostics(best_result_summary, population_rows or archive_rows, history_rows)
@@ -1502,6 +1613,13 @@ class SolverExecutionService:
             "degradation_soh": degradation_soh,
             "pareto": pareto_chart,
             "pareto_frontier": [point for point in pareto_chart if point.get("paretoFrontier")],
+            "investment_economics": investment_economics,
+            "investment_economics_summary": self._build_investment_economics_summary(
+                investment_economics,
+                safety_economy_tradeoff=safety_economy_tradeoff,
+                economic_metric_weights=economic_metric_weights,
+                safety_metric_weights=safety_metric_weights,
+            ),
             "optimization_history": self._build_history_chart(history_rows),
             "storage_impact": self._build_storage_impact_chart(operation["representative_day"].get("rows", [])),
             "network_constraints": self._build_network_constraint_charts(hourly_rows, monthly_rows, annual_summary),
@@ -1576,6 +1694,8 @@ class SolverExecutionService:
                 "financial_metrics": charts.get("financial_metrics"),
                 "pareto": pareto_sorted[:20],
                 "pareto_frontier": pareto_frontier[:20],
+                "investment_economics": charts.get("investment_economics"),
+                "investment_economics_summary": charts.get("investment_economics_summary"),
                 "lcos": charts.get("lcos"),
                 "degradation_soh": charts.get("degradation_soh"),
                 "optimization_history": history_summary,
@@ -3756,26 +3876,251 @@ class SolverExecutionService:
             "annual": annual_rows,
         }
 
-    def _build_pareto_chart(self, rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    def _build_pareto_chart(
+        self,
+        rows: List[Dict[str, Any]],
+        *,
+        safety_economy_tradeoff: float = 0.5,
+        economic_metric_weights: Dict[str, float] | None = None,
+        safety_metric_weights: Dict[str, float] | None = None,
+        best_result_summary: Dict[str, Any] | None = None,
+    ) -> List[Dict[str, Any]]:
         chart: List[Dict[str, Any]] = []
         for idx, row in enumerate(rows):
-            chart.append(
+            irr = self._optional_number(row, "irr")
+            point = {
+                "index": idx + 1,
+                "strategyId": row.get("strategy_id"),
+                "ratedPowerKw": self._number(row, "rated_power_kw"),
+                "ratedEnergyKwh": self._number(row, "rated_energy_kwh"),
+                "durationH": self._number(row, "duration_h"),
+                "npvWan": self._number(row, "npv_yuan") / 10000.0,
+                "initialInvestmentWan": self._number(row, "initial_investment_yuan") / 10000.0,
+                "initialNetInvestmentWan": self._number_any(
+                    row,
+                    ["initial_net_investment_yuan", "initial_investment_yuan"],
+                ) / 10000.0,
+                "annualizedNetCashflowWan": self._number_any(
+                    row,
+                    ["annualized_net_cashflow_yuan", "annual_net_operating_cashflow_yuan"],
+                ) / 10000.0,
+                "annualOperatingCashflowWan": self._number(row, "annual_net_operating_cashflow_yuan") / 10000.0,
+                "irrPercent": irr * 100.0 if irr is not None else None,
+                "paybackYears": self._optional_number(row, "simple_payback_years"),
+                "discountedPaybackYears": self._optional_number(row, "discounted_payback_years"),
+                "lcNetProfitWan": self._optional_number(row, "lc_net_profit_yuan") / 10000.0
+                if self._optional_number(row, "lc_net_profit_yuan") is not None
+                else None,
+                "annualCycles": self._optional_number_any(
+                    row,
+                    ["annual_equivalent_full_cycles", "equivalent_full_cycles", "annualCycles"],
+                ),
+                "cycleLifeEfc": self._optional_number(row, "cycle_life_efc_effective"),
+                "annualCycleLimit": self._optional_number(row, "annual_cycle_limit"),
+                "objectiveNpv": self._number(row, "obj_npv"),
+                "objectivePayback": self._number(row, "obj_payback"),
+                "objectiveInvestment": self._number(row, "obj_investment"),
+                "objectiveSafety": self._number(row, "obj_safety"),
+                "transformerViolationHours": self._number(row, "transformer_violation_hours"),
+                "transformerSlackKw": self._number(row, "transformer_slack_kw"),
+                "voltageViolationPu": self._number(row, "voltage_violation_pu"),
+                "lineLoadingViolationPct": self._number(row, "line_loading_violation_pct"),
+                "durationViolationH": self._number(row, "duration_violation_h"),
+                "cycleViolation": self._number(row, "cycle_violation"),
+                "feasible": self._bool(row.get("feasible")),
+                "totalViolation": self._number(row, "total_violation"),
+                # Pre-computed scores (from engine export) — used when available
+                "fitnessScore": self._optional_number(row, "fitness_score"),
+                "fitnessScorePct": self._optional_number(row, "fitness_score_pct"),
+                "compromiseCost": self._optional_number(row, "compromise_cost"),
+                "economicCost": self._optional_number(row, "economic_cost"),
+                "safetyCost": self._optional_number(row, "safety_cost"),
+                "economicScore": self._optional_number(row, "economic_score"),
+                "safetyScore": self._optional_number(row, "safety_score"),
+                "economicScorePct": self._optional_number(row, "economic_score_pct"),
+                "safetyScorePct": self._optional_number(row, "safety_score_pct"),
+                "objectiveNpvCost": self._optional_number(row, "objective_npv_cost"),
+                "objectiveIrrCost": self._optional_number(row, "objective_irr_cost"),
+                "objectivePaybackCost": self._optional_number(row, "objective_payback_cost"),
+                "objectiveInvestmentCost": self._optional_number(row, "objective_investment_cost"),
+                "objectiveSafetyTransformerCost": self._optional_number(row, "objective_transformer_cost"),
+                "objectiveSafetyVoltageCost": self._optional_number(row, "objective_voltage_cost"),
+                "objectiveSafetyLineCost": self._optional_number(row, "objective_line_cost"),
+                "objectiveSafetyCycleCost": self._optional_number(row, "objective_cycle_cost"),
+                "objectiveNpvScorePct": self._optional_number(row, "objective_npv_score_pct"),
+                "objectiveIrrScorePct": self._optional_number(row, "objective_irr_score_pct"),
+                "objectivePaybackScorePct": self._optional_number(row, "objective_payback_score_pct"),
+                "objectiveInvestmentScorePct": self._optional_number(row, "objective_investment_score_pct"),
+                "objectiveSafetyTransformerScorePct": self._optional_number(row, "objective_transformer_score_pct"),
+                "objectiveSafetyVoltageScorePct": self._optional_number(row, "objective_voltage_score_pct"),
+                "objectiveSafetyLineScorePct": self._optional_number(row, "objective_line_score_pct"),
+                "objectiveSafetyCycleScorePct": self._optional_number(row, "objective_cycle_score_pct"),
+            }
+            chart.append(point)
+        self._annotate_pareto_frontier(chart)
+        self._annotate_recommended_candidate(chart, best_result_summary or {})
+        self._annotate_candidate_objective_scores(
+            chart,
+            safety_economy_tradeoff=safety_economy_tradeoff,
+            economic_metric_weights=economic_metric_weights,
+            safety_metric_weights=safety_metric_weights,
+            allow_legacy_compromise=any(point.get("recommendedCandidate") is True for point in chart),
+        )
+        return chart
+
+    def _build_investment_economics_chart(self, chart: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        rows = [
+            {
+                key: point.get(key)
+                for key in (
+                    "index",
+                    "strategyId",
+                    "ratedPowerKw",
+                    "ratedEnergyKwh",
+                    "durationH",
+                    "initialInvestmentWan",
+                    "initialNetInvestmentWan",
+                    "npvWan",
+                    "lcNetProfitWan",
+                    "annualizedNetCashflowWan",
+                    "annualOperatingCashflowWan",
+                    "irrPercent",
+                    "paybackYears",
+                    "discountedPaybackYears",
+                    "annualCycles",
+                    "cycleLifeEfc",
+                    "annualCycleLimit",
+                    "objectiveSafety",
+                    "transformerViolationHours",
+                    "transformerSlackKw",
+                    "voltageViolationPu",
+                    "lineLoadingViolationPct",
+                    "durationViolationH",
+                    "cycleViolation",
+                    "totalViolation",
+                    "feasible",
+                    "paretoFrontier",
+                    "frontierOrder",
+                    "recommendedCandidate",
+                    "fitnessScore",
+                    "fitnessScorePct",
+                    "fitnessRank",
+                    "objectiveBest",
+                    "compromiseCost",
+                    "economicCost",
+                    "safetyCost",
+                    "economicScore",
+                    "safetyScore",
+                    "economicScorePct",
+                    "safetyScorePct",
+                    "objectivePaybackScore",
+                    "objectiveInvestmentScore",
+                    "objectiveIrrScore",
+                    "objectiveSafetyTransformerScore",
+                    "objectiveSafetyVoltageScore",
+                    "objectiveSafetyLineScore",
+                    "objectiveSafetyCycleScore",
+                    "objectiveNpvScore",
+                    "objectivePaybackCost",
+                    "objectiveInvestmentCost",
+                    "objectiveIrrCost",
+                    "objectiveNpvCost",
+                    "objectiveSafetyTransformerCost",
+                    "objectiveSafetyVoltageCost",
+                    "objectiveSafetyLineCost",
+                    "objectiveSafetyCycleCost",
+                    "objectivePaybackScorePct",
+                    "objectiveInvestmentScorePct",
+                    "objectiveIrrScorePct",
+                    "objectiveNpvScorePct",
+                    "objectiveSafetyTransformerScorePct",
+                    "objectiveSafetyVoltageScorePct",
+                    "objectiveSafetyLineScorePct",
+                    "objectiveSafetyCycleScorePct",
+                    "objectiveScoreSource",
+                    "objectiveScoreSourceLabel",
+                )
+            }
+            for point in chart
+            if self._finite_number(point.get("initialInvestmentWan"), None) is not None
+        ]
+        rows.sort(
+            key=lambda point: (
+                self._finite_number(point.get("initialInvestmentWan"), 0.0) or 0.0,
+                self._finite_number(point.get("npvWan"), 0.0) or 0.0,
+                str(point.get("strategyId") or ""),
+            )
+        )
+        return rows
+
+    def _build_investment_economics_summary(
+        self,
+        chart: List[Dict[str, Any]],
+        *,
+        safety_economy_tradeoff: float,
+        economic_metric_weights: Dict[str, float] | None = None,
+        safety_metric_weights: Dict[str, float] | None = None,
+    ) -> Dict[str, Any]:
+        feasible_rows = [row for row in chart if row.get("feasible") is True]
+        scored_rows = [
+            row
+            for row in chart
+            if self._finite_number(row.get("fitnessScore"), None) is not None
+        ]
+        best = next((row for row in chart if row.get("recommendedCandidate") is True), None)
+        fitness_best = next((row for row in chart if row.get("objectiveBest") is True), None)
+        if best is None and scored_rows:
+            best = max(scored_rows, key=lambda row: self._finite_number(row.get("fitnessScore"), 0.0) or 0.0)
+
+        econ_weights = self._normalize_weight_dict(
+            economic_metric_weights,
+            {"npv": 0.45, "irr": 0.20, "payback": 0.25, "investment": 0.10},
+        )
+        safety_weights = self._normalize_weight_dict(
+            safety_metric_weights,
+            {"transformer": 0.25, "voltage": 0.25, "line": 0.25, "cycle": 0.25},
+        )
+        summary: Dict[str, Any] = {
+            "candidateCount": len(chart),
+            "feasibleCount": len(feasible_rows),
+            "safetyEconomyTradeoff": float(safety_economy_tradeoff),
+            "economicWeight": 1.0 - float(safety_economy_tradeoff),
+            "safetyWeight": float(safety_economy_tradeoff),
+            "economicWeightNpv": econ_weights["npv"],
+            "economicWeightIrr": econ_weights["irr"],
+            "economicWeightPayback": econ_weights["payback"],
+            "economicWeightInvestment": econ_weights["investment"],
+            "safetyWeightTransformer": safety_weights["transformer"],
+            "safetyWeightVoltage": safety_weights["voltage"],
+            "safetyWeightLine": safety_weights["line"],
+            "safetyWeightCycle": safety_weights["cycle"],
+            "recommendationMatchesFitness": bool(best is not None and fitness_best is not None and best is fitness_best),
+            "scoreSource": (fitness_best or best or {}).get("objectiveScoreSource"),
+            "scoreSourceLabel": (fitness_best or best or {}).get("objectiveScoreSourceLabel"),
+        }
+        if fitness_best:
+            summary.update(
                 {
-                    "index": idx + 1,
-                    "strategyId": row.get("strategy_id"),
-                    "ratedPowerKw": self._number(row, "rated_power_kw"),
-                    "ratedEnergyKwh": self._number(row, "rated_energy_kwh"),
-                    "durationH": self._number(row, "duration_h"),
-                    "npvWan": self._number(row, "npv_yuan") / 10000.0,
-                    "initialInvestmentWan": self._number(row, "initial_investment_yuan") / 10000.0,
-                    "paybackYears": self._optional_number(row, "simple_payback_years"),
-                    "annualCycles": self._number(row, "annual_equivalent_full_cycles"),
-                    "feasible": self._bool(row.get("feasible")),
-                    "totalViolation": self._number(row, "total_violation"),
+                    "fitnessBestIndex": fitness_best.get("index"),
+                    "fitnessBestStrategyId": fitness_best.get("strategyId"),
+                    "fitnessBestInvestmentWan": fitness_best.get("initialInvestmentWan"),
+                    "fitnessBestScorePct": fitness_best.get("fitnessScorePct"),
                 }
             )
-        self._annotate_pareto_frontier(chart)
-        return chart
+        if best:
+            summary.update(
+                {
+                    "bestIndex": best.get("index"),
+                    "bestStrategyId": best.get("strategyId"),
+                    "bestInvestmentWan": best.get("initialInvestmentWan"),
+                    "bestNpvWan": best.get("npvWan"),
+                    "bestPaybackYears": best.get("paybackYears"),
+                    "bestIrrPercent": best.get("irrPercent"),
+                    "bestFitnessScorePct": best.get("fitnessScorePct"),
+                    "bestFeasible": best.get("feasible"),
+                }
+            )
+        return summary
 
     def _annotate_pareto_frontier(self, chart: List[Dict[str, Any]]) -> None:
         candidates: List[Tuple[int, float, float]] = []
@@ -3820,6 +4165,578 @@ class SolverExecutionService:
             point["paretoFrontier"] = is_frontier
             if is_frontier:
                 point["frontierOrder"] = order_by_index[idx]
+
+    def _annotate_recommended_candidate(self, chart: List[Dict[str, Any]], best_result_summary: Dict[str, Any]) -> None:
+        for point in chart:
+            point["recommendedCandidate"] = False
+        if not chart or not isinstance(best_result_summary, dict):
+            return
+
+        target_strategy = str(best_result_summary.get("strategy_id") or "").strip()
+        target_power = self._finite_number(best_result_summary.get("rated_power_kw"), None)
+        target_energy = self._finite_number(best_result_summary.get("rated_energy_kwh"), None)
+        if not target_strategy and target_power is None and target_energy is None:
+            return
+
+        def _matches(point: Dict[str, Any]) -> bool:
+            if target_strategy and str(point.get("strategyId") or "").strip() != target_strategy:
+                return False
+            if target_power is not None:
+                power = self._finite_number(point.get("ratedPowerKw"), None)
+                if power is None or abs(float(power) - float(target_power)) > 1e-6:
+                    return False
+            if target_energy is not None:
+                energy = self._finite_number(point.get("ratedEnergyKwh"), None)
+                if energy is None or abs(float(energy) - float(target_energy)) > 1e-6:
+                    return False
+            return True
+
+        match = next((point for point in chart if _matches(point)), None)
+        if match is not None:
+            match["recommendedCandidate"] = True
+
+    def _annotate_candidate_objective_scores(
+        self,
+        chart: List[Dict[str, Any]],
+        *,
+        safety_economy_tradeoff: float,
+        economic_metric_weights: Dict[str, float] | None = None,
+        safety_metric_weights: Dict[str, float] | None = None,
+        allow_legacy_compromise: bool = False,
+    ) -> None:
+        for point in chart:
+            point["fitnessRank"] = None
+            point["objectiveBest"] = False
+
+        feasible_indices = [idx for idx, point in enumerate(chart) if point.get("feasible") is True]
+        score_indices = feasible_indices if feasible_indices else list(range(len(chart)))
+        if score_indices and all(
+            self._finite_number(chart[idx].get("compromiseCost"), None) is not None
+            for idx in score_indices
+        ):
+            self._apply_precomputed_scores(chart, score_indices)
+            return
+
+        if allow_legacy_compromise and self._apply_legacy_compromise_scores(
+            chart,
+            feasible_indices,
+            safety_economy_tradeoff=safety_economy_tradeoff,
+        ):
+            return
+
+        for point in chart:
+            point["fitnessScore"] = None
+            point["fitnessScorePct"] = None
+            point["fitnessRank"] = None
+            point["objectiveBest"] = False
+            point["compromiseCost"] = None
+            point["economicCost"] = None
+            point["safetyCost"] = None
+            point["economicScore"] = None
+            point["safetyScore"] = None
+            point["economicScorePct"] = None
+            point["safetyScorePct"] = None
+            point["objectivePaybackScore"] = None
+            point["objectiveInvestmentScore"] = None
+            point["objectiveIrrScore"] = None
+            point["objectiveNpvScore"] = None
+            point["objectiveSafetyTransformerScore"] = None
+            point["objectiveSafetyVoltageScore"] = None
+            point["objectiveSafetyLineScore"] = None
+            point["objectiveSafetyCycleScore"] = None
+            point["objectiveNpvCost"] = None
+            point["objectiveIrrCost"] = None
+            point["objectivePaybackCost"] = None
+            point["objectiveInvestmentCost"] = None
+            point["objectiveSafetyTransformerCost"] = None
+            point["objectiveSafetyVoltageCost"] = None
+            point["objectiveSafetyLineCost"] = None
+            point["objectiveSafetyCycleCost"] = None
+            point["objectiveNpvScorePct"] = None
+            point["objectiveIrrScorePct"] = None
+            point["objectivePaybackScorePct"] = None
+            point["objectiveInvestmentScorePct"] = None
+            point["objectiveSafetyTransformerScorePct"] = None
+            point["objectiveSafetyVoltageScorePct"] = None
+            point["objectiveSafetyLineScorePct"] = None
+            point["objectiveSafetyCycleScorePct"] = None
+            point["objectiveScoreSource"] = None
+            point["objectiveScoreSourceLabel"] = None
+
+        if not feasible_indices:
+            self._annotate_infeasible_fallback_scores(chart)
+            return
+
+        if len(feasible_indices) == 1:
+            point = chart[feasible_indices[0]]
+            point["fitnessScore"] = 1.0
+            point["fitnessScorePct"] = 100.0
+            point["fitnessRank"] = 1
+            point["objectiveBest"] = True
+            point["compromiseCost"] = 0.0
+            point["economicCost"] = 0.0
+            point["safetyCost"] = 0.0
+            point["economicScore"] = 1.0
+            point["safetyScore"] = 1.0
+            point["economicScorePct"] = 100.0
+            point["safetyScorePct"] = 100.0
+            point["objectivePaybackScore"] = 0.0
+            point["objectiveInvestmentScore"] = 0.0
+            point["objectiveIrrScore"] = 0.0
+            point["objectiveNpvScore"] = 0.0
+            point["objectiveSafetyTransformerScore"] = 0.0
+            point["objectiveSafetyVoltageScore"] = 0.0
+            point["objectiveSafetyLineScore"] = 0.0
+            point["objectiveSafetyCycleScore"] = 0.0
+            for key in (
+                "objectiveNpvCost",
+                "objectiveIrrCost",
+                "objectivePaybackCost",
+                "objectiveInvestmentCost",
+                "objectiveSafetyTransformerCost",
+                "objectiveSafetyVoltageCost",
+                "objectiveSafetyLineCost",
+                "objectiveSafetyCycleCost",
+            ):
+                point[key] = 0.0
+            for key in (
+                "objectiveNpvScorePct",
+                "objectiveIrrScorePct",
+                "objectivePaybackScorePct",
+                "objectiveInvestmentScorePct",
+                "objectiveSafetyTransformerScorePct",
+                "objectiveSafetyVoltageScorePct",
+                "objectiveSafetyLineScorePct",
+                "objectiveSafetyCycleScorePct",
+            ):
+                point[key] = 100.0
+            point["objectiveScoreSource"] = "single_feasible"
+            point["objectiveScoreSourceLabel"] = "单一可行候选"
+            return
+
+        invest = [self._finite_number(chart[idx].get("initialInvestmentWan"), 0.0) or 0.0 for idx in feasible_indices]
+        npv = [self._finite_number(chart[idx].get("npvWan"), 0.0) or 0.0 for idx in feasible_indices]
+        irr = [
+            self._finite_number(chart[idx].get("irrPercent"), None)
+            if self._finite_number(chart[idx].get("irrPercent"), None) is not None
+            else -100.0
+            for idx in feasible_indices
+        ]
+        payback = [
+            self._finite_number(chart[idx].get("paybackYears"), None)
+            if self._finite_number(chart[idx].get("paybackYears"), None) is not None
+            else 99.0
+            for idx in feasible_indices
+        ]
+        transformer = [self._finite_number(chart[idx].get("transformerViolationHours"), 0.0) or 0.0 for idx in feasible_indices]
+        voltage = [self._finite_number(chart[idx].get("voltageViolationPu"), 0.0) or 0.0 for idx in feasible_indices]
+        line = [self._finite_number(chart[idx].get("lineLoadingViolationPct"), 0.0) or 0.0 for idx in feasible_indices]
+        device_strategy = [
+            self._device_strategy_safety_input(chart[idx])
+            for idx in feasible_indices
+        ]
+
+        objective_scores = compute_weighted_objective_scores(
+            npv=npv,
+            irr=irr,
+            payback=payback,
+            investment=invest,
+            transformer=transformer,
+            voltage=voltage,
+            line=line,
+            cycle=device_strategy,
+            safety_economy_tradeoff=safety_economy_tradeoff,
+            economic_metric_weights=economic_metric_weights,
+            safety_metric_weights=safety_metric_weights,
+        )
+        scored: List[Tuple[int, float, float]] = []
+        for local_idx, chart_idx in enumerate(feasible_indices):
+            economic_cost = float(objective_scores.economic_cost[local_idx])
+            safety_cost = float(objective_scores.safety_cost[local_idx])
+            compromise_cost = float(objective_scores.compromise_cost[local_idx])
+            fitness = float(objective_scores.fitness_score[local_idx])
+            point = chart[chart_idx]
+            point["fitnessScore"] = fitness
+            point["fitnessScorePct"] = fitness * 100.0
+            point["compromiseCost"] = compromise_cost
+            point["economicCost"] = economic_cost
+            point["safetyCost"] = safety_cost
+            point["economicScore"] = float(objective_scores.economic_score[local_idx])
+            point["safetyScore"] = float(objective_scores.safety_score[local_idx])
+            point["economicScorePct"] = point["economicScore"] * 100.0
+            point["safetyScorePct"] = point["safetyScore"] * 100.0
+            point["objectivePaybackScore"] = float(objective_scores.economic_metric_costs["payback"][local_idx])
+            point["objectiveInvestmentScore"] = float(objective_scores.economic_metric_costs["investment"][local_idx])
+            point["objectiveIrrScore"] = float(objective_scores.economic_metric_costs["irr"][local_idx])
+            point["objectiveNpvScore"] = float(objective_scores.economic_metric_costs["npv"][local_idx])
+            point["objectiveSafetyTransformerScore"] = float(objective_scores.safety_metric_costs["transformer"][local_idx])
+            point["objectiveSafetyVoltageScore"] = float(objective_scores.safety_metric_costs["voltage"][local_idx])
+            point["objectiveSafetyLineScore"] = float(objective_scores.safety_metric_costs["line"][local_idx])
+            point["objectiveSafetyCycleScore"] = float(objective_scores.safety_metric_costs["cycle"][local_idx])
+            point["objectivePaybackCost"] = point["objectivePaybackScore"]
+            point["objectiveInvestmentCost"] = point["objectiveInvestmentScore"]
+            point["objectiveIrrCost"] = point["objectiveIrrScore"]
+            point["objectiveNpvCost"] = point["objectiveNpvScore"]
+            point["objectiveSafetyTransformerCost"] = point["objectiveSafetyTransformerScore"]
+            point["objectiveSafetyVoltageCost"] = point["objectiveSafetyVoltageScore"]
+            point["objectiveSafetyLineCost"] = point["objectiveSafetyLineScore"]
+            point["objectiveSafetyCycleCost"] = point["objectiveSafetyCycleScore"]
+            point["objectivePaybackScorePct"] = float(objective_scores.economic_metric_scores["payback"][local_idx]) * 100.0
+            point["objectiveInvestmentScorePct"] = float(objective_scores.economic_metric_scores["investment"][local_idx]) * 100.0
+            point["objectiveIrrScorePct"] = float(objective_scores.economic_metric_scores["irr"][local_idx]) * 100.0
+            point["objectiveNpvScorePct"] = float(objective_scores.economic_metric_scores["npv"][local_idx]) * 100.0
+            point["objectiveSafetyTransformerScorePct"] = float(objective_scores.safety_metric_scores["transformer"][local_idx]) * 100.0
+            point["objectiveSafetyVoltageScorePct"] = float(objective_scores.safety_metric_scores["voltage"][local_idx]) * 100.0
+            point["objectiveSafetyLineScorePct"] = float(objective_scores.safety_metric_scores["line"][local_idx]) * 100.0
+            point["objectiveSafetyCycleScorePct"] = float(objective_scores.safety_metric_scores["cycle"][local_idx]) * 100.0
+            point["objectiveScoreSource"] = "current_weighted_objective"
+            point["objectiveScoreSourceLabel"] = "当前加权目标"
+            scored.append((chart_idx, compromise_cost, fitness))
+
+        scored.sort(key=lambda item: (item[1], -item[2], item[0]))
+        for rank, (chart_idx, _, _) in enumerate(scored, start=1):
+            chart[chart_idx]["fitnessRank"] = rank
+            chart[chart_idx]["objectiveBest"] = rank == 1
+
+    def _apply_legacy_compromise_scores(
+        self,
+        chart: List[Dict[str, Any]],
+        feasible_indices: List[int],
+        *,
+        safety_economy_tradeoff: float,
+    ) -> bool:
+        if len(feasible_indices) < 2:
+            return False
+        if not any(chart[idx].get("recommendedCandidate") is True for idx in feasible_indices):
+            return False
+
+        investment = [
+            self._finite_number(chart[idx].get("initialInvestmentWan"), None)
+            for idx in feasible_indices
+        ]
+        npv = [
+            self._finite_number(chart[idx].get("npvWan"), None)
+            for idx in feasible_indices
+        ]
+        payback = [
+            self._finite_number(chart[idx].get("paybackYears"), None)
+            if self._finite_number(chart[idx].get("paybackYears"), None) is not None
+            else 99.0
+            for idx in feasible_indices
+        ]
+        safety = [
+            self._finite_number(chart[idx].get("objectiveSafety"), None)
+            for idx in feasible_indices
+        ]
+        if any(value is None for value in investment):
+            return False
+        if any(value is None for value in npv) or any(value is None for value in safety):
+            return False
+
+        investment_values = [float(value) for value in investment if value is not None]
+        npv_values = [float(value) for value in npv if value is not None]
+        payback_values = [float(value) for value in payback if value is not None]
+        safety_values = [float(value) for value in safety if value is not None]
+
+        idx_min_invest = min(range(len(feasible_indices)), key=lambda idx: investment_values[idx])
+        idx_max_npv = max(range(len(feasible_indices)), key=lambda idx: npv_values[idx])
+        p0_invest = investment_values[idx_min_invest]
+        p0_npv = npv_values[idx_min_invest]
+        line_invest = investment_values[idx_max_npv] - p0_invest
+        line_npv = npv_values[idx_max_npv] - p0_npv
+        denom = math.hypot(line_invest, line_npv)
+        if denom <= 1e-12:
+            distances = [0.0] * len(feasible_indices)
+        else:
+            distances = [
+                abs(line_invest * (npv_value - p0_npv) - line_npv * (investment_value - p0_invest)) / denom
+                for investment_value, npv_value in zip(investment_values, npv_values)
+            ]
+
+        dist_cost = self._normalize_legacy_values(distances, reverse=True)
+        payback_cost = self._normalize_legacy_values(payback_values)
+        safety_cost = self._normalize_legacy_values(safety_values)
+        npv_cost = self._normalize_legacy_values([-value for value in npv_values])
+        investment_cost = self._normalize_legacy_values(investment_values)
+
+        tradeoff = min(max(float(safety_economy_tradeoff), 0.0), 1.0)
+        dist_weight = 0.45 - 0.15 * tradeoff
+        payback_weight = 0.35 - 0.30 * tradeoff
+        safety_weight = 0.50 * tradeoff
+        npv_weight = 0.20 - 0.15 * tradeoff
+        economic_weight = max(dist_weight + payback_weight + npv_weight, 1e-12)
+
+        scored: List[Tuple[int, float, float]] = []
+        for local_idx, chart_idx in enumerate(feasible_indices):
+            legacy_cost = (
+                dist_weight * dist_cost[local_idx]
+                + payback_weight * payback_cost[local_idx]
+                + safety_weight * safety_cost[local_idx]
+                + npv_weight * npv_cost[local_idx]
+            )
+            fitness = max(0.0, min(1.0, 1.0 - legacy_cost))
+            economic_cost = (
+                dist_weight * dist_cost[local_idx]
+                + payback_weight * payback_cost[local_idx]
+                + npv_weight * npv_cost[local_idx]
+            ) / economic_weight
+
+            point = chart[chart_idx]
+            point["fitnessScore"] = fitness
+            point["fitnessScorePct"] = fitness * 100.0
+            point["compromiseCost"] = legacy_cost
+            point["economicCost"] = economic_cost
+            point["safetyCost"] = safety_cost[local_idx]
+            point["economicScore"] = max(0.0, min(1.0, 1.0 - economic_cost))
+            point["safetyScore"] = max(0.0, min(1.0, 1.0 - safety_cost[local_idx]))
+            point["economicScorePct"] = point["economicScore"] * 100.0
+            point["safetyScorePct"] = point["safetyScore"] * 100.0
+            point["objectivePaybackScore"] = payback_cost[local_idx]
+            point["objectiveInvestmentScore"] = investment_cost[local_idx]
+            point["objectiveIrrScore"] = None
+            point["objectiveNpvScore"] = npv_cost[local_idx]
+            point["objectiveSafetyTransformerScore"] = 0.0
+            point["objectiveSafetyVoltageScore"] = 0.0
+            point["objectiveSafetyLineScore"] = 0.0
+            point["objectiveSafetyCycleScore"] = safety_cost[local_idx]
+            point["objectivePaybackCost"] = payback_cost[local_idx]
+            point["objectiveInvestmentCost"] = investment_cost[local_idx]
+            point["objectiveIrrCost"] = None
+            point["objectiveNpvCost"] = npv_cost[local_idx]
+            point["objectiveSafetyTransformerCost"] = 0.0
+            point["objectiveSafetyVoltageCost"] = 0.0
+            point["objectiveSafetyLineCost"] = 0.0
+            point["objectiveSafetyCycleCost"] = safety_cost[local_idx]
+            point["objectivePaybackScorePct"] = (1.0 - payback_cost[local_idx]) * 100.0
+            point["objectiveInvestmentScorePct"] = (1.0 - investment_cost[local_idx]) * 100.0
+            point["objectiveIrrScorePct"] = None
+            point["objectiveNpvScorePct"] = (1.0 - npv_cost[local_idx]) * 100.0
+            point["objectiveSafetyTransformerScorePct"] = 100.0
+            point["objectiveSafetyVoltageScorePct"] = 100.0
+            point["objectiveSafetyLineScorePct"] = 100.0
+            point["objectiveSafetyCycleScorePct"] = (1.0 - safety_cost[local_idx]) * 100.0
+            point["objectiveScoreSource"] = "legacy_compromise_v1"
+            point["objectiveScoreSourceLabel"] = "历史折中评分"
+            scored.append((chart_idx, legacy_cost, fitness))
+
+        scored.sort(key=lambda item: (item[1], -item[2], item[0]))
+        for rank, (chart_idx, _, _) in enumerate(scored, start=1):
+            chart[chart_idx]["fitnessRank"] = rank
+            chart[chart_idx]["objectiveBest"] = rank == 1
+        return True
+
+    @staticmethod
+    def _normalize_legacy_values(values: List[float], reverse: bool = False) -> List[float]:
+        finite_values = [value for value in values if math.isfinite(value)]
+        if not finite_values:
+            return [0.0 for _ in values]
+        lo = min(finite_values)
+        hi = max(finite_values)
+        if hi - lo <= 1e-12:
+            normalized = [0.0 for _ in values]
+        else:
+            normalized = [
+                (value - lo) / (hi - lo) if math.isfinite(value) else 1.0
+                for value in values
+            ]
+        if reverse:
+            return [1.0 - value for value in normalized]
+        return normalized
+
+    def _device_strategy_safety_input(self, point: Dict[str, Any]) -> float:
+        annual_cycles = self._finite_number(point.get("annualCycles"), None)
+        if annual_cycles is not None:
+            return float(annual_cycles)
+        objective_safety = self._finite_number(point.get("objectiveSafety"), None)
+        if objective_safety is not None:
+            return float(objective_safety)
+        return float(
+            (self._finite_number(point.get("cycleViolation"), 0.0) or 0.0)
+            + (self._finite_number(point.get("durationViolationH"), 0.0) or 0.0)
+        )
+
+    def _apply_precomputed_scores(
+        self,
+        chart: List[Dict[str, Any]],
+        feasible_indices: List[int],
+    ) -> None:
+        """Apply scores that were pre-computed by the engine and exported in the CSV.
+
+        This avoids recomputing fitness from potentially lossy CSV values and
+        guarantees the chart scores match what ``select_best_compromise`` used.
+        """
+        scored: List[Tuple[int, float, float]] = []
+        for chart_idx in feasible_indices:
+            point = chart[chart_idx]
+            compromise_cost = self._finite_number(point.get("compromiseCost"), 0.0) or 0.0
+            fitness = self._finite_number(point.get("fitnessScore"), None)
+            if fitness is None:
+                fitness_pct = self._finite_number(point.get("fitnessScorePct"), None)
+                fitness = (fitness_pct / 100.0) if fitness_pct is not None else 1.0 - compromise_cost
+            fitness = max(0.0, min(1.0, float(fitness)))
+            point["fitnessScore"] = fitness
+            if point.get("fitnessScorePct") is None:
+                point["fitnessScorePct"] = fitness * 100.0
+            point["compromiseCost"] = compromise_cost
+
+            economic_cost = self._finite_number(point.get("economicCost"), None)
+            economic_score = self._finite_number(point.get("economicScore"), None)
+            if economic_score is None and economic_cost is not None:
+                economic_score = max(0.0, min(1.0, 1.0 - economic_cost))
+                point["economicScore"] = economic_score
+            if point.get("economicScorePct") is None and economic_score is not None:
+                point["economicScorePct"] = economic_score * 100.0
+
+            safety_cost = self._finite_number(point.get("safetyCost"), None)
+            safety_score = self._finite_number(point.get("safetyScore"), None)
+            if safety_score is None and safety_cost is not None:
+                safety_score = max(0.0, min(1.0, 1.0 - safety_cost))
+                point["safetyScore"] = safety_score
+            if point.get("safetyScorePct") is None and safety_score is not None:
+                point["safetyScorePct"] = safety_score * 100.0
+
+            # Per-metric costs and scores are already in the point data from
+            # _build_pareto_chart — fill in any display-only fields that the
+            # recompute path would normally produce.
+            for src_key, dst_key in (
+                ("economicScorePct", "economicScorePct"),
+                ("safetyScorePct", "safetyScorePct"),
+                ("objectiveNpvCost", "objectiveNpvScore"),
+                ("objectiveIrrCost", "objectiveIrrScore"),
+                ("objectivePaybackCost", "objectivePaybackScore"),
+                ("objectiveInvestmentCost", "objectiveInvestmentScore"),
+                ("objectiveSafetyTransformerCost", "objectiveSafetyTransformerScore"),
+                ("objectiveSafetyVoltageCost", "objectiveSafetyVoltageScore"),
+                ("objectiveSafetyLineCost", "objectiveSafetyLineScore"),
+                ("objectiveSafetyCycleCost", "objectiveSafetyCycleScore"),
+            ):
+                if point.get(dst_key) is None:
+                    point[dst_key] = point.get(src_key)
+
+            for cost_key, pct_key in (
+                ("objectiveNpvCost", "objectiveNpvScorePct"),
+                ("objectiveIrrCost", "objectiveIrrScorePct"),
+                ("objectivePaybackCost", "objectivePaybackScorePct"),
+                ("objectiveInvestmentCost", "objectiveInvestmentScorePct"),
+                ("objectiveSafetyTransformerCost", "objectiveSafetyTransformerScorePct"),
+                ("objectiveSafetyVoltageCost", "objectiveSafetyVoltageScorePct"),
+                ("objectiveSafetyLineCost", "objectiveSafetyLineScorePct"),
+                ("objectiveSafetyCycleCost", "objectiveSafetyCycleScorePct"),
+            ):
+                if point.get(pct_key) is None:
+                    metric_cost = self._finite_number(point.get(cost_key), None)
+                    if metric_cost is not None:
+                        point[pct_key] = max(0.0, min(1.0, 1.0 - metric_cost)) * 100.0
+            point["objectiveScoreSource"] = "engine_precomputed"
+            point["objectiveScoreSourceLabel"] = "引擎预计算评分"
+            scored.append((chart_idx, compromise_cost, fitness))
+
+        scored.sort(key=lambda item: (item[1], -item[2], item[0]))
+        for rank, (chart_idx, _, _) in enumerate(scored, start=1):
+            chart[chart_idx]["fitnessRank"] = rank
+            chart[chart_idx]["objectiveBest"] = rank == 1
+
+    def _annotate_infeasible_fallback_scores(self, chart: List[Dict[str, Any]]) -> None:
+        if not chart:
+            return
+        violations = [self._finite_number(point.get("totalViolation"), 0.0) or 0.0 for point in chart]
+        violation_scores = self._normalize_metric_values(violations)
+        scored: List[Tuple[int, float]] = []
+        for idx, point in enumerate(chart):
+            compromise_cost = violation_scores[idx]
+            fitness = max(0.0, min(1.0, 1.0 - compromise_cost))
+            point["fitnessScore"] = fitness
+            point["fitnessScorePct"] = fitness * 100.0
+            point["compromiseCost"] = compromise_cost
+            point["safetyCost"] = compromise_cost
+            point["safetyScore"] = max(0.0, min(1.0, 1.0 - compromise_cost))
+            point["safetyScorePct"] = point["safetyScore"] * 100.0
+            scored.append((idx, compromise_cost))
+        scored.sort(key=lambda item: (item[1], item[0]))
+        for rank, (idx, _) in enumerate(scored, start=1):
+            chart[idx]["fitnessRank"] = rank
+            chart[idx]["objectiveBest"] = rank == 1
+
+    @staticmethod
+    def _normalize_metric_values(values: List[float], reverse: bool = False) -> List[float]:
+        finite_values = [float(value) for value in values if math.isfinite(float(value))]
+        if not finite_values:
+            return [0.0 for _ in values]
+        lo = min(finite_values)
+        hi = max(finite_values)
+        if hi - lo <= 1e-12:
+            normalized = [0.0 for _ in values]
+        else:
+            normalized = [
+                (float(value) - lo) / (hi - lo) if math.isfinite(float(value)) else 1.0
+                for value in values
+            ]
+        if reverse:
+            normalized = [1.0 - value for value in normalized]
+        return normalized
+
+    @staticmethod
+    def _normalize_weight_dict(
+        supplied: Dict[str, float] | None,
+        defaults: Dict[str, float],
+    ) -> Dict[str, float]:
+        values: Dict[str, float] = {}
+        for key, default in defaults.items():
+            try:
+                value = float((supplied or {}).get(key, default))
+            except Exception:
+                value = float(default)
+            values[key] = max(0.0, value) if math.isfinite(value) else 0.0
+        total = sum(values.values())
+        if total <= 1e-12:
+            fallback_total = sum(defaults.values())
+            return {key: float(value) / fallback_total for key, value in defaults.items()}
+        return {key: value / total for key, value in values.items()}
+
+    def _task_safety_economy_tradeoff(self, task: Dict[str, Any]) -> float:
+        metadata = task.get("metadata") if isinstance(task, dict) else None
+        if isinstance(metadata, dict):
+            request = metadata.get("run_request")
+            if isinstance(request, dict):
+                value = self._finite_number(request.get("safety_economy_tradeoff"), None)
+                if value is not None:
+                    return min(max(float(value), 0.0), 1.0)
+
+        command = task.get("command") if isinstance(task, dict) else None
+        if isinstance(command, list):
+            for index, token in enumerate(command):
+                if str(token) == "--safety-economy-tradeoff" and index + 1 < len(command):
+                    value = self._finite_number(command[index + 1], None)
+                    if value is not None:
+                        return min(max(float(value), 0.0), 1.0)
+        return 0.5
+
+    def _task_metric_weights(
+        self,
+        task: Dict[str, Any],
+        spec: Dict[str, Tuple[str, str, float]],
+    ) -> Dict[str, float]:
+        values: Dict[str, float] = {}
+        metadata = task.get("metadata") if isinstance(task, dict) else None
+        request = metadata.get("run_request") if isinstance(metadata, dict) else None
+        command = task.get("command") if isinstance(task, dict) else None
+        for key, (request_key, option_name, default) in spec.items():
+            value: float | None = None
+            if isinstance(request, dict):
+                parsed = self._finite_number(request.get(request_key), None)
+                if parsed is not None:
+                    value = float(parsed)
+            if value is None and isinstance(command, list):
+                for index, token in enumerate(command):
+                    if str(token) == option_name and index + 1 < len(command):
+                        parsed = self._finite_number(command[index + 1], None)
+                        if parsed is not None:
+                            value = float(parsed)
+                        break
+            if value is None:
+                value = float(default)
+            values[key] = max(0.0, min(float(value), 1.0)) if math.isfinite(float(value)) else float(default)
+        return self._normalize_weight_dict(values, {key: default for key, (_, _, default) in spec.items()})
 
     def _build_history_chart(self, rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         chart: List[Dict[str, Any]] = []

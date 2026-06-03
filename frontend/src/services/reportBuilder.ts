@@ -672,11 +672,11 @@ function svgLineChart(
     for (const row of cfg.multiData) {
       for (const s of cfg.series) {
         const v = row[s.key];
-        if (typeof v === 'number') allValues.push(v);
+        if (typeof v === 'number' && Number.isFinite(v)) allValues.push(v);
       }
     }
   } else {
-    allValues = data.map(d => d.value);
+    allValues = data.map(d => d.value).filter(Number.isFinite);
   }
   const maxVal = Math.max(...allValues, 0) * 1.1 || 1;
   const minVal = Math.min(...allValues, 0);
@@ -706,6 +706,21 @@ function svgLineChart(
       return `${i === 0 ? 'M' : 'L'}${x.toFixed(1)},${y.toFixed(1)}`;
     }).join(' ');
   };
+  const buildSegmentedPath = (values: (number | null)[]) => {
+    const parts: string[] = [];
+    let drawing = false;
+    values.forEach((v, i) => {
+      if (typeof v !== 'number' || !Number.isFinite(v)) {
+        drawing = false;
+        return;
+      }
+      const x = margin.left + (i / Math.max(values.length - 1, 1)) * plotW;
+      const y = toY(v);
+      parts.push(`${drawing ? 'L' : 'M'}${x.toFixed(1)},${y.toFixed(1)}`);
+      drawing = true;
+    });
+    return parts.join(' ');
+  };
 
   let paths = '';
   let dots = '';
@@ -718,14 +733,17 @@ function svgLineChart(
       return `<text x="${x.toFixed(1)}" y="${margin.top + plotH + 16}" text-anchor="end" font-size="9" fill="${SEMANTIC_COLORS.neutral}" transform="rotate(-35, ${x.toFixed(1)}, ${margin.top + plotH + 16})">${esc(l)}</text>`;
     }).join('');
     paths = cfg.series.map(s => {
-      const vals = cfg.multiData!.map(d => (typeof d[s.key] === 'number' ? d[s.key] as number : 0));
+      const vals = cfg.multiData!.map(d => (typeof d[s.key] === 'number' ? d[s.key] as number : null));
+      const path = buildSegmentedPath(vals);
+      if (!path) return '';
       const dashStr = dashMap[s.lineStyle || 'solid'];
       const dashAttr = dashStr ? ` stroke-dasharray="${dashStr}"` : '';
-      return `<path d="${buildPath(vals)}" fill="none" stroke="${s.color}" stroke-width="2"${dashAttr} />`;
+      return `<path d="${path}" fill="none" stroke="${s.color}" stroke-width="2"${dashAttr} />`;
     }).join('');
+    const legendStep = Math.max(110, Math.min(160, plotW / Math.max(cfg.series.length, 1)));
     legend = cfg.series.map((s, i) =>
-      `<rect x="${width - margin.right - 140 + i * 90}" y="6" width="12" height="12" fill="${s.color}" rx="2" />
-       <text x="${width - margin.right - 124 + i * 90}" y="16" font-size="9" fill="${SEMANTIC_COLORS.zeroLine}">${esc(s.label)}</text>`
+      `<rect x="${(margin.left + i * legendStep).toFixed(1)}" y="6" width="12" height="12" fill="${s.color}" rx="2" />
+       <text x="${(margin.left + 16 + i * legendStep).toFixed(1)}" y="16" font-size="9" fill="${SEMANTIC_COLORS.zeroLine}">${esc(s.label)}</text>`
     ).join('');
     dots = xLabels;
   } else {
@@ -1285,6 +1303,58 @@ function buildProjectOverview(payload: ReportPayload): string {
   );
 }
 
+function buildInvestmentEconomicsReportCharts(charts: ReportPayload['charts']): string {
+  const rawRows = Array.isArray(charts?.investment_economics) ? charts.investment_economics : [];
+  const rows = rawRows
+    .map((row: Record<string, unknown>) => ({
+      label: `${num(row.initialInvestmentWan, 0)}万`,
+      npvWan: Number(row.npvWan),
+      annualizedNetCashflowWan: Number(row.annualizedNetCashflowWan),
+      paybackYears: Number(row.paybackYears),
+      discountedPaybackYears: Number(row.discountedPaybackYears),
+      fitnessScorePct: Number(row.fitnessScorePct),
+      initialInvestmentWan: Number(row.initialInvestmentWan),
+    }))
+    .filter((row) => Number.isFinite(row.initialInvestmentWan))
+    .sort((a, b) => a.initialInvestmentWan - b.initialInvestmentWan);
+
+  if (!rows.length) return '';
+
+  const moneyRows = rows.map((row) => ({
+    label: row.label,
+    npvWan: Number.isFinite(row.npvWan) ? row.npvWan : 0,
+    annualizedNetCashflowWan: Number.isFinite(row.annualizedNetCashflowWan) ? row.annualizedNetCashflowWan : 0,
+  }));
+  const objectiveRows = rows.map((row) => ({
+    label: row.label,
+    paybackYears: Number.isFinite(row.paybackYears) ? row.paybackYears : 0,
+    discountedPaybackYears: Number.isFinite(row.discountedPaybackYears) ? row.discountedPaybackYears : 0,
+    fitnessScorePct: Number.isFinite(row.fitnessScorePct) ? row.fitnessScorePct : 0,
+  }));
+
+  return subSection('2.5.1 投资变化下经济指标与适应度',
+    '<p>下图展示候选解随初始投资变化时，收益指标、回收期与综合适应度的变化趋势；综合适应度采用计算运行页面设置的经济性与安全性权重。</p>' +
+    svgLineChart([], 600, 330, {
+      yLabel: '万元',
+      series: [
+        { key: 'npvWan', color: SEMANTIC_COLORS.optimized, label: 'NPV' },
+        { key: 'annualizedNetCashflowWan', color: SEMANTIC_COLORS.revenue.secondary, label: '年净现金流' },
+      ],
+      multiData: moneyRows,
+      referenceLines: [{ value: 0, label: '0', color: SEMANTIC_COLORS.constraint, dashArray: '5,5' }],
+    }) +
+    svgLineChart([], 600, 330, {
+      yLabel: '年 / %',
+      series: [
+        { key: 'paybackYears', color: SEMANTIC_COLORS.cost.secondary, label: '回收期' },
+        { key: 'discountedPaybackYears', color: SEMANTIC_COLORS.cost.tertiary, label: '折现回收期', lineStyle: 'dashed' },
+        { key: 'fitnessScorePct', color: SEMANTIC_COLORS.recommended, label: '综合适应度' },
+      ],
+      multiData: objectiveRows,
+    })
+  );
+}
+
 function buildTechnicalSolution(payload: ReportPayload): string {
   const cfg = payload.configuration;
   const fin = payload.financial;
@@ -1358,20 +1428,22 @@ function buildTechnicalSolution(payload: ReportPayload): string {
   let optimizationSection = '';
   const pareto = payload.charts?.pareto;
   const history = payload.charts?.optimization_history;
+  const investmentEconomicsCharts = buildInvestmentEconomicsReportCharts(payload.charts);
   if (pareto?.length) {
     const scatterData = pareto.map(p => ({
       x: (p.initialInvestmentWan ?? 0),
       y: (p.npvWan ?? 0),
       label: p.index != null ? String(p.index) : undefined,
       feasible: p.feasible ?? false,
-      recommended: false,
+      recommended: p.recommendedCandidate === true || p.objectiveBest === true,
     }));
     const frontierData = (payload.charts?.pareto_frontier || pareto.filter(p => p.paretoFrontier))
       .map(p => ({ x: p.initialInvestmentWan ?? 0, y: p.npvWan ?? 0 }))
       .filter(p => Number.isFinite(p.x) && Number.isFinite(p.y));
-    // mark the highest NPV feasible as recommended
-    const bestFeasible = scatterData.filter(d => d.feasible).sort((a, b) => b.y - a.y)[0];
-    if (bestFeasible) bestFeasible.recommended = true;
+    if (!scatterData.some(d => d.recommended)) {
+      const bestFeasible = scatterData.filter(d => d.feasible).sort((a, b) => b.y - a.y)[0];
+      if (bestFeasible) bestFeasible.recommended = true;
+    }
     const genInfo = history?.total_generations
       ? `优化共运行 <strong>${history.total_generations}</strong> 代，最终种群 <strong>${history.final_population_size ?? '--'}</strong> 个个体，其中可行解 <strong>${history.final_feasible_count ?? '--'}</strong> 个。`
       : '';
@@ -1381,8 +1453,11 @@ function buildTechnicalSolution(payload: ReportPayload): string {
         xLabel: '初始投资 (万元)', yLabel: '净现值 (万元)',
         referenceLines: [{ value: 0, label: 'NPV=0', color: SEMANTIC_COLORS.constraint, dashArray: '5,5' }],
         frontierData,
-      })
+      }) +
+      investmentEconomicsCharts
     );
+  } else if (investmentEconomicsCharts) {
+    optimizationSection = subSection('2.5 优化过程与方案优选', investmentEconomicsCharts);
   }
 
   // candidate comparison

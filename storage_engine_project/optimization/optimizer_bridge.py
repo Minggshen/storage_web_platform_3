@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Iterable
+from typing import Any, Callable, Iterable
 
 import numpy as np
 import pandas as pd
@@ -16,6 +16,7 @@ from storage_engine_project.simulation.network_constraint_oracle import NetworkC
 
 POWER_QUANTUM_KW: float = 50.0
 DURATION_QUANTUM_H: float = 0.25
+DecisionCacheKey = tuple[str, float, float]
 
 
 @dataclass(slots=True)
@@ -48,6 +49,7 @@ class OptimizerBridge:
         self.evaluator = evaluator
         self.strategy_ids = list(strategy_ids)
         self.search_spaces = dict(search_spaces)
+        self.last_population_evaluation_count = 0
 
         for sid in self.strategy_ids:
             if sid not in self.search_spaces:
@@ -122,6 +124,14 @@ class OptimizerBridge:
         x_clip[2] = np.clip(x_clip[2], ss.duration_min_h, ss.duration_max_h)
         return x_clip
 
+    @staticmethod
+    def _decision_cache_key(decision: StorageDecision) -> DecisionCacheKey:
+        return (
+            decision.strategy_id,
+            round(float(decision.rated_power_kw), 9),
+            round(float(decision.duration_h()), 9),
+        )
+
     def evaluate_vector(
         self,
         ctx: AnnualOperationContext,
@@ -147,17 +157,64 @@ class OptimizerBridge:
         actual_load_matrix_kw: np.ndarray | None = None,
         actual_pv_matrix_kw: np.ndarray | None = None,
         network_oracle: NetworkConstraintOracle | None = None,
+        evaluation_cache: dict[DecisionCacheKey, FitnessEvaluationResult] | None = None,
+        progress_callback: Callable[[dict[str, Any]], None] | None = None,
     ) -> list[FitnessEvaluationResult]:
         results: list[FitnessEvaluationResult] = []
-        for x in population:
-            res = self.evaluate_vector(
-                ctx=ctx,
-                x=x,
-                actual_load_matrix_kw=actual_load_matrix_kw,
-                actual_pv_matrix_kw=actual_pv_matrix_kw,
-                network_oracle=network_oracle,
-            )
+        evaluated: dict[DecisionCacheKey, FitnessEvaluationResult] = (
+            evaluation_cache if evaluation_cache is not None else {}
+        )
+        unique_evaluation_count = 0
+        population_items = list(population)
+        population_size = len(population_items)
+        for idx, x in enumerate(population_items, start=1):
+            x_clip = self.clip_vector_to_bounds(x)
+            decision = self.vector_to_decision(x_clip)
+            key = self._decision_cache_key(decision)
+
+            res = evaluated.get(key)
+            if res is None:
+                if progress_callback is not None:
+                    progress_callback({
+                        "event": "ga_candidate_start",
+                        "candidate_index": idx,
+                        "population_size": population_size,
+                        "unique_candidate_index": unique_evaluation_count + 1,
+                        "strategy_id": decision.strategy_id,
+                        "rated_power_kw": float(decision.rated_power_kw),
+                        "duration_h": float(decision.duration_h()),
+                    })
+                res = self.evaluator.evaluate_decision(
+                    ctx=ctx,
+                    decision=decision,
+                    actual_load_matrix_kw=actual_load_matrix_kw,
+                    actual_pv_matrix_kw=actual_pv_matrix_kw,
+                    network_oracle=network_oracle,
+                )
+                evaluated[key] = res
+                unique_evaluation_count += 1
+                if progress_callback is not None:
+                    progress_callback({
+                        "event": "ga_candidate_complete",
+                        "candidate_index": idx,
+                        "population_size": population_size,
+                        "unique_candidate_index": unique_evaluation_count,
+                        "strategy_id": decision.strategy_id,
+                        "rated_power_kw": float(decision.rated_power_kw),
+                        "duration_h": float(decision.duration_h()),
+                    })
+            elif progress_callback is not None:
+                progress_callback({
+                    "event": "ga_candidate_cache_hit",
+                    "candidate_index": idx,
+                    "population_size": population_size,
+                    "unique_candidate_index": unique_evaluation_count,
+                    "strategy_id": decision.strategy_id,
+                    "rated_power_kw": float(decision.rated_power_kw),
+                    "duration_h": float(decision.duration_h()),
+                })
             results.append(res)
+        self.last_population_evaluation_count = unique_evaluation_count
         return results
 
     @staticmethod

@@ -51,8 +51,9 @@ def _panel(ax: plt.Axes, tag: str) -> None:
 
 
 def _save(fig: plt.Figure, path: Path) -> str:
+    path = path.with_suffix(".svg")
     fig.tight_layout(rect=(0.02, 0.02, 0.98, 0.97), pad=0.9)
-    fig.savefig(path, dpi=320, bbox_inches="tight")
+    fig.savefig(path, format="svg", bbox_inches="tight")
     plt.close(fig)
     return str(path)
 
@@ -168,7 +169,7 @@ def plot_financial_diagnostics(case_name: str, financial_result: LifecycleFinanc
     ax.set_title("设备规模与运行强度")
     _panel(ax, "f")
 
-    p = out_dir / f"{safe_case}_经济性分析六联图.png"
+    p = out_dir / f"{safe_case}_经济性分析六联图.svg"
     saved.append(_save(fig, p))
 
     if hasattr(financial_result, "summary_dict"):

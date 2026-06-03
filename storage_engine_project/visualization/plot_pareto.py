@@ -69,8 +69,9 @@ def _panel(ax: plt.Axes, tag: str) -> None:
 
 
 def _save(fig: plt.Figure, path: Path) -> str:
+    path = path.with_suffix(".svg")
     fig.tight_layout(rect=(0.02, 0.02, 0.98, 0.97), pad=0.9)
-    fig.savefig(path, dpi=320, bbox_inches="tight")
+    fig.savefig(path, format="svg", bbox_inches="tight")
     plt.close(fig)
     return str(path)
 
@@ -193,7 +194,7 @@ def plot_pareto_front(case_name: str, run_result: LemmingOptimizationRunResult, 
         cb.set_label("NPV / 万元")
         _panel(ax, "d")
 
-        p = out_dir / f"{safe_case}_Pareto与优化过程六面板.png"
+        p = out_dir / f"{safe_case}_Pareto与优化过程六面板.svg"
         saved.append(_save(fig, p))
 
     return saved

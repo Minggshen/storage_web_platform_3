@@ -39,6 +39,14 @@ class SolverRunRequest(BaseModel):
     fixed_terminal_soc_target: float | None = None
     daily_terminal_soc_tolerance: float | None = None
     safety_economy_tradeoff: float | None = None
+    economic_weight_npv: float | None = None
+    economic_weight_irr: float | None = None
+    economic_weight_payback: float | None = None
+    economic_weight_investment: float | None = None
+    safety_weight_transformer: float | None = None
+    safety_weight_voltage: float | None = None
+    safety_weight_line: float | None = None
+    safety_weight_cycle: float | None = None
 
 
 @router.post("/project/{project_id}/configure")

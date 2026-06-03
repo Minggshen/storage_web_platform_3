@@ -57,8 +57,9 @@ def _apply_style(ax: plt.Axes, ylabel: str | None = None) -> None:
 
 
 def _finalize_and_save(fig: plt.Figure, save_path: Path, rect: tuple[float, float, float, float] = (0.02, 0.02, 0.98, 0.95)) -> str:
+    save_path = save_path.with_suffix(".svg")
     fig.tight_layout(pad=0.9, rect=rect)
-    fig.savefig(save_path, dpi=320, bbox_inches="tight")
+    fig.savefig(save_path, format="svg", bbox_inches="tight")
     plt.close(fig)
     return str(save_path)
 
@@ -148,7 +149,7 @@ def _plot_core(case_name: str, data: dict[str, np.ndarray], output_dir: Path) ->
         ax.text(0.01, 0.98, f"({chr(97+i)})", transform=ax.transAxes, va="top", ha="left", fontsize=9, fontweight="bold")
     axes[-1].set_xlabel("规模系数")
     fig.suptitle(_pretty_title(case_name, "规模效应核心指标"), y=0.985, fontsize=11)
-    return _finalize_and_save(fig, output_dir / f"{_sanitize_filename(case_name)}_scale_core_metrics.png", rect=(0.02,0.02,0.98,0.95))
+    return _finalize_and_save(fig, output_dir / f"{_sanitize_filename(case_name)}_scale_core_metrics.svg", rect=(0.02,0.02,0.98,0.95))
 
 
 def _plot_tradeoff(case_name: str, data: dict[str, np.ndarray], output_dir: Path) -> str:
@@ -169,7 +170,7 @@ def _plot_tradeoff(case_name: str, data: dict[str, np.ndarray], output_dir: Path
     lines2, labels2 = ax2.get_legend_handles_labels()
     ax1.legend(lines1 + lines2, labels1 + labels2, loc="upper right", fontsize=8)
     ax1.set_title(_pretty_title(case_name, "规模-经济性权衡"), pad=8)
-    return _finalize_and_save(fig, output_dir / f"{_sanitize_filename(case_name)}_scale_tradeoff_dual_axis.png")
+    return _finalize_and_save(fig, output_dir / f"{_sanitize_filename(case_name)}_scale_tradeoff_dual_axis.svg")
 
 
 def _plot_frontier(case_name: str, data: dict[str, np.ndarray], output_dir: Path) -> str:
@@ -188,7 +189,7 @@ def _plot_frontier(case_name: str, data: dict[str, np.ndarray], output_dir: Path
     cbar = fig.colorbar(sc, ax=ax, pad=0.02)
     cbar.set_label("规模系数")
     ax.legend(loc="upper left", fontsize=8)
-    return _finalize_and_save(fig, output_dir / f"{_sanitize_filename(case_name)}_scale_efficiency_frontier.png")
+    return _finalize_and_save(fig, output_dir / f"{_sanitize_filename(case_name)}_scale_efficiency_frontier.svg")
 
 
 def _plot_revenue(case_name: str, data: dict[str, np.ndarray], output_dir: Path) -> str | None:
@@ -222,7 +223,7 @@ def _plot_revenue(case_name: str, data: dict[str, np.ndarray], output_dir: Path)
     ax.set_xlabel("规模系数")
     ax.set_title(_pretty_title(case_name, "收益分项演化"), pad=8)
     ax.legend(ncol=2, loc="upper center", bbox_to_anchor=(0.5, 1.02), fontsize=8)
-    return _finalize_and_save(fig, output_dir / f"{_sanitize_filename(case_name)}_scale_revenue_breakdown.png")
+    return _finalize_and_save(fig, output_dir / f"{_sanitize_filename(case_name)}_scale_revenue_breakdown.svg")
 
 
 def _plot_marginal(case_name: str, data: dict[str, np.ndarray], output_dir: Path) -> str | None:
@@ -245,7 +246,7 @@ def _plot_marginal(case_name: str, data: dict[str, np.ndarray], output_dir: Path
     axes[0].text(0.01, 0.98, "(a)", transform=axes[0].transAxes, va="top", ha="left", fontsize=9, fontweight="bold")
     axes[1].text(0.01, 0.98, "(b)", transform=axes[1].transAxes, va="top", ha="left", fontsize=9, fontweight="bold")
     fig.suptitle(_pretty_title(case_name, "规模扩展的收益效率变化"), y=0.985, fontsize=11)
-    return _finalize_and_save(fig, output_dir / f"{_sanitize_filename(case_name)}_scale_marginal_efficiency.png", rect=(0.02,0.02,0.98,0.95))
+    return _finalize_and_save(fig, output_dir / f"{_sanitize_filename(case_name)}_scale_marginal_efficiency.svg", rect=(0.02,0.02,0.98,0.95))
 
 
 def _plot_penalty_cycles(case_name: str, data: dict[str, np.ndarray], output_dir: Path) -> str | None:
@@ -265,7 +266,7 @@ def _plot_penalty_cycles(case_name: str, data: dict[str, np.ndarray], output_dir
     axes[0].text(0.01, 0.98, "(a)", transform=axes[0].transAxes, va="top", ha="left", fontsize=9, fontweight="bold")
     axes[1].text(0.01, 0.98, "(b)", transform=axes[1].transAxes, va="top", ha="left", fontsize=9, fontweight="bold")
     fig.suptitle(_pretty_title(case_name, "电压约束与运行强度"), y=0.985, fontsize=11)
-    return _finalize_and_save(fig, output_dir / f"{_sanitize_filename(case_name)}_scale_penalty_cycles.png", rect=(0.02,0.02,0.98,0.95))
+    return _finalize_and_save(fig, output_dir / f"{_sanitize_filename(case_name)}_scale_penalty_cycles.svg", rect=(0.02,0.02,0.98,0.95))
 
 
 def plot_scale_effect(case_name: str, scale_results: Any, output_dir: str | Path = "outputs/paper_figures/scale_effect") -> list[str]:

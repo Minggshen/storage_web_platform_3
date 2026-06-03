@@ -14,6 +14,40 @@ from storage_engine_project.logging_config import get_logger
 
 logger = get_logger(__name__)
 
+
+def _clamp_progress_percent(value: float) -> float:
+    if not math.isfinite(float(value)):
+        return 0.0
+    return max(0.0, min(100.0, float(value)))
+
+
+def _log_solver_progress(
+    percent: float,
+    label: str,
+    detail: str,
+    phase: str,
+    **extra: Any,
+) -> None:
+    payload: dict[str, Any] = {
+        "percent": round(_clamp_progress_percent(percent), 2),
+        "label": str(label),
+        "detail": str(detail),
+        "phase": str(phase),
+    }
+    for key, value in extra.items():
+        if value is None:
+            continue
+        if isinstance(value, float):
+            payload[key] = round(value, 6) if math.isfinite(value) else None
+        else:
+            payload[key] = value
+    logger.info("SOLVER_PROGRESS %s", json.dumps(payload, ensure_ascii=False, separators=(",", ":")))
+
+
+def _span_percent(start: float, end: float, fraction: float) -> float:
+    bounded = max(0.0, min(1.0, float(fraction) if math.isfinite(float(fraction)) else 0.0))
+    return float(start) + (float(end) - float(start)) * bounded
+
 if __name__ == "__main__":
     _parent = Path(__file__).resolve().parent.parent
     if str(_parent) not in sys.path:
@@ -72,6 +106,16 @@ def _env_float(name: str, default: float) -> float:
         return float(default)
 
 
+def _env_int(name: str, default: int) -> int:
+    raw = os.getenv(name)
+    if raw is None or str(raw).strip() == "":
+        return int(default)
+    try:
+        return int(float(raw))
+    except Exception:
+        return int(default)
+
+
 def _clamp_float(value: Any, default: float, lower: float, upper: float) -> float:
     try:
         parsed = float(value)
@@ -80,6 +124,56 @@ def _clamp_float(value: Any, default: float, lower: float, upper: float) -> floa
     if not math.isfinite(parsed):
         parsed = float(default)
     return float(min(max(parsed, lower), upper))
+
+
+DEFAULT_ECONOMIC_METRIC_WEIGHTS = {
+    "npv": 0.45,
+    "irr": 0.20,
+    "payback": 0.25,
+    "investment": 0.10,
+}
+DEFAULT_SAFETY_METRIC_WEIGHTS = {
+    "transformer": 0.25,
+    "voltage": 0.25,
+    "line": 0.25,
+    "cycle": 0.25,
+}
+
+
+def _weight_dict(args: argparse.Namespace, names: dict[str, str], defaults: dict[str, float]) -> dict[str, float]:
+    weights: dict[str, float] = {}
+    for key, attr in names.items():
+        weights[key] = max(0.0, _clamp_float(getattr(args, attr, defaults[key]), defaults[key], 0.0, 1.0))
+    total = sum(weights.values())
+    if total <= 1e-12:
+        return dict(defaults)
+    return {key: value / total for key, value in weights.items()}
+
+
+def _economic_metric_weights(args: argparse.Namespace) -> dict[str, float]:
+    return _weight_dict(
+        args,
+        {
+            "npv": "economic_weight_npv",
+            "irr": "economic_weight_irr",
+            "payback": "economic_weight_payback",
+            "investment": "economic_weight_investment",
+        },
+        DEFAULT_ECONOMIC_METRIC_WEIGHTS,
+    )
+
+
+def _safety_metric_weights(args: argparse.Namespace) -> dict[str, float]:
+    return _weight_dict(
+        args,
+        {
+            "transformer": "safety_weight_transformer",
+            "voltage": "safety_weight_voltage",
+            "line": "safety_weight_line",
+            "cycle": "safety_weight_cycle",
+        },
+        DEFAULT_SAFETY_METRIC_WEIGHTS,
+    )
 
 
 def parse_args() -> argparse.Namespace:
@@ -95,6 +189,14 @@ def parse_args() -> argparse.Namespace:
                         help="求解器预设档位：fast=快速预览(8×3,GA轻量代理,Top-3 OpenDSS重校核), standard=标准求解(12×5,GA轻量代理,Top-3 OpenDSS重校核), delivery=交付求解(16×8,GA全流程OpenDSS)")
     parser.add_argument("--disable-plots", action="store_true", help="不生成绘图文件")
     parser.add_argument("--safety-economy-tradeoff", type=float, default=0.5, help="安全-经济权衡系数：0=纯经济最优，1=纯安全最优（默认 0.5 并重）")
+    parser.add_argument("--economic-weight-npv", type=float, default=DEFAULT_ECONOMIC_METRIC_WEIGHTS["npv"], help="经济性子指标权重：NPV")
+    parser.add_argument("--economic-weight-irr", type=float, default=DEFAULT_ECONOMIC_METRIC_WEIGHTS["irr"], help="经济性子指标权重：IRR")
+    parser.add_argument("--economic-weight-payback", type=float, default=DEFAULT_ECONOMIC_METRIC_WEIGHTS["payback"], help="经济性子指标权重：回收期")
+    parser.add_argument("--economic-weight-investment", type=float, default=DEFAULT_ECONOMIC_METRIC_WEIGHTS["investment"], help="经济性子指标权重：初始投资")
+    parser.add_argument("--safety-weight-transformer", type=float, default=DEFAULT_SAFETY_METRIC_WEIGHTS["transformer"], help="安全性子指标权重：变压器越限")
+    parser.add_argument("--safety-weight-voltage", type=float, default=DEFAULT_SAFETY_METRIC_WEIGHTS["voltage"], help="安全性子指标权重：电压越限")
+    parser.add_argument("--safety-weight-line", type=float, default=DEFAULT_SAFETY_METRIC_WEIGHTS["line"], help="安全性子指标权重：线路过载")
+    parser.add_argument("--safety-weight-cycle", type=float, default=DEFAULT_SAFETY_METRIC_WEIGHTS["cycle"], help="安全性子指标权重：设备策略约束（年循环上限/时长边界）")
     parser.add_argument("--initial-soc", type=float, default=_env_float("STORAGE_INITIAL_SOC", 0.50), help="年度仿真的首日初始 SOC")
     parser.add_argument("--terminal-soc-mode", type=str, default=_env_str("STORAGE_TERMINAL_SOC_MODE", "weekly_anchor"), help="日末 SOC 目标模式：free/carry/fixed/strategy_mid/weekly_anchor")
     parser.add_argument("--fixed-terminal-soc-target", type=float, default=_env_float("STORAGE_FIXED_TERMINAL_SOC_TARGET", 0.50), help="fixed 模式下每日末端 SOC 目标")
@@ -110,6 +212,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--opendss-vmin-pu", type=float, default=_env_float("STORAGE_OPENDSS_VMIN_PU", 0.93), help="电压下限 pu")
     parser.add_argument("--opendss-vmax-pu", type=float, default=_env_float("STORAGE_OPENDSS_VMAX_PU", 1.07), help="电压上限 pu")
     parser.add_argument("--opendss-voltage-penalty-coeff", type=float, default=_env_float("STORAGE_OPENDSS_VOLTAGE_PENALTY_COEFF", 0.0), help="电压越限罚金系数 元/pu")
+    parser.add_argument("--opendss-engine-recycle-solve-interval", type=int, default=_env_int("STORAGE_OPENDSS_ENGINE_RECYCLE_SOLVE_INTERVAL", 480), help="OpenDSS COM 引擎按 Solve 次数主动重建；<=0 表示禁用")
+    parser.add_argument("--opendss-engine-recycle-compile-interval", type=int, default=_env_int("STORAGE_OPENDSS_ENGINE_RECYCLE_COMPILE_INTERVAL", 240), help="OpenDSS COM 引擎按 Compile 次数主动重建；<=0 表示禁用")
+    parser.add_argument("--opendss-engine-error-retry-count", type=int, default=_env_int("STORAGE_OPENDSS_ENGINE_ERROR_RETRY_COUNT", 1), help="OpenDSS 482/OOM 等后端错误发生时，重建引擎后重试当前小时的次数")
     parser.add_argument("--opendss-only-for-full-recheck", action="store_true", default=_env_bool("STORAGE_OPENDSS_ONLY_FOR_FULL_RECHECK", False), help="兼容旧模式：仅在 full_recheck 阶段使用 OpenDSS（不推荐）")
     parser.add_argument("--prefer-opendss-in-full-recheck", action="store_true", default=_env_bool("STORAGE_OPENDSS_PREFER_FULL_RECHECK", True), help="在 dual-stage 中偏好 OpenDSS full_recheck")
     return parser.parse_args()
@@ -214,6 +319,9 @@ def _build_network_oracle(args: argparse.Namespace):
         voltage_min_pu=float(args.opendss_vmin_pu),
         voltage_max_pu=float(args.opendss_vmax_pu),
         voltage_penalty_coeff_yuan_per_pu=float(args.opendss_voltage_penalty_coeff),
+        engine_recycle_solve_interval=int(args.opendss_engine_recycle_solve_interval),
+        engine_recycle_compile_interval=int(args.opendss_engine_recycle_compile_interval),
+        engine_error_retry_count=int(args.opendss_engine_error_retry_count),
         compile_each_call=False,  # oracle 内部按日控制编译，此参数不再生效
         allow_engine_fallback=False,
         log_failures=True,
@@ -221,6 +329,12 @@ def _build_network_oracle(args: argparse.Namespace):
     try:
         oracle = OpenDSSConstraintOracle(config=cfg)
         logger.info("已启用 OpenDSS oracle，Master=%s", args.dss_master_path)
+        logger.info(
+            "OpenDSS 引擎回收：Solve间隔=%d，Compile间隔=%d，错误重试=%d",
+            cfg.engine_recycle_solve_interval,
+            cfg.engine_recycle_compile_interval,
+            cfg.engine_error_retry_count,
+        )
         return oracle
     except Exception as exc:
         raise RuntimeError(
@@ -394,6 +508,7 @@ def _ensure_best_full_recheck(
     opt_case: Any,
     run_result: LemmingOptimizationRunResult,
     network_oracle=None,
+    progress_callback=None,
 ) -> None:
     best = run_result.best_result
     if best is None:
@@ -405,6 +520,13 @@ def _ensure_best_full_recheck(
     trace_stats = _opendss_trace_stats(ann)
     if network_oracle is None:
         if rechecked_already:
+            if progress_callback is not None:
+                progress_callback({
+                    "event": "final_recheck_already_valid",
+                    "strategy_id": best.decision.strategy_id,
+                    "rated_power_kw": float(best.decision.rated_power_kw),
+                    "duration_h": float(best.decision.duration_h()),
+                })
             return
         logger.info("对最终折中解执行全年重校核...")
     else:
@@ -418,15 +540,36 @@ def _ensure_best_full_recheck(
                 trace_stats['bus_voltage_rows'],
                 trace_stats['line_current_rows'],
             )
+            if progress_callback is not None:
+                progress_callback({
+                    "event": "final_recheck_already_valid",
+                    "strategy_id": best.decision.strategy_id,
+                    "rated_power_kw": float(best.decision.rated_power_kw),
+                    "duration_h": float(best.decision.duration_h()),
+                })
             return
         logger.info("调用 OpenDSS oracle 对最终折中解执行全年重校核...")
 
+    if progress_callback is not None:
+        progress_callback({
+            "event": "final_recheck_start",
+            "strategy_id": best.decision.strategy_id,
+            "rated_power_kw": float(best.decision.rated_power_kw),
+            "duration_h": float(best.decision.duration_h()),
+        })
     rechecked = evaluator.evaluate_decision(
         ctx=opt_case.context,
         decision=best.decision,
         network_oracle=network_oracle,
         force_full_recheck=True,
     )
+    if progress_callback is not None:
+        progress_callback({
+            "event": "final_recheck_complete",
+            "strategy_id": best.decision.strategy_id,
+            "rated_power_kw": float(best.decision.rated_power_kw),
+            "duration_h": float(best.decision.duration_h()),
+        })
     rechecked_ann = getattr(rechecked, "annual_operation_result", None)
     rechecked_stats = _opendss_trace_stats(rechecked_ann)
     if isinstance(getattr(rechecked, "metadata", None), dict):
@@ -488,6 +631,9 @@ def _ensure_topk_full_recheck(
     network_oracle=None,
     k: int = 3,
     safety_economy_tradeoff: float = 0.5,
+    economic_metric_weights: dict[str, float] | None = None,
+    safety_metric_weights: dict[str, float] | None = None,
+    progress_callback=None,
 ) -> None:
     """GA 结束后对 archive 中 Top-K Pareto 候选执行 OpenDSS 全年重校核并重排。"""
     archive = list(run_result.archive_results)
@@ -499,7 +645,12 @@ def _ensure_topk_full_recheck(
     top_k_indices = sorted_indices[: min(k, len(sorted_indices))]
 
     logger.info("对 Top-%d 候选方案执行 OpenDSS 全年重校核...", len(top_k_indices))
-    for idx in top_k_indices:
+    if progress_callback is not None:
+        progress_callback({
+            "event": "topk_recheck_start",
+            "candidate_total": len(top_k_indices),
+        })
+    for order, idx in enumerate(top_k_indices, start=1):
         candidate = archive[idx]
         meta = getattr(candidate, "metadata", {}) or {}
         ann = getattr(candidate, "annual_operation_result", None)
@@ -514,6 +665,16 @@ def _ensure_topk_full_recheck(
                 "  候选 #%d 已有 OpenDSS 重校核数据，跳过（P=%.1fkW E=%.1fkWh）。",
                 idx + 1, candidate.decision.rated_power_kw, candidate.decision.rated_energy_kwh,
             )
+            if progress_callback is not None:
+                progress_callback({
+                    "event": "topk_recheck_skip",
+                    "candidate_index": order,
+                    "candidate_total": len(top_k_indices),
+                    "archive_index": idx + 1,
+                    "strategy_id": candidate.decision.strategy_id,
+                    "rated_power_kw": float(candidate.decision.rated_power_kw),
+                    "duration_h": float(candidate.decision.duration_h()),
+                })
             continue
 
         logger.info(
@@ -521,6 +682,16 @@ def _ensure_topk_full_recheck(
             idx + 1, candidate.decision.strategy_id,
             candidate.decision.rated_power_kw, candidate.decision.rated_energy_kwh,
         )
+        if progress_callback is not None:
+            progress_callback({
+                "event": "topk_recheck_candidate_start",
+                "candidate_index": order,
+                "candidate_total": len(top_k_indices),
+                "archive_index": idx + 1,
+                "strategy_id": candidate.decision.strategy_id,
+                "rated_power_kw": float(candidate.decision.rated_power_kw),
+                "duration_h": float(candidate.decision.duration_h()),
+            })
         rechecked_result = evaluator.evaluate_decision(
             ctx=opt_case.context,
             decision=candidate.decision,
@@ -529,13 +700,26 @@ def _ensure_topk_full_recheck(
         )
         run_result.archive_results = _replace_same_decision(run_result.archive_results, rechecked_result)
         run_result.population_results = _replace_same_decision(run_result.population_results, rechecked_result)
+        if progress_callback is not None:
+            progress_callback({
+                "event": "topk_recheck_candidate_complete",
+                "candidate_index": order,
+                "candidate_total": len(top_k_indices),
+                "archive_index": idx + 1,
+                "strategy_id": candidate.decision.strategy_id,
+                "rated_power_kw": float(candidate.decision.rated_power_kw),
+                "duration_h": float(candidate.decision.duration_h()),
+            })
 
     # 闭环保证：最终 best 必须通过 _is_valid_full_recheck_result 校验。
     # 每轮补做至多一个候选，archive 有限，上界为 archive 规模 + 1。
     max_rounds = len(run_result.archive_results) + 1
     for _round in range(max_rounds):
         run_result.best_result = select_best_compromise(
-            run_result.archive_results, safety_economy_tradeoff=safety_economy_tradeoff,
+            run_result.archive_results,
+            safety_economy_tradeoff=safety_economy_tradeoff,
+            economic_metric_weights=economic_metric_weights,
+            safety_metric_weights=safety_metric_weights,
         )
         best = run_result.best_result
         if best is None:
@@ -547,6 +731,15 @@ def _ensure_topk_full_recheck(
             "  补做 OpenDSS 全年校核: %s P=%.1fkW E=%.1fkWh (第%d轮)",
             best.decision.strategy_id, best.decision.rated_power_kw, best.decision.rated_energy_kwh, _round + 1,
         )
+        if progress_callback is not None:
+            progress_callback({
+                "event": "closure_recheck_start",
+                "round": _round + 1,
+                "max_rounds": max_rounds,
+                "strategy_id": best.decision.strategy_id,
+                "rated_power_kw": float(best.decision.rated_power_kw),
+                "duration_h": float(best.decision.duration_h()),
+            })
         rechecked = evaluator.evaluate_decision(
             ctx=opt_case.context,
             decision=best.decision,
@@ -555,6 +748,15 @@ def _ensure_topk_full_recheck(
         )
         run_result.archive_results = _replace_same_decision(run_result.archive_results, rechecked)
         run_result.population_results = _replace_same_decision(run_result.population_results, rechecked)
+        if progress_callback is not None:
+            progress_callback({
+                "event": "closure_recheck_complete",
+                "round": _round + 1,
+                "max_rounds": max_rounds,
+                "strategy_id": best.decision.strategy_id,
+                "rated_power_kw": float(best.decision.rated_power_kw),
+                "duration_h": float(best.decision.duration_h()),
+            })
     else:
         raise RuntimeError(
             f"重校核闭环未在 {max_rounds} 轮内收敛：archive 共 "
@@ -562,6 +764,11 @@ def _ensure_topk_full_recheck(
         )
 
     logger.info("Top-%d 重校核完成，已更新最优折中解。", len(top_k_indices))
+    if progress_callback is not None:
+        progress_callback({
+            "event": "topk_recheck_complete",
+            "candidate_total": len(top_k_indices),
+        })
 
 
 def _best_summary_row(opt_case: Any, run_result: LemmingOptimizationRunResult) -> dict[str, Any] | None:
@@ -708,9 +915,47 @@ def run_one_case(
     opendss_only_for_full_recheck: bool = False,
     solver_args: argparse.Namespace | None = None,
     safety_economy_tradeoff: float = 0.5,
+    progress_start_percent: float = 8.0,
+    progress_end_percent: float = 96.0,
+    case_index: int = 1,
+    case_total: int = 1,
 ) -> tuple[LemmingOptimizationRunResult, dict[str, Any] | None]:
+    case_width = max(0.0, float(progress_end_percent) - float(progress_start_percent))
+
+    def _case_percent(relative: float) -> float:
+        return float(progress_start_percent) + case_width * max(0.0, min(1.0, float(relative)))
+
+    def _int_value(value: Any, default: int = 0) -> int:
+        try:
+            return int(float(value))
+        except Exception:
+            return int(default)
+
+    case_prefix = f"第 {case_index}/{case_total} 个场景"
+    ga_start_rel = 0.04
+    if opendss_only_for_full_recheck:
+        ga_end_rel = 0.40
+        recheck_start_rel = 0.40
+    else:
+        ga_end_rel = 0.86
+        recheck_start_rel = 0.86
+    recheck_end_rel = 0.93
+    export_start_rel = 0.93
+
+    _log_solver_progress(
+        _case_percent(0.01),
+        "准备场景求解",
+        f"{case_prefix}，正在构建调度器、评估器和候选搜索空间。",
+        "case_prepare",
+        case_index=case_index,
+        case_total=case_total,
+        scenario_id=opt_case.internal_model_id,
+    )
+
     evaluator_args = argparse.Namespace(**vars(solver_args)) if solver_args is not None else argparse.Namespace()
     evaluator_args.prefer_opendss_in_full_recheck = not opendss_only_for_full_recheck
+    economic_metric_weights = _economic_metric_weights(evaluator_args)
+    safety_metric_weights = _safety_metric_weights(evaluator_args)
     evaluator = _build_evaluator(args=evaluator_args)
 
     bridge = OptimizerBridge(
@@ -734,6 +979,8 @@ def run_one_case(
             verbose=True,
         ),
         safety_economy_tradeoff=safety_economy_tradeoff,
+        economic_metric_weights=economic_metric_weights,
+        safety_metric_weights=safety_metric_weights,
     )
 
     _case_t0 = time.perf_counter()
@@ -752,7 +999,241 @@ def run_one_case(
     if opendss_only_for_full_recheck:
         evaluator.config.full_recheck_for_fast_feasible_only = False
 
-    run_result = optimizer.run(ctx=opt_case.context, network_oracle=optimizer_oracle)
+    def _emit_ga_progress(event: dict[str, Any]) -> None:
+        event_name = str(event.get("event") or "")
+        gen = max(1, _int_value(event.get("generation"), 1))
+        gen_total = max(1, _int_value(event.get("generations"), generations))
+        pop_total = max(1, _int_value(event.get("population_size"), population_size))
+        candidate_idx = max(1, min(pop_total, _int_value(event.get("candidate_index"), 1)))
+        gen_span = ga_end_rel - ga_start_rel
+
+        if event_name == "ga_generation_start":
+            fraction = (gen - 1) / gen_total
+            _log_solver_progress(
+                _case_percent(ga_start_rel + gen_span * fraction),
+                "GA 候选搜索",
+                f"{case_prefix}，开始第 {gen}/{gen_total} 代候选评估。",
+                "ga_generation",
+                case_index=case_index,
+                case_total=case_total,
+                generation=gen,
+                generations=gen_total,
+                population_size=pop_total,
+            )
+            return
+
+        if event_name in {"ga_candidate_start", "ga_candidate_complete", "ga_candidate_cache_hit"}:
+            start_fraction = ((gen - 1) + (candidate_idx - 1) / pop_total) / gen_total
+            end_fraction = ((gen - 1) + candidate_idx / pop_total) / gen_total
+            span_start = _case_percent(ga_start_rel + gen_span * start_fraction)
+            span_end = _case_percent(ga_start_rel + gen_span * end_fraction)
+            strategy_id = str(event.get("strategy_id") or "")
+            power_kw = event.get("rated_power_kw")
+            duration_h = event.get("duration_h")
+            suffix = ""
+            if power_kw is not None and duration_h is not None:
+                suffix = f"，{strategy_id} P={float(power_kw):.0f}kW 时长={float(duration_h):.2f}h"
+
+            if event_name == "ga_candidate_start":
+                _log_solver_progress(
+                    span_start,
+                    "GA 候选评估",
+                    f"{case_prefix}，第 {gen}/{gen_total} 代，候选 {candidate_idx}/{pop_total}{suffix}。",
+                    "ga_candidate",
+                    case_index=case_index,
+                    case_total=case_total,
+                    generation=gen,
+                    generations=gen_total,
+                    candidate_index=candidate_idx,
+                    candidate_total=pop_total,
+                    span_start_percent=span_start,
+                    span_end_percent=span_end,
+                )
+            elif event_name == "ga_candidate_cache_hit":
+                _log_solver_progress(
+                    span_end,
+                    "GA 候选复用",
+                    f"{case_prefix}，第 {gen}/{gen_total} 代，候选 {candidate_idx}/{pop_total} 已复用缓存结果。",
+                    "ga_candidate_cache_hit",
+                    case_index=case_index,
+                    case_total=case_total,
+                    generation=gen,
+                    generations=gen_total,
+                    candidate_index=candidate_idx,
+                    candidate_total=pop_total,
+                )
+            else:
+                _log_solver_progress(
+                    span_end,
+                    "GA 候选评估",
+                    f"{case_prefix}，第 {gen}/{gen_total} 代，候选 {candidate_idx}/{pop_total} 已完成。",
+                    "ga_candidate",
+                    case_index=case_index,
+                    case_total=case_total,
+                    generation=gen,
+                    generations=gen_total,
+                    candidate_index=candidate_idx,
+                    candidate_total=pop_total,
+                )
+            return
+
+        if event_name == "ga_generation_complete":
+            fraction = gen / gen_total
+            _log_solver_progress(
+                _case_percent(ga_start_rel + gen_span * fraction),
+                "GA 迭代完成",
+                f"{case_prefix}，第 {gen}/{gen_total} 代完成，进入下一代或重校核准备。",
+                "ga_generation",
+                case_index=case_index,
+                case_total=case_total,
+                generation=gen,
+                generations=gen_total,
+                population_size=pop_total,
+                unique_evaluation_count=_int_value(event.get("unique_evaluation_count"), 0),
+            )
+
+    def _emit_recheck_progress(event: dict[str, Any]) -> None:
+        event_name = str(event.get("event") or "")
+        recheck_span = recheck_end_rel - recheck_start_rel
+        topk_end_rel = recheck_start_rel + recheck_span * 0.85
+        closure_start_rel = topk_end_rel
+
+        if event_name == "topk_recheck_start":
+            total = max(1, _int_value(event.get("candidate_total"), 1))
+            _log_solver_progress(
+                _case_percent(recheck_start_rel),
+                "OpenDSS 全年重校核",
+                f"{case_prefix}，GA 已完成，开始 Top-{total} 候选全年潮流重校核。",
+                "topk_recheck",
+                case_index=case_index,
+                case_total=case_total,
+                candidate_total=total,
+            )
+            return
+
+        if event_name in {"topk_recheck_candidate_start", "topk_recheck_candidate_complete", "topk_recheck_skip"}:
+            total = max(1, _int_value(event.get("candidate_total"), 1))
+            idx = max(1, min(total, _int_value(event.get("candidate_index"), 1)))
+            span_start = _case_percent(_span_percent(recheck_start_rel, topk_end_rel, (idx - 1) / total))
+            span_end = _case_percent(_span_percent(recheck_start_rel, topk_end_rel, idx / total))
+            archive_index = _int_value(event.get("archive_index"), idx)
+            if event_name == "topk_recheck_candidate_start":
+                _log_solver_progress(
+                    span_start,
+                    "OpenDSS 全年重校核",
+                    f"{case_prefix}，正在重校核 Top-{idx}/{total} 候选（Archive #{archive_index}）。",
+                    "topk_recheck_candidate",
+                    case_index=case_index,
+                    case_total=case_total,
+                    candidate_index=idx,
+                    candidate_total=total,
+                    span_start_percent=span_start,
+                    span_end_percent=span_end,
+                )
+            elif event_name == "topk_recheck_skip":
+                _log_solver_progress(
+                    span_end,
+                    "OpenDSS 重校核复用",
+                    f"{case_prefix}，Top-{idx}/{total} 候选已有有效全年重校核结果，已跳过。",
+                    "topk_recheck_candidate",
+                    case_index=case_index,
+                    case_total=case_total,
+                    candidate_index=idx,
+                    candidate_total=total,
+                )
+            else:
+                _log_solver_progress(
+                    span_end,
+                    "OpenDSS 全年重校核",
+                    f"{case_prefix}，Top-{idx}/{total} 候选全年重校核完成。",
+                    "topk_recheck_candidate",
+                    case_index=case_index,
+                    case_total=case_total,
+                    candidate_index=idx,
+                    candidate_total=total,
+                )
+            return
+
+        if event_name in {"closure_recheck_start", "closure_recheck_complete"}:
+            max_rounds = max(1, _int_value(event.get("max_rounds"), 1))
+            round_index = max(1, min(max_rounds, _int_value(event.get("round"), 1)))
+            span_start = _case_percent(_span_percent(closure_start_rel, recheck_end_rel, (round_index - 1) / max_rounds))
+            span_end = _case_percent(_span_percent(closure_start_rel, recheck_end_rel, round_index / max_rounds))
+            if event_name == "closure_recheck_start":
+                _log_solver_progress(
+                    span_start,
+                    "补做最终校核",
+                    f"{case_prefix}，最终折中解尚未满足全年重校核要求，补做第 {round_index} 轮。",
+                    "closure_recheck",
+                    case_index=case_index,
+                    case_total=case_total,
+                    round=round_index,
+                    max_rounds=max_rounds,
+                    span_start_percent=span_start,
+                    span_end_percent=span_end,
+                )
+            else:
+                _log_solver_progress(
+                    span_end,
+                    "补做最终校核",
+                    f"{case_prefix}，第 {round_index} 轮补做全年重校核完成。",
+                    "closure_recheck",
+                    case_index=case_index,
+                    case_total=case_total,
+                    round=round_index,
+                    max_rounds=max_rounds,
+                )
+            return
+
+        if event_name == "topk_recheck_complete":
+            _log_solver_progress(
+                _case_percent(recheck_end_rel),
+                "OpenDSS 重校核完成",
+                f"{case_prefix}，Top-K 重校核与最终折中解校验已完成。",
+                "topk_recheck",
+                case_index=case_index,
+                case_total=case_total,
+            )
+            return
+
+        if event_name in {"final_recheck_start", "final_recheck_complete", "final_recheck_already_valid"}:
+            span_start = _case_percent(recheck_start_rel)
+            span_end = _case_percent(recheck_end_rel)
+            if event_name == "final_recheck_start":
+                _log_solver_progress(
+                    span_start,
+                    "最终方案全年重校核",
+                    f"{case_prefix}，正在对最终折中解执行全年 OpenDSS 校核。",
+                    "final_recheck",
+                    case_index=case_index,
+                    case_total=case_total,
+                    span_start_percent=span_start,
+                    span_end_percent=span_end,
+                )
+            elif event_name == "final_recheck_already_valid":
+                _log_solver_progress(
+                    span_end,
+                    "最终方案已校核",
+                    f"{case_prefix}，最终折中解已包含有效全年 OpenDSS 校核结果。",
+                    "final_recheck",
+                    case_index=case_index,
+                    case_total=case_total,
+                )
+            else:
+                _log_solver_progress(
+                    span_end,
+                    "最终方案全年重校核",
+                    f"{case_prefix}，最终折中解全年 OpenDSS 校核完成。",
+                    "final_recheck",
+                    case_index=case_index,
+                    case_total=case_total,
+                )
+
+    run_result = optimizer.run(
+        ctx=opt_case.context,
+        network_oracle=optimizer_oracle,
+        progress_callback=_emit_ga_progress,
+    )
 
     if opendss_only_for_full_recheck:
         _ensure_topk_full_recheck(
@@ -762,6 +1243,9 @@ def run_one_case(
             network_oracle=network_oracle,
             k=3,
             safety_economy_tradeoff=safety_economy_tradeoff,
+            economic_metric_weights=economic_metric_weights,
+            safety_metric_weights=safety_metric_weights,
+            progress_callback=_emit_recheck_progress,
         )
     else:
         _ensure_best_full_recheck(
@@ -769,15 +1253,28 @@ def run_one_case(
             opt_case=opt_case,
             run_result=run_result,
             network_oracle=network_oracle,
+            progress_callback=_emit_recheck_progress,
         )
 
     scenario_out_dir = output_root / opt_case.internal_model_id
+    _log_solver_progress(
+        _case_percent(export_start_rel),
+        "正在导出结果",
+        f"{case_prefix}，正在写入 CSV、JSON、图表和诊断文件。",
+        "export",
+        case_index=case_index,
+        case_total=case_total,
+        scenario_id=opt_case.internal_model_id,
+    )
     export_paths = export_optimization_run(
         output_dir=scenario_out_dir,
         run_result=run_result,
         case_name=opt_case.internal_model_id,
         enable_plots=generate_plots,
         timing_stats=evaluator.get_timing_stats(),
+        safety_economy_tradeoff=safety_economy_tradeoff,
+        economic_metric_weights=economic_metric_weights,
+        safety_metric_weights=safety_metric_weights,
     )
 
     diagnostics = _build_engine_diagnostics(opt_case, run_result, evaluator)
@@ -788,6 +1285,15 @@ def run_one_case(
             json.dump(diagnostics, f, ensure_ascii=False, indent=2, default=str)
     except Exception as exc:  # pragma: no cover
         logger.warning("写入 engine_diagnostics.json 失败：%s", exc)
+    _log_solver_progress(
+        _case_percent(0.99),
+        "场景结果已导出",
+        f"{case_prefix}，结果文件与引擎诊断已写入。",
+        "export",
+        case_index=case_index,
+        case_total=case_total,
+        scenario_id=opt_case.internal_model_id,
+    )
 
     logger.info("场景完成：%s", opt_case.internal_model_id)
     for k, v in export_paths.items():
@@ -838,12 +1344,15 @@ def _collect_diagnostics_into_root(output_root: Path) -> None:
 def main() -> None:
     args = parse_args()
 
+    _log_solver_progress(1, "求解器进程已启动", "正在读取运行参数并准备输出目录。", "startup")
+
     registry_path = Path(args.registry).resolve()
     strategy_library_path = Path(args.strategy_library).resolve()
     output_root = Path(args.output_dir).resolve()
     output_root.mkdir(parents=True, exist_ok=True)
 
     operation_config, safety_config, service_config = build_global_configs(args)
+    _log_solver_progress(3, "初始化网络校核", "正在初始化运行配置与 OpenDSS oracle。", "startup")
     network_oracle = _build_network_oracle(args)
 
     logger.info("=" * 88)
@@ -884,6 +1393,8 @@ def main() -> None:
         effective_disable_plots = bool(args.disable_plots)
 
     logger.info("优化参数：总代数=%d，每代种群=%d", effective_gen, effective_pop)
+    economic_metric_weights = _economic_metric_weights(args)
+    safety_metric_weights = _safety_metric_weights(args)
     logger.info(
         "SOC 参数："
         "年度初始SOC=%.3f，"
@@ -897,11 +1408,14 @@ def main() -> None:
     )
     logger.info("OpenDSS oracle：%s", '启用' if network_oracle is not None else '未启用')
     logger.info("安全-经济权衡系数：%.2f（0=纯经济，1=纯安全）", args.safety_economy_tradeoff)
+    logger.info("经济性子权重：%s", economic_metric_weights)
+    logger.info("安全性子权重：%s", safety_metric_weights)
     if network_oracle is not None:
         opendss_scope = "仅最终 Top-K full_recheck" if effective_opendss_only else "优化阶段 fast_proxy + full_recheck 全流程"
         logger.info("OpenDSS 调用范围：%s", opendss_scope)
     logger.info("=" * 88)
 
+    _log_solver_progress(6, "加载优化场景", "正在读取注册表、策略库、负荷矩阵和电价输入。", "load_cases")
     cases = load_optimization_cases(
         registry_path=registry_path,
         strategy_library_path=strategy_library_path,
@@ -919,9 +1433,18 @@ def main() -> None:
         raise RuntimeError("没有找到可运行的场景。请检查注册表 enabled / optimize / target-id 设置。")
 
     logger.info("共加载 %d 个待优化场景。", len(cases))
+    _log_solver_progress(
+        8,
+        "优化场景已加载",
+        f"共加载 {len(cases)} 个待优化场景，开始进入候选搜索。",
+        "load_cases",
+        case_total=len(cases),
+    )
 
     overall_rows: list[dict[str, Any]] = []
     for idx, case in enumerate(cases, start=1):
+        case_start = _span_percent(8.0, 96.0, (idx - 1) / len(cases))
+        case_end = _span_percent(8.0, 96.0, idx / len(cases))
         logger.info("=" * 88)
         logger.info(
             "开始场景优化 [%d/%d]：%s | "
@@ -940,6 +1463,10 @@ def main() -> None:
             opendss_only_for_full_recheck=effective_opendss_only,
             solver_args=args,
             safety_economy_tradeoff=args.safety_economy_tradeoff,
+            progress_start_percent=case_start,
+            progress_end_percent=case_end,
+            case_index=idx,
+            case_total=len(cases),
         )
         if row is not None:
             overall_rows.append(row)
@@ -960,12 +1487,20 @@ def main() -> None:
             pass
 
     if overall_rows:
+        _log_solver_progress(
+            97,
+            "汇总最优方案",
+            "所有场景已完成，正在写入总体最优方案汇总。",
+            "overall_export",
+            case_total=len(cases),
+        )
         overall_path = output_root / "overall_best_schemes.json"
         with open(overall_path, "w", encoding="utf-8") as f:
             json.dump(overall_rows, f, ensure_ascii=False, indent=2)
         logger.info("已导出总体最优方案汇总：%s", overall_path)
 
     _collect_diagnostics_into_root(output_root)
+    _log_solver_progress(100, "求解流程完成", "总体汇总和诊断文件已完成。", "completed")
 
 
 if __name__ == "__main__":

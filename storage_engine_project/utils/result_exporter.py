@@ -3,14 +3,16 @@ from __future__ import annotations
 import json
 import math
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
 
 import pandas as pd
 
 from storage_engine_project.optimization.lemming_optimizer import LemmingOptimizationRunResult
+from storage_engine_project.optimization.objective_scoring import annotate_dataframe_scores
 from storage_engine_project.optimization.optimizer_bridge import OptimizerBridge
 from storage_engine_project.visualization.plot_dispatch import plot_dispatch_profiles
 from storage_engine_project.visualization.plot_economics import plot_financial_diagnostics
+from storage_engine_project.visualization.plot_investment_economics import plot_investment_economics_trends
 from storage_engine_project.visualization.plot_pareto import plot_pareto_front
 from storage_engine_project.visualization.plot_scheme import plot_scheme_overview
 
@@ -1366,6 +1368,9 @@ def export_optimization_run(
     enable_plots: bool = True,
     *,
     timing_stats: dict[str, Any] | None = None,
+    safety_economy_tradeoff: float = 0.5,
+    economic_metric_weights: Mapping[str, float] | None = None,
+    safety_metric_weights: Mapping[str, float] | None = None,
 ) -> dict[str, str]:
     out_dir = _ensure_dir(output_dir)
     case_name = case_name or out_dir.name
@@ -1373,6 +1378,19 @@ def export_optimization_run(
     archive_df = OptimizerBridge.results_to_dataframe(run_result.archive_results)
     pop_df = OptimizerBridge.results_to_dataframe(run_result.population_results)
     history_df = pd.DataFrame(run_result.history)
+
+    archive_df = annotate_dataframe_scores(
+        archive_df,
+        safety_economy_tradeoff=safety_economy_tradeoff,
+        economic_metric_weights=economic_metric_weights,
+        safety_metric_weights=safety_metric_weights,
+    )
+    pop_df = annotate_dataframe_scores(
+        pop_df,
+        safety_economy_tradeoff=safety_economy_tradeoff,
+        economic_metric_weights=economic_metric_weights,
+        safety_metric_weights=safety_metric_weights,
+    )
 
     archive_path = out_dir / "archive_results.csv"
     population_path = out_dir / "population_results.csv"
@@ -1467,6 +1485,16 @@ def export_optimization_run(
         if enable_plots:
             fig_root = _ensure_dir(out_dir / "figures")
             plot_paths.extend(plot_pareto_front(case_name=case_name, run_result=run_result, output_dir=fig_root / "optimization"))
+            plot_paths.extend(
+                plot_investment_economics_trends(
+                    case_name=case_name,
+                    run_result=run_result,
+                    output_dir=fig_root / "optimization",
+                    safety_economy_tradeoff=safety_economy_tradeoff,
+                    economic_metric_weights=economic_metric_weights,
+                    safety_metric_weights=safety_metric_weights,
+                )
+            )
             plot_paths.extend(plot_scheme_overview(case_name=case_name, best_result=run_result.best_result, output_dir=fig_root / "scheme"))
             if ann is not None:
                 plot_paths.extend(plot_dispatch_profiles(case_name=case_name, annual_result=ann, output_dir=fig_root / "dispatch"))
