@@ -30,18 +30,39 @@ class ProjectModelService:
         return model.dict()
 
     def _project_dir(self, project_id: str) -> Path:
-        return self.base_dir / project_id
+        project_id = self._validated_project_id(project_id, not_found=True)
+        base_dir = self.base_dir.resolve()
+        project_dir = (base_dir / project_id).resolve()
+        if project_dir == base_dir or base_dir not in project_dir.parents:
+            raise FileNotFoundError("项目路径越界。")
+        return project_dir
 
     def _project_dir_for_delete(self, project_id: str) -> Path:
-        project_id = str(project_id or "").strip()
-        if not PROJECT_ID_PATTERN.fullmatch(project_id):
-            raise ValueError(f"项目编号格式非法：{project_id}")
+        project_id = self._validated_project_id(project_id, not_found=False)
 
         base_dir = self.base_dir.resolve()
         project_dir = (base_dir / project_id).resolve()
         if project_dir == base_dir or base_dir not in project_dir.parents:
             raise ValueError("项目路径越界，已拒绝删除。")
         return project_dir
+
+    @staticmethod
+    def _validated_project_id(project_id: str, *, not_found: bool = False) -> str:
+        project_id = str(project_id or "").strip()
+        if not PROJECT_ID_PATTERN.fullmatch(project_id):
+            if not_found:
+                raise FileNotFoundError(f"项目编号格式非法：{project_id}")
+            raise ValueError(f"项目编号格式非法：{project_id}")
+        return project_id
+
+    @staticmethod
+    def safe_path_segment(value: str, label: str = "路径片段") -> str:
+        segment = str(value or "").strip()
+        if not segment:
+            raise ValueError(f"{label}不能为空。")
+        if Path(segment).name != segment or segment in {".", ".."}:
+            raise ValueError(f"{label}格式非法：{segment}")
+        return segment
 
     def _project_file(self, project_id: str) -> Path:
         return self._project_dir(project_id) / "project.json"
@@ -219,9 +240,11 @@ class ProjectModelService:
         asset_id = self.generate_asset_id()
         original_name = upload_file.filename or f"{asset_id}.bin"
         safe_name = Path(original_name).name
-        asset_dir = self._assets_dir(project_id) / category
+        safe_category = self.safe_path_segment(category, "资产分类")
+        safe_subfolder = self.safe_path_segment(subfolder, "资产子目录") if subfolder else None
+        asset_dir = self._assets_dir(project_id) / safe_category
         if subfolder:
-            asset_dir = asset_dir / subfolder
+            asset_dir = asset_dir / safe_subfolder
         asset_dir.mkdir(parents=True, exist_ok=True)
 
         target_file = asset_dir / f"{asset_id}_{safe_name}"
@@ -234,10 +257,10 @@ class ProjectModelService:
             file_name=safe_name,
             source_type="upload",
             metadata={
-                "category": category,
-                "subfolder": subfolder,
-                "stored_path": str(target_file.resolve()),
                 **(metadata or {}),
+                "category": safe_category,
+                "subfolder": safe_subfolder,
+                "stored_path": str(target_file.resolve()),
             },
         )
         project.assets[asset_id] = asset
@@ -262,9 +285,11 @@ class ProjectModelService:
         project = self.load_project(project_id)
         asset_id = self.generate_asset_id()
         safe_name = file_path.name
-        asset_dir = self._assets_dir(project_id) / category
+        safe_category = self.safe_path_segment(category, "资产分类")
+        safe_subfolder = self.safe_path_segment(subfolder, "资产子目录") if subfolder else None
+        asset_dir = self._assets_dir(project_id) / safe_category
         if subfolder:
-            asset_dir = asset_dir / subfolder
+            asset_dir = asset_dir / safe_subfolder
         asset_dir.mkdir(parents=True, exist_ok=True)
 
         target_file = asset_dir / f"{asset_id}_{safe_name}"
@@ -275,10 +300,10 @@ class ProjectModelService:
             file_name=safe_name,
             source_type="generated",
             metadata={
-                "category": category,
-                "subfolder": subfolder,
-                "stored_path": str(target_file.resolve()),
                 **(metadata or {}),
+                "category": safe_category,
+                "subfolder": safe_subfolder,
+                "stored_path": str(target_file.resolve()),
             },
         )
         project.assets[asset_id] = asset

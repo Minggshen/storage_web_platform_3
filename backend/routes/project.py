@@ -96,7 +96,10 @@ def create_empty_project_compat(request: CreateProjectRequest) -> CreateProjectR
 
 @router.post("/api/project/save", response_model=SaveProjectResponse)
 def save_project(request: SaveProjectRequest) -> SaveProjectResponse:
-    project_id, project_file = project_service.save_project(request.project)
+    try:
+        project_id, project_file = project_service.save_project(request.project)
+    except (FileNotFoundError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     return SaveProjectResponse(success=True, project_id=project_id, project_file_path=str(project_file.resolve()))
 
 

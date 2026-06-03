@@ -63,6 +63,12 @@ app.include_router(build_router)
 app.include_router(solver_router)
 
 if _has_frontend:
+    _static_root = _static_dir.resolve()
+
+    def _is_within_static_root(path: Path) -> bool:
+        resolved = path.resolve()
+        return resolved == _static_root or _static_root in resolved.parents
+
     # JS/CSS/字体等静态资源
     app.mount("/assets", StaticFiles(directory=str(_static_dir / "assets")), name="assets")
 
@@ -75,7 +81,7 @@ if _has_frontend:
     @app.get("/{full_path:path}", include_in_schema=False)
     async def spa_fallback(full_path: str):
         requested = (_static_dir / full_path).resolve()
-        if not str(requested).startswith(str(_static_dir.resolve())):
+        if not _is_within_static_root(requested):
             return FileResponse(str(_static_dir / "index.html"), headers={"Cache-Control": "no-cache"})
         if requested.is_file():
             return FileResponse(str(requested))

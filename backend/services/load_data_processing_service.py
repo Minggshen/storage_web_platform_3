@@ -16,8 +16,9 @@ class LoadDataProcessingService:
         self, project_id: str, node_id: str, file_content: bytes, file_name: str
     ) -> tuple[str, str]:
         """保存用户上传的原始负荷 Excel 到 raw_load_data/{node_id}/ 目录"""
+        safe_node_id = self.project_service.safe_path_segment(node_id, "节点编号")
         project_dir = self.project_service._project_dir(project_id)
-        raw_dir = project_dir / "raw_load_data" / node_id
+        raw_dir = project_dir / "raw_load_data" / safe_node_id
         raw_dir.mkdir(parents=True, exist_ok=True)
 
         target = raw_dir / "raw_load_data.xlsx"
@@ -60,7 +61,7 @@ class LoadDataProcessingService:
         # 构建 node_id -> category 映射
         node_category: Dict[str, str] = {}
         for node in project.network.nodes:
-            node_id_str = str(node.id)
+            node_id_str = self.project_service.safe_path_segment(str(node.id), "节点编号")
             if node_id_str in node_ids:
                 params = node.params if isinstance(node.params, dict) else {}
                 cat = str(params.get("category", "industrial")).lower()
@@ -72,10 +73,11 @@ class LoadDataProcessingService:
         failed = 0
 
         for idx, node_id in enumerate(node_ids):
-            cat = node_category.get(node_id, "industrial")
-            raw_dir = project_dir / "raw_load_data" / node_id
-            runtime_dir = project_dir / "assets" / "runtime" / node_id
-            model_dir = project_dir / "modeling_output" / node_id
+            safe_node_id = self.project_service.safe_path_segment(node_id, "节点编号")
+            cat = node_category.get(safe_node_id, "industrial")
+            raw_dir = project_dir / "raw_load_data" / safe_node_id
+            runtime_dir = project_dir / "assets" / "runtime" / safe_node_id
+            model_dir = project_dir / "modeling_output" / safe_node_id
             runtime_dir.mkdir(parents=True, exist_ok=True)
             model_dir.mkdir(parents=True, exist_ok=True)
 
@@ -116,21 +118,21 @@ class LoadDataProcessingService:
                     project_id=project_id,
                     file_path=ym_path,
                     category="runtime",
-                    subfolder=node_id,
-                    metadata={"runtime_kind": "year_map", "node_id": node_id},
+                    subfolder=safe_node_id,
+                    metadata={"runtime_kind": "year_map", "node_id": safe_node_id},
                 )
                 ml_asset, project, _ = self.project_service.register_asset_file(
                     project_id=project_id,
                     file_path=ml_path,
                     category="runtime",
-                    subfolder=node_id,
-                    metadata={"runtime_kind": "model_library", "node_id": node_id},
+                    subfolder=safe_node_id,
+                    metadata={"runtime_kind": "model_library", "node_id": safe_node_id},
                 )
 
                 # 4. 绑定到拓扑节点
                 project, _ = self.project_service.bind_runtime_assets(
                     project_id=project_id,
-                    node_id=node_id,
+                    node_id=safe_node_id,
                     year_map_asset=ym_asset,
                     model_library_asset=ml_asset,
                 )
@@ -156,14 +158,15 @@ class LoadDataProcessingService:
         import shutil
 
         project_dir = self.project_service._project_dir(project_id)
+        safe_node_id = self.project_service.safe_path_segment(node_id, "节点编号")
         deleted = False
 
-        raw_dir = project_dir / "raw_load_data" / node_id
+        raw_dir = project_dir / "raw_load_data" / safe_node_id
         if raw_dir.exists():
             shutil.rmtree(str(raw_dir))
             deleted = True
 
-        model_dir = project_dir / "modeling_output" / node_id
+        model_dir = project_dir / "modeling_output" / safe_node_id
         if model_dir.exists():
             shutil.rmtree(str(model_dir))
             deleted = True
@@ -173,8 +176,9 @@ class LoadDataProcessingService:
     def list_preview_files(self, project_id: str, node_id: str) -> list[dict]:
         """列出某节点下所有可预览文件（PNG + CSV + TXT）"""
         project_dir = self.project_service._project_dir(project_id)
-        model_dir = project_dir / "modeling_output" / node_id
-        runtime_dir = project_dir / "assets" / "runtime" / node_id
+        safe_node_id = self.project_service.safe_path_segment(node_id, "节点编号")
+        model_dir = project_dir / "modeling_output" / safe_node_id
+        runtime_dir = project_dir / "assets" / "runtime" / safe_node_id
 
         files = []
         for d in [model_dir, runtime_dir]:
@@ -195,12 +199,14 @@ class LoadDataProcessingService:
     def get_preview_file_path(self, project_id: str, node_id: str, file_name: str) -> Path | None:
         """获取预览文件的完整路径"""
         project_dir = self.project_service._project_dir(project_id)
-        model_base = project_dir / "modeling_output" / node_id
-        runtime_base = project_dir / "assets" / "runtime" / node_id
+        safe_node_id = self.project_service.safe_path_segment(node_id, "节点编号")
+        safe_file_name = self.project_service.safe_path_segment(file_name, "预览文件名")
+        model_base = project_dir / "modeling_output" / safe_node_id
+        runtime_base = project_dir / "assets" / "runtime" / safe_node_id
         for base in [model_base, runtime_base]:
             if not base.exists():
                 continue
-            for p in base.rglob(file_name):
+            for p in base.rglob(safe_file_name):
                 if p.is_file():
                     return p
         return None
