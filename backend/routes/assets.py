@@ -38,6 +38,14 @@ router = APIRouter(prefix="/api/assets", tags=["assets-binding"])
 project_service = ProjectModelService()
 asset_service = AssetBindingService(project_service=project_service)
 processing_service = LoadDataProcessingService(project_service=project_service)
+PREVIEW_IMAGE_MEDIA_TYPES = {
+    ".png": "image/png",
+    ".svg": "image/svg+xml",
+}
+PREVIEW_IMAGE_HEADERS = {
+    "X-Content-Type-Options": "nosniff",
+    "Content-Security-Policy": "default-src 'none'; img-src data:; style-src 'unsafe-inline'",
+}
 
 
 @router.get("/project/{project_id}", response_model=ProjectAssetsResponse)
@@ -391,8 +399,12 @@ def preview_file_content(project_id: str, node_id: str, file_name: str):
         raise HTTPException(status_code=404, detail=f"文件不存在：{file_name}")
 
     suffix = file_path.suffix.lower()
-    if suffix == ".png":
-        return Response(content=file_path.read_bytes(), media_type="image/png")
+    if suffix in PREVIEW_IMAGE_MEDIA_TYPES:
+        return Response(
+            content=file_path.read_bytes(),
+            media_type=PREVIEW_IMAGE_MEDIA_TYPES[suffix],
+            headers=PREVIEW_IMAGE_HEADERS,
+        )
     elif suffix == ".csv":
         content = file_path.read_text(encoding="utf-8-sig")
         reader = csv.DictReader(io.StringIO(content))

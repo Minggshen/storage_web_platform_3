@@ -29,6 +29,12 @@ SPECIAL_WEEK_SIL_THRESHOLD = 0.15
 YEAR_CLUSTER_SIL_THRESHOLD = 0.18
 YEAR_MAX_CLUSTERS = 5
 
+MIN_COMBO_SAMPLE_DAYS = 5
+WEEK_QUALITY_MIN_DAYS = 5
+WEEK_QUALITY_LOW_ENERGY_RATIO = 0.08
+WEEK_QUALITY_HIGH_ENERGY_RATIO = 8.0
+WEEK_QUALITY_SPIKE_TO_P95_RATIO = 8.0
+
 RANDOM_STATE = 42
 
 plt.rcParams["font.sans-serif"] = ["Microsoft YaHei", "SimHei", "Arial Unicode MS", "DejaVu Sans"]
@@ -185,10 +191,70 @@ def _build_day_features(day_matrix: np.ndarray) -> np.ndarray:
     return feature
 
 
+def assess_week_data_quality(day_matrix: np.ndarray) -> dict:
+    n_days = int(day_matrix.shape[0])
+    reasons: list[str] = []
+    daily_abnormal = np.zeros(n_days, dtype=bool)
+
+    if n_days < WEEK_QUALITY_MIN_DAYS:
+        reasons.append(f"有效天数少于{WEEK_QUALITY_MIN_DAYS}天")
+
+    finite_mask = np.isfinite(day_matrix)
+    if not bool(finite_mask.all()):
+        reasons.append("存在非有限负荷值")
+        daily_abnormal |= ~finite_mask.all(axis=1)
+
+    mat = np.nan_to_num(day_matrix.astype(float), nan=0.0, posinf=0.0, neginf=0.0)
+    if (mat < 0).any():
+        reasons.append("存在负负荷值")
+        daily_abnormal |= (mat < 0).any(axis=1)
+
+    clipped_mat = np.clip(mat, 0.0, None)
+    day_energy = clipped_mat.sum(axis=1)
+    positive_energy = day_energy[day_energy > 1e-9]
+    if positive_energy.size == 0:
+        reasons.append("全周负荷接近零")
+        daily_abnormal[:] = True
+    else:
+        median_energy = float(np.median(positive_energy))
+        low_mask = day_energy < median_energy * WEEK_QUALITY_LOW_ENERGY_RATIO
+        high_mask = day_energy > median_energy * WEEK_QUALITY_HIGH_ENERGY_RATIO
+        if bool(low_mask.any()):
+            reasons.append("存在疑似停电/缺测日")
+            daily_abnormal |= low_mask
+        if bool(high_mask.any()):
+            reasons.append("存在疑似异常高能量日")
+            daily_abnormal |= high_mask
+
+    flat_positive = clipped_mat[clipped_mat > 1e-9]
+    if flat_positive.size >= 24:
+        p95 = float(np.percentile(flat_positive, 95))
+        max_value = float(flat_positive.max())
+        if p95 > 1e-9 and max_value / p95 >= WEEK_QUALITY_SPIKE_TO_P95_RATIO:
+            reasons.append("存在疑似孤立尖峰")
+            daily_abnormal |= (clipped_mat.max(axis=1) / max(p95, 1e-9)) >= WEEK_QUALITY_SPIKE_TO_P95_RATIO
+
+    abnormal_count = int(daily_abnormal.sum())
+    if abnormal_count >= max(2, int(np.ceil(max(n_days, 1) * 0.35))):
+        reasons.append("异常日占比过高")
+
+    ok = len(reasons) == 0
+    return {
+        "ok": bool(ok),
+        "reason": "质量合格" if ok else "；".join(dict.fromkeys(reasons)),
+        "abnormal_day_count": abnormal_count,
+        "daily_abnormal": daily_abnormal,
+    }
+
+
 def classify_one_week(week_df: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame, dict]:
     result = week_df[["日期", "星期序号", "星期", "周起始日"]].copy()
     day_matrix = week_df.loc[:, list(range(POINTS_PER_DAY))].to_numpy(dtype=float)
     n_days = len(week_df)
+    quality = assess_week_data_quality(day_matrix)
+    result["数据质量合格"] = quality["ok"]
+    result["数据质量说明"] = quality["reason"]
+    result["异常负荷日"] = quality["daily_abnormal"]
     labels = np.zeros(n_days, dtype=int)
     model_count = 1
     silhouette = np.nan
@@ -234,6 +300,9 @@ def classify_one_week(week_df: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame
             "轮廓系数": None if pd.isna(silhouette) else float(silhouette),
             "曲线差异指标": None if pd.isna(profile_gap) else float(profile_gap),
             "能量差异指标": None if pd.isna(energy_gap) else float(energy_gap),
+            "数据质量合格": bool(quality["ok"]),
+            "数据质量说明": str(quality["reason"]),
+            "异常负荷日数量": int(quality["abnormal_day_count"]),
         }
         return result, weekly_curve, summary
     temp = result.copy()
@@ -269,6 +338,9 @@ def classify_one_week(week_df: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame
         "轮廓系数": None if pd.isna(silhouette) else float(silhouette),
         "曲线差异指标": None if pd.isna(profile_gap) else float(profile_gap),
         "能量差异指标": None if pd.isna(energy_gap) else float(energy_gap),
+        "数据质量合格": bool(quality["ok"]),
+        "数据质量说明": str(quality["reason"]),
+        "异常负荷日数量": int(quality["abnormal_day_count"]),
     }
     return result, weekly_curve, summary
 
@@ -315,6 +387,9 @@ def infer_company_main_workrest_pattern(
             "轮廓系数": summary_row["轮廓系数"],
             "曲线差异指标": summary_row["曲线差异指标"],
             "能量差异指标": summary_row["能量差异指标"],
+            "数据质量合格": summary_row.get("数据质量合格", True),
+            "数据质量说明": summary_row.get("数据质量说明", "质量合格"),
+            "异常负荷日数量": summary_row.get("异常负荷日数量", 0),
         })
     week_pattern_df = pd.DataFrame(rows)
     valid_df = week_pattern_df[week_pattern_df["是否完整周"]].copy()
@@ -351,52 +426,94 @@ def revise_week_labels_by_main_pattern(
     main_pattern: str | None,
 ) -> pd.DataFrame:
     revised_rows = []
+
+    def finish_week(grp: pd.DataFrame, week_type: str, rule: str, *, use_for_modeling: bool, exclude_reason: str = "") -> pd.DataFrame:
+        grp = grp.copy()
+        grp["最终周内类别编码"] = grp["最终周内类别名称"].map(FINAL_CAT_CODE_MAP)
+        grp["周类型"] = week_type
+        grp["修正规则"] = rule
+        grp["参与典型曲线建模"] = bool(use_for_modeling)
+        grp["建模剔除原因"] = "" if use_for_modeling else exclude_reason
+        return grp
+
     for week_start, grp in weekly_day_result.groupby("周起始日", sort=True):
         grp = grp.copy()
         pattern_row = week_pattern_df.loc[week_pattern_df["周起始日"] == week_start].iloc[0]
         summary_row = weekly_summary_result.loc[weekly_summary_result["周起始日"] == week_start].iloc[0]
         this_pattern = pattern_row["初判周模式编码"]
         silhouette = summary_row["轮廓系数"]
+        quality_ok = bool(summary_row.get("数据质量合格", True))
+        quality_reason = str(summary_row.get("数据质量说明", "质量合格"))
         grp["初判周模式编码"] = this_pattern
         grp["公司主工休模式"] = main_pattern
         grp["公司主工休模式说明"] = pattern_to_text(main_pattern) if main_pattern else "无法识别"
         grp["与主模式偏离天数"] = count_pattern_mismatch(this_pattern, main_pattern) if main_pattern else None
         if main_pattern is None:
             grp["最终周内类别名称"] = grp["初判周内类别名称"]
-            grp["最终周内类别编码"] = grp["最终周内类别名称"].map(FINAL_CAT_CODE_MAP)
-            grp["周类型"] = "无法识别主模式"
-            grp["修正规则"] = "未识别到公司主工休模式，保留初判结果"
-            revised_rows.append(grp)
+            use_for_modeling = quality_ok
+            rule = "未识别到公司主工休模式，保留初判结果"
+            if not quality_ok:
+                rule = f"{rule}；该周数据质量异常，不参与典型曲线均值"
+            revised_rows.append(
+                finish_week(
+                    grp,
+                    "无法识别主模式",
+                    rule,
+                    use_for_modeling=use_for_modeling,
+                    exclude_reason=quality_reason,
+                )
+            )
             continue
+
+        def apply_main_pattern(day_idx: int) -> str:
+            ch = main_pattern[day_idx]
+            return PATTERN_CHAR_TO_NAME.get(ch, "同类日")
+
+        if not quality_ok:
+            grp["最终周内类别名称"] = grp["星期序号"].apply(apply_main_pattern)
+            revised_rows.append(
+                finish_week(
+                    grp,
+                    "数据质量修正周",
+                    f"数据质量异常（{quality_reason}），按公司主工休模式修正标签并剔除建模均值",
+                    use_for_modeling=False,
+                    exclude_reason=quality_reason,
+                )
+            )
+            continue
+
         if this_pattern == main_pattern:
             grp["最终周内类别名称"] = grp["初判周内类别名称"]
-            grp["最终周内类别编码"] = grp["最终周内类别名称"].map(FINAL_CAT_CODE_MAP)
-            grp["周类型"] = "主模式周"
-            grp["修正规则"] = "与主模式完全一致"
-            revised_rows.append(grp)
+            revised_rows.append(
+                finish_week(grp, "主模式周", "与主模式完全一致", use_for_modeling=True)
+            )
             continue
         if this_pattern == "SSSSSSS":
             grp["最终周内类别名称"] = grp["初判周内类别名称"]
-            grp["最终周内类别编码"] = grp["最终周内类别名称"].map(FINAL_CAT_CODE_MAP)
-            grp["周类型"] = "特殊周"
-            grp["修正规则"] = "本周为 SSSSSSS，特殊周保留"
-            revised_rows.append(grp)
+            revised_rows.append(
+                finish_week(grp, "特殊周", "本周为 SSSSSSS，特殊周保留", use_for_modeling=True)
+            )
             continue
         if silhouette is not None and not pd.isna(silhouette) and silhouette >= SPECIAL_WEEK_SIL_THRESHOLD:
             grp["最终周内类别名称"] = grp["初判周内类别名称"]
-            grp["最终周内类别编码"] = grp["最终周内类别名称"].map(FINAL_CAT_CODE_MAP)
-            grp["周类型"] = "特殊周"
-            grp["修正规则"] = f"与主模式不一致且轮廓系数≥{SPECIAL_WEEK_SIL_THRESHOLD:.2f}，特殊周保留"
-            revised_rows.append(grp)
+            revised_rows.append(
+                finish_week(
+                    grp,
+                    "特殊周",
+                    f"与主模式不一致且轮廓系数≥{SPECIAL_WEEK_SIL_THRESHOLD:.2f}，特殊周保留",
+                    use_for_modeling=True,
+                )
+            )
             continue
-        def apply_main_pattern(day_idx: int) -> str:
-            ch = main_pattern[day_idx]
-            return PATTERN_CHAR_TO_NAME[ch]
         grp["最终周内类别名称"] = grp["星期序号"].apply(apply_main_pattern)
-        grp["最终周内类别编码"] = grp["最终周内类别名称"].map(FINAL_CAT_CODE_MAP)
-        grp["周类型"] = "主模式修正周"
-        grp["修正规则"] = "轻微偏离主模式且分类不够稳定，按主模式修正"
-        revised_rows.append(grp)
+        revised_rows.append(
+            finish_week(
+                grp,
+                "主模式修正周",
+                "轻微偏离主模式且分类不够稳定，按主模式修正",
+                use_for_modeling=True,
+            )
+        )
     revised_day_result = pd.concat(revised_rows, ignore_index=True)
     return revised_day_result
 
@@ -499,6 +616,11 @@ def build_final_daily_mapping(
         "与主模式偏离天数",
         "周类型",
         "修正规则",
+        "数据质量合格",
+        "数据质量说明",
+        "异常负荷日",
+        "参与典型曲线建模",
+        "建模剔除原因",
     ]
     mapping = mapping.merge(revised_day_result[day_cols], on="日期", how="left")
     mapping = mapping.merge(
@@ -515,30 +637,117 @@ def build_final_daily_mapping(
     return mapping
 
 
+def merge_sparse_combo_models(
+    daily: pd.DataFrame,
+    daily_mapping: pd.DataFrame,
+    min_sample_days: int = MIN_COMBO_SAMPLE_DAYS,
+) -> pd.DataFrame:
+    mapping = daily_mapping.copy()
+    if mapping.empty or "组合模型编号" not in mapping.columns:
+        return mapping
+
+    mapping["原始组合模型编号"] = mapping["组合模型编号"]
+    mapping["原始组合模型名称"] = mapping["组合模型名称"]
+    mapping["组合合并说明"] = "未合并"
+
+    time_cols = list(range(POINTS_PER_DAY))
+    merged = daily[["日期", *time_cols]].merge(mapping, on="日期", how="left")
+    stats: dict[str, dict] = {}
+    for model_id, grp in merged.groupby("组合模型编号", sort=True):
+        if pd.isna(model_id):
+            continue
+        mat = grp[time_cols].to_numpy(dtype=float)
+        stats[str(model_id)] = {
+            "count": int(len(grp)),
+            "curve": mat.mean(axis=0),
+            "name": str(grp["组合模型名称"].iloc[0]),
+            "day_code": int(grp["最终周内类别编码"].iloc[0]),
+            "year_code": int(grp["年类编码"].iloc[0]),
+        }
+
+    if len(stats) <= 1:
+        return mapping
+
+    stable_ids = [model_id for model_id, meta in stats.items() if meta["count"] >= min_sample_days]
+    if not stable_ids:
+        return mapping
+
+    replacements: dict[str, str] = {}
+    for model_id, meta in stats.items():
+        if meta["count"] >= min_sample_days:
+            continue
+        same_day_candidates = [
+            candidate_id for candidate_id in stable_ids
+            if stats[candidate_id]["day_code"] == meta["day_code"]
+        ]
+        candidates = same_day_candidates or stable_ids
+        target_id = min(
+            candidates,
+            key=lambda candidate_id: (
+                0 if stats[candidate_id]["day_code"] == meta["day_code"] else 1,
+                abs(stats[candidate_id]["year_code"] - meta["year_code"]),
+                float(np.linalg.norm(meta["curve"] - stats[candidate_id]["curve"])),
+            ),
+        )
+        replacements[model_id] = target_id
+
+    for source_id, target_id in replacements.items():
+        mask = mapping["组合模型编号"].astype(str) == source_id
+        target = stats[target_id]
+        mapping.loc[mask, "组合模型编号"] = target_id
+        mapping.loc[mask, "组合模型名称"] = target["name"]
+        mapping.loc[mask, "组合合并说明"] = (
+            f"样本天数{stats[source_id]['count']}<{min_sample_days}，"
+            f"并入{target_id} {target['name']}"
+        )
+
+    return mapping.sort_values("日期").reset_index(drop=True)
+
+
 def build_model_library(daily: pd.DataFrame, daily_mapping: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
+    mapping_cols = [c for c in daily_mapping.columns if c != "日期"]
     merged = daily.merge(
-        daily_mapping[["日期", "组合模型编号", "组合模型名称"]],
+        daily_mapping[["日期", *mapping_cols]],
         on="日期",
         how="left",
     )
     time_cols = list(range(POINTS_PER_DAY))
     curve_rows = []
     summary_rows = []
+    total_days = max(len(daily_mapping), 1)
     for model_id, grp in merged.groupby("组合模型编号", sort=True):
-        mat = grp[time_cols].to_numpy(dtype=float)
+        use_mask = grp.get("参与典型曲线建模", pd.Series(True, index=grp.index)).fillna(True).astype(bool)
+        curve_source = grp[use_mask].copy()
+        if curve_source.empty:
+            curve_source = grp.copy()
+        mat = curve_source[time_cols].to_numpy(dtype=float)
         mean_curve = mat.mean(axis=0)
         model_name = grp["组合模型名称"].iloc[0]
+        mapped_days = int(len(grp))
+        curve_days = int(len(curve_source))
+        merged_sources = sorted(set(grp.get("原始组合模型编号", grp["组合模型编号"]).astype(str).tolist()))
+        merged_day_count = int((grp.get("组合合并说明", pd.Series("未合并", index=grp.index)) != "未合并").sum())
         summary_rows.append(
             {
                 "组合模型编号": model_id,
                 "组合模型名称": model_name,
-                "包含天数": len(grp),
+                "包含天数": mapped_days,
+                "年度权重天数": mapped_days,
+                "年度权重比例": round(mapped_days / total_days, 6),
+                "曲线建模天数": curve_days,
+                "曲线建模占比": round(curve_days / max(mapped_days, 1), 6),
+                "合并来源组合数": len(merged_sources),
+                "合并来源组合": ",".join(merged_sources),
+                "被合并日期数": merged_day_count,
                 "平均日负荷": float(mat.mean()),
                 "平均日峰值": float(mat.max(axis=1).mean()),
                 "平均日谷值": float(mat.min(axis=1).mean()),
             }
         )
         row = pd.DataFrame([mean_curve], columns=TIME_LABELS)
+        row.insert(0, "曲线建模天数", curve_days)
+        row.insert(0, "年度权重比例", round(mapped_days / total_days, 6))
+        row.insert(0, "年度权重天数", mapped_days)
         row.insert(0, "组合模型名称", model_name)
         row.insert(0, "组合模型编号", model_id)
         curve_rows.append(row)
@@ -562,7 +771,7 @@ def plot_weekly_work_rest_final(daily_mapping: pd.DataFrame, out_file: Path) -> 
     plt.title("全年逐日工休划分结果（最终，1h级）")
     plt.grid(alpha=0.25, linestyle="--")
     plt.tight_layout()
-    plt.savefig(out_file, dpi=200, bbox_inches="tight")
+    plt.savefig(out_file, format="svg", bbox_inches="tight")
     plt.close()
 
 
@@ -584,12 +793,14 @@ def plot_annual_periods(annual_period_result: pd.DataFrame, out_file: Path) -> N
     plt.grid(alpha=0.25, linestyle="--")
     plt.legend()
     plt.tight_layout()
-    plt.savefig(out_file, dpi=200, bbox_inches="tight")
+    plt.savefig(out_file, format="svg", bbox_inches="tight")
     plt.close()
 
 
 def plot_model_library(model_curve_df: pd.DataFrame, out_file: Path) -> None:
-    time_cols = [c for c in model_curve_df.columns if c not in ["组合模型编号", "组合模型名称"]]
+    time_cols = [c for c in TIME_LABELS if c in model_curve_df.columns]
+    if len(time_cols) != POINTS_PER_DAY:
+        raise ValueError(f"组合典型日曲线缺少标准 24 小时时刻列，当前识别到 {len(time_cols)} 个。")
     x = np.arange(len(time_cols))
     plt.figure(figsize=(15, 6))
     for _, row in model_curve_df.iterrows():
@@ -601,7 +812,7 @@ def plot_model_library(model_curve_df: pd.DataFrame, out_file: Path) -> None:
     plt.grid(alpha=0.25, linestyle="--")
     plt.legend(fontsize=8, ncol=2)
     plt.tight_layout()
-    plt.savefig(out_file, dpi=200, bbox_inches="tight")
+    plt.savefig(out_file, format="svg", bbox_inches="tight")
     plt.close()
 
 
@@ -670,6 +881,11 @@ def save_summary_txt(
     if not daily_mapping.empty:
         week_type_stat = daily_mapping[["周起始日", "周类型"]].drop_duplicates()["周类型"].value_counts().to_dict()
         lines.append(f"周类型统计：{week_type_stat}")
+        modeling_mask = daily_mapping.get("参与典型曲线建模", pd.Series(True, index=daily_mapping.index)).astype(bool)
+        excluded_days = int((~modeling_mask).sum())
+        merged_days = int((daily_mapping.get("组合合并说明", pd.Series("未合并", index=daily_mapping.index)) != "未合并").sum())
+        lines.append(f"未参与典型曲线均值的低质量天数：{excluded_days}")
+        lines.append(f"小样本组合合并影响天数：{merged_days}")
         lines.append("")
     lines.append("最终组合模型：")
     for _, row in model_summary_df.iterrows():
@@ -705,6 +921,7 @@ def process_one_company(file_path: Path, output_root: Path) -> None:
         revised_day_result,
         annual_period_result
     )
+    daily_mapping = merge_sparse_combo_models(daily, daily_mapping)
     model_summary_df, model_curve_df = build_model_library(daily, daily_mapping)
     save_excel_results(
         company_dir,
@@ -720,9 +937,9 @@ def process_one_company(file_path: Path, output_root: Path) -> None:
         model_summary_df,
         model_curve_df,
     )
-    plot_weekly_work_rest_final(daily_mapping, company_dir / "01_全年工休划分示意图.png")
-    plot_annual_periods(annual_period_result, company_dir / "02_年度峰谷分段示意图.png")
-    plot_model_library(model_curve_df, company_dir / "03_组合典型日曲线.png")
+    plot_weekly_work_rest_final(daily_mapping, company_dir / "01_全年工休划分示意图.svg")
+    plot_annual_periods(annual_period_result, company_dir / "02_年度峰谷分段示意图.svg")
+    plot_model_library(model_curve_df, company_dir / "03_组合典型日曲线.svg")
     save_summary_txt(
         company_dir,
         company_name,
@@ -771,6 +988,6 @@ def process_raw_data(raw_excel_path: str | Path, output_dir: str | Path) -> dict
             shutil.move(str(f), str(output_root / f.name))
         nested_dir.rmdir()
 
-    charts = sorted([p.name for p in output_root.glob("*.png")], key=lambda x: x)
+    charts = sorted([p.name for p in output_root.glob("*.svg")], key=lambda x: x)
     excel_files = sorted([p.name for p in output_root.glob("*.xlsx")], key=lambda x: x)
     return {"charts": charts, "excel_files": excel_files, "error": None}

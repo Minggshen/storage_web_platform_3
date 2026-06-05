@@ -428,7 +428,9 @@ def build_distribution_tables(daily_mapping: pd.DataFrame) -> tuple[pd.DataFrame
 
 
 def plot_model_curves(model_curve_df: pd.DataFrame, out_file: Path) -> None:
-    time_cols = [c for c in model_curve_df.columns if c not in ["模型编号", "模型名称"]]
+    time_cols = [c for c in TIME_LABELS if c in model_curve_df.columns]
+    if len(time_cols) != POINTS_PER_DAY:
+        raise ValueError(f"居民典型日曲线缺少标准时刻列，当前识别到 {len(time_cols)} 个。")
     x = np.arange(len(time_cols))
     plt.figure(figsize=(15, 6))
     for _, row in model_curve_df.iterrows():
@@ -443,7 +445,7 @@ def plot_model_curves(model_curve_df: pd.DataFrame, out_file: Path) -> None:
     plt.grid(alpha=0.25, linestyle="--")
     plt.legend(fontsize=8, ncol=2)
     plt.tight_layout()
-    plt.savefig(out_file, dpi=200, bbox_inches="tight")
+    plt.savefig(out_file, format="svg", bbox_inches="tight")
     plt.close()
 
 
@@ -461,7 +463,7 @@ def plot_daily_model_mapping(daily_mapping: pd.DataFrame, out_file: Path) -> Non
     plt.title("全年逐日居民模型映射结果")
     plt.grid(alpha=0.25, linestyle="--")
     plt.tight_layout()
-    plt.savefig(out_file, dpi=200, bbox_inches="tight")
+    plt.savefig(out_file, format="svg", bbox_inches="tight")
     plt.close()
 
 
@@ -482,7 +484,7 @@ def plot_month_distribution(month_dist: pd.DataFrame, out_file: Path) -> None:
     plt.grid(axis="y", alpha=0.25, linestyle="--")
     plt.legend()
     plt.tight_layout()
-    plt.savefig(out_file, dpi=200, bbox_inches="tight")
+    plt.savefig(out_file, format="svg", bbox_inches="tight")
     plt.close()
 
 
@@ -566,9 +568,9 @@ def process_one_company(file_path: Path, output_root: Path) -> None:
         weekday_dist,
         eval_df,
     )
-    plot_model_curves(model_curve_df, company_dir / "01_居民典型日曲线.png")
-    plot_daily_model_mapping(daily_mapping, company_dir / "02_全年逐日模型映射.png")
-    plot_month_distribution(month_dist, company_dir / "03_模型月度分布.png")
+    plot_model_curves(model_curve_df, company_dir / "01_居民典型日曲线.svg")
+    plot_daily_model_mapping(daily_mapping, company_dir / "02_全年逐日模型映射.svg")
+    plot_month_distribution(month_dist, company_dir / "03_模型月度分布.svg")
     save_summary_txt(
         company_dir,
         company_name,
@@ -619,7 +621,7 @@ def process_raw_data(raw_excel_path: str | Path, output_dir: str | Path) -> dict
         nested_dir.rmdir()
 
     charts = sorted(
-        [p.name for p in output_root.glob("*.png")],
+        [p.name for p in output_root.glob("*.svg")],
         key=lambda x: x
     )
     excel_files = sorted(

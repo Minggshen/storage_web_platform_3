@@ -93,11 +93,18 @@ def load_model_library(lib_xlsx: Path) -> pd.DataFrame:
     if missing:
         raise ValueError(f'{lib_xlsx.name} 的模型24点曲线缺少必要列：{missing}')
     hour_cols = find_hour_columns(df)
-    out = df[required_cols + hour_cols].copy()
+    optional_cols = [
+        c for c in ["年度权重天数", "年度权重比例", "曲线建模天数"]
+        if c in df.columns
+    ]
+    out = df[required_cols + optional_cols + hour_cols].copy()
     out = out.rename(
         columns={
             "组合模型编号": "external_model_id",
             "组合模型名称": "model_name",
+            "年度权重天数": "model_weight_days",
+            "年度权重比例": "model_weight_ratio",
+            "曲线建模天数": "curve_sample_days",
         }
     )
     out["external_model_id"] = out["external_model_id"].apply(normalize_external_model_id)
@@ -111,6 +118,9 @@ def load_model_library(lib_xlsx: Path) -> pd.DataFrame:
     hour_out_cols = [f"h{i:02d}" for i in range(24)]
     for c in hour_out_cols:
         out[c] = pd.to_numeric(out[c], errors="coerce")
+    for c in ["model_weight_days", "model_weight_ratio", "curve_sample_days"]:
+        if c in out.columns:
+            out[c] = pd.to_numeric(out[c], errors="coerce")
     if out[hour_out_cols].isna().any().any():
         bad_mask = out[hour_out_cols].isna().any(axis=1)
         bad_ids = out.loc[bad_mask, "external_model_id"].tolist()
@@ -165,7 +175,11 @@ def build_runtime_model_library(
         raise ValueError(f"模型库中存在无法映射的外部模型编号：{bad_ids}")
     out["internal_model_id"] = out["internal_model_id"].astype(int)
     hour_cols = [f"h{i:02d}" for i in range(24)]
-    out = out[["internal_model_id", "external_model_id", "model_name"] + hour_cols].copy()
+    optional_cols = [
+        c for c in ["model_weight_days", "model_weight_ratio", "curve_sample_days"]
+        if c in out.columns
+    ]
+    out = out[["internal_model_id", "external_model_id", "model_name"] + optional_cols + hour_cols].copy()
     out = out.sort_values("internal_model_id").reset_index(drop=True)
     return out
 

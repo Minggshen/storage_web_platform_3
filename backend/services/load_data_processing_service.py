@@ -174,7 +174,7 @@ class LoadDataProcessingService:
         return deleted
 
     def list_preview_files(self, project_id: str, node_id: str) -> list[dict]:
-        """列出某节点下所有可预览文件（PNG + CSV + TXT）"""
+        """列出某节点下所有可预览文件（SVG/PNG + CSV + TXT）"""
         project_dir = self.project_service._project_dir(project_id)
         safe_node_id = self.project_service.safe_path_segment(node_id, "节点编号")
         model_dir = project_dir / "modeling_output" / safe_node_id
@@ -187,7 +187,7 @@ class LoadDataProcessingService:
             for f in sorted(d.rglob("*")):
                 if not f.is_file():
                     continue
-                if f.suffix.lower() == ".png":
+                if f.suffix.lower() in {".svg", ".png"}:
                     files.append({"name": f.name, "type": "image"})
                 elif f.suffix.lower() == ".csv":
                     files.append({"name": f.name, "type": "csv"})
