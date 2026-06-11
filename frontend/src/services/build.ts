@@ -125,6 +125,8 @@ export type BuildPreviewResponse = {
   summary: {
     project_id: string;
     project_name: string;
+    topology_hash?: string;
+    build_input_hash?: string;
     ready_for_build: boolean;
     warnings: string[];
     errors: string[];
@@ -146,9 +148,25 @@ export type BuildManifest = {
   success: boolean;
   project_id: string;
   project_name: string;
+  generated_at?: string;
+  topology_hash?: string;
+  topology_hash_current?: string;
+  build_input_hash?: string;
+  build_input_hash_current?: string;
+  manifest_stale?: boolean;
   build_dir: string;
   inputs_dir: string;
   ready_for_build: boolean;
+  ready_for_solver?: boolean;
+  build_gate?: {
+    ready_for_solver_gate?: boolean;
+    topology_ready?: boolean;
+    dss_structural_passed?: boolean;
+    opendss_probe_passed?: boolean;
+    opendss_probe_status?: string;
+    warnings?: string[];
+    errors?: string[];
+  };
   warnings: string[];
   errors: string[];
   topology_summary: {
@@ -167,6 +185,8 @@ export type BuildManifest = {
     dss_master_path: string;
     status: string;
     notes: string[];
+    warnings?: string[];
+    errors?: string[];
   };
   solver_workspace?: {
     project_id?: string;

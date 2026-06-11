@@ -26,8 +26,14 @@ WEEK_ENERGY_GAP_THRESHOLD = 0.04
 
 SPECIAL_WEEK_SIL_THRESHOLD = 0.15
 
-YEAR_CLUSTER_SIL_THRESHOLD = 0.18
-YEAR_MAX_CLUSTERS = 5
+YEAR_LEVEL_COUNT = 5
+YEAR_LEVEL_NAMES = {
+    1: "高负荷期",
+    2: "较高负荷期",
+    3: "中负荷期",
+    4: "较低负荷期",
+    5: "低负荷期",
+}
 
 MIN_COMBO_SAMPLE_DAYS = 5
 WEEK_QUALITY_MIN_DAYS = 5
@@ -543,46 +549,17 @@ def build_weekly_feature_table(daily: pd.DataFrame) -> pd.DataFrame:
 def classify_annual_periods(weekly_feature: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
     if weekly_feature.empty:
         raise ValueError("weekly_feature 为空，无法进行年度峰谷分段。")
-    feature_cols = ["周平均负荷", "周峰值负荷", "周谷值负荷", "周负荷标准差", "周平均日峰谷差", "周日均负荷"]
-    X = weekly_feature[feature_cols].to_numpy(dtype=float)
-    n_weeks = len(weekly_feature)
-    best_labels = np.zeros(n_weeks, dtype=int)
-    best_score = -1.0
-    if n_weeks >= 6:
-        X_std = StandardScaler().fit_transform(X)
-        for k in range(2, min(YEAR_MAX_CLUSTERS, n_weeks - 1) + 1):
-            km = KMeans(n_clusters=k, n_init=10, random_state=RANDOM_STATE)
-            labels = km.fit_predict(X_std)
-            counts = pd.Series(labels).value_counts()
-            if counts.min() < 2:
-                continue
-            score = silhouette_score(X_std, labels)
-            if score > best_score:
-                best_labels = labels.copy()
-                best_score = score
-        if best_score < YEAR_CLUSTER_SIL_THRESHOLD:
-            best_labels = np.zeros(n_weeks, dtype=int)
-    out = weekly_feature.copy()
-    out["原始年类簇"] = best_labels
-    rank_order = (
-        out.groupby("原始年类簇")["周平均负荷"]
-        .mean()
-        .sort_values(ascending=False)
-        .index
-        .tolist()
-    )
-    raw_to_rank = {raw: idx + 1 for idx, raw in enumerate(rank_order)}
-    out["年类编码"] = out["原始年类簇"].map(raw_to_rank)
-    total_classes = len(rank_order)
-    def name_by_rank(rank: int) -> str:
-        if total_classes == 1:
-            return "常规期"
-        if rank == 1:
-            return "高负荷期"
-        if rank == total_classes:
-            return "低负荷期"
-        return f"中间负荷期{rank - 1}"
-    out["年类名称"] = out["年类编码"].apply(name_by_rank)
+    out = weekly_feature.copy().reset_index(drop=True)
+    n_weeks = len(out)
+    class_count = min(YEAR_LEVEL_COUNT, n_weeks)
+    sorted_idx = out.sort_values(["周平均负荷", "周峰值负荷"], ascending=[False, False]).index.to_numpy()
+    codes = np.ones(n_weeks, dtype=int)
+    for pos, idx in enumerate(sorted_idx):
+        codes[int(idx)] = min(int(pos * class_count / max(n_weeks, 1)) + 1, class_count)
+
+    out["原始年类簇"] = codes
+    out["年类编码"] = codes
+    out["年类名称"] = out["年类编码"].apply(lambda code: YEAR_LEVEL_NAMES.get(int(code), f"负荷水平{int(code)}"))
     summary = (
         out.groupby(["年类编码", "年类名称"], as_index=False)
         .agg(
@@ -593,8 +570,9 @@ def classify_annual_periods(weekly_feature: pd.DataFrame) -> tuple[pd.DataFrame,
         )
         .sort_values("年类编码")
     )
-    summary.insert(0, "自动识别年类总数", total_classes)
-    summary.insert(1, "最佳轮廓系数", None if best_score < 0 else round(best_score, 4))
+    summary.insert(0, "自动识别年类总数", class_count)
+    summary.insert(1, "最佳轮廓系数", None)
+    summary.insert(2, "年度分档方式", "按周平均负荷固定五档分位")
     return out, summary
 
 

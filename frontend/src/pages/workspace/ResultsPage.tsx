@@ -1,6 +1,8 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import { ErrorBanner } from '@/components/common/ErrorBanner';
+import { ConfirmDialog } from '@/components/common/ConfirmDialog';
+import { Trash2 } from 'lucide-react';
 import {
   Bar,
   BarChart,
@@ -21,6 +23,7 @@ import {
   ZAxis,
 } from 'recharts';
 import {
+  deleteSolverTask,
   fetchReportData,
   fetchResultCharts,
   fetchResultFilePreview,
@@ -122,6 +125,10 @@ function taskStatusText(status: unknown): string {
   if (text === 'cancelled' || text === 'cancelling' || text === 'canceling') return '已取消';
   if (text === 'queued') return '排队中';
   return text || '--';
+}
+
+function isTaskActive(status: unknown): boolean {
+  return ['running', 'queued', 'cancelling', 'canceling'].includes(String(status ?? '').trim().toLowerCase());
 }
 
 function taskOptionLabel(task: SolverTask): string {
@@ -321,6 +328,8 @@ export default function ResultsPage() {
   const [manualTaskSelection, setManualTaskSelection] = useState(false);
   const [lastUpdatedAt, setLastUpdatedAt] = useState<string | null>(null);
   const [solverRunning, setSolverRunning] = useState(false);
+  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
+  const [deletingTask, setDeletingTask] = useState(false);
 
   const primary = useMemo<GenericRow | null>(() => {
     if (!summary) return null;
@@ -344,12 +353,12 @@ export default function ResultsPage() {
     }
   }
 
-  async function loadSummaryAndFiles(silent = false) {
+  async function loadSummaryAndFiles(silent = false, taskIdOverride?: string | null) {
     if (!projectId) return;
     if (!silent) setLoading(true);
     setError(null);
     try {
-      const taskId = selectedTaskId || undefined;
+      const taskId = taskIdOverride === undefined ? selectedTaskId || undefined : taskIdOverride || undefined;
       const [summaryData, fileData, chartData] = await Promise.all([
         fetchSolverSummary(projectId, taskId),
         fetchResultFiles(projectId, taskId),
@@ -409,6 +418,29 @@ export default function ResultsPage() {
     }
   }
 
+  async function handleDeleteSelectedTask() {
+    const taskId = selectedTaskId;
+    if (!projectId || !taskId || deletingTask) return;
+    setDeletingTask(true);
+    setError(null);
+    try {
+      await deleteSolverTask(projectId, taskId);
+      setManualTaskSelection(false);
+      setSelectedTaskId('');
+      setSelectedFile(null);
+      setPreview(null);
+      setSummary(null);
+      setCharts(null);
+      setFiles([]);
+      await loadTaskOptions(true);
+      await loadSummaryAndFiles(true, null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setDeletingTask(false);
+    }
+  }
+
   useEffect(() => {
     setTasks([]);
     setSelectedTaskId('');
@@ -439,6 +471,12 @@ export default function ResultsPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [projectId, selectedTaskId, manualTaskSelection]);
 
+  const selectedTask = useMemo(
+    () => tasks.find((task) => task.task_id === selectedTaskId) ?? null,
+    [tasks, selectedTaskId],
+  );
+  const selectedTaskActive = selectedTask ? isTaskActive(selectedTask.status) : false;
+  const canDeleteSelectedTask = Boolean(selectedTaskId && selectedTask && !selectedTaskActive && !deletingTask);
   const summaryRows = summary?.summary_rows ?? [];
   const summaryKeys = summaryRows.length > 0 ? Object.keys(summaryRows[0] as GenericRow) : [];
   const chartData = charts?.charts ?? {};
@@ -575,8 +613,9 @@ export default function ResultsPage() {
   }
 
   return (
-    <div style={{ padding: 24, background: '#f8fafc', minHeight: '100vh' }}>
-      <div style={{ maxWidth: 1360, margin: '0 auto' }} aria-live="polite">
+    <>
+      <div style={{ padding: 24, background: '#f8fafc', minHeight: '100vh' }}>
+        <div style={{ maxWidth: 1360, margin: '0 auto' }} aria-live="polite">
         {/* Top bar */}
         <div style={{ marginBottom: 16, display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
           <h1 style={{ margin: 0, fontSize: 24, fontWeight: 800 }}>结果展示</h1>
@@ -598,6 +637,26 @@ export default function ResultsPage() {
               </option>
             ))}
           </select>
+          <button
+            type="button"
+            onClick={() => setDeleteDialogOpen(true)}
+            style={{
+              ...deleteTaskButtonStyle,
+              opacity: canDeleteSelectedTask ? 1 : 0.52,
+              cursor: canDeleteSelectedTask ? 'pointer' : 'not-allowed',
+            }}
+            disabled={!canDeleteSelectedTask}
+            title={
+              !selectedTaskId
+                ? '请先选择一个具体任务'
+                : selectedTaskActive
+                  ? '运行中任务不能直接删除，请先终止或等待结束'
+                  : '删除所选求解任务'
+            }
+          >
+            <Trash2 size={15} strokeWidth={2.2} />
+            {deletingTask ? '删除中...' : '删除所选任务'}
+          </button>
           {loading ? <span style={{ color: '#64748b', fontSize: 12 }}>加载中...</span> : null}
           <span style={{ color: '#6b7280', fontSize: 11, marginLeft: 'auto' }}>
             {lastUpdatedAt ? `自动刷新：${lastUpdatedAt}` : ''}
@@ -1044,7 +1103,16 @@ export default function ResultsPage() {
           </div>
         </section>
       </div>
-    </div>
+      </div>
+      <ConfirmDialog
+        open={deleteDialogOpen}
+        onOpenChange={setDeleteDialogOpen}
+        title="删除求解任务"
+        description={`将永久删除任务 ${selectedTaskId || '--'} 的状态、日志、求解工作区副本和结果文件；项目拓扑、资产、构建工作区、负荷建模数据以及其他任务不会删除。该操作不可恢复。`}
+        onConfirm={handleDeleteSelectedTask}
+        variant="danger"
+      />
+    </>
   );
 }
 
@@ -2086,6 +2154,7 @@ function findStoragePath(nodes: ProjectedTopologyNode[], edges: ResultChartPoint
       });
     }
   }
+
   return emptyPath;
 }
 
@@ -3660,6 +3729,17 @@ const legendStyle: React.CSSProperties = { display: 'flex', gap: '8px 14px', fle
 const legendItemStyle: React.CSSProperties = { display: 'inline-flex', alignItems: 'center', gap: 5, color: '#374151', fontSize: 13, fontWeight: 600 };
 const legendSwatchStyle: React.CSSProperties = { display: 'inline-block', width: 12, height: 12, borderRadius: 2, marginRight: 8, verticalAlign: '-1px' };
 const btnStyle: React.CSSProperties = { padding: '10px 14px', borderRadius: 8, border: '1px solid #cbd5e1', background: '#f1f5f9', fontWeight: 600, cursor: 'pointer' };
+const deleteTaskButtonStyle: React.CSSProperties = {
+  display: 'inline-flex',
+  alignItems: 'center',
+  gap: 6,
+  padding: '9px 12px',
+  borderRadius: 8,
+  border: '1px solid #fecaca',
+  background: '#fef2f2',
+  color: '#b91c1c',
+  fontWeight: 700,
+};
 const taskSelectStyle: React.CSSProperties = { minWidth: 320, maxWidth: '100%', padding: '9px 12px', borderRadius: 8, border: '1px solid #d1d5db', background: '#fff', color: '#111827', fontWeight: 600 };
 const smallBtnStyle: React.CSSProperties = { padding: '7px 10px', borderRadius: 8, border: '1px solid #cbd5e1', background: '#f1f5f9', fontWeight: 600, cursor: 'pointer', fontSize: 12 };
 const chipBtnStyle: React.CSSProperties = { padding: '7px 10px', borderRadius: 999, border: '1px solid #cbd5e1', background: '#f8fafc', fontWeight: 600, cursor: 'pointer', fontSize: 12, color: '#334155' };

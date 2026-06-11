@@ -129,6 +129,22 @@ def cancel_task(project_id: str, task_id: str) -> dict[str, Any]:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+@router.delete("/project/{project_id}/task/{task_id}")
+def delete_task(project_id: str, task_id: str) -> dict[str, Any]:
+    try:
+        deleted_task = solver_service.delete_task(project_id=project_id, task_id=task_id)
+        return {
+            "success": True,
+            "deleted_task": deleted_task,
+        }
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 @router.get("/project/{project_id}/latest")
 def get_latest_task(project_id: str) -> dict[str, Any]:
     return {

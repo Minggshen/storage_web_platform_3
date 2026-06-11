@@ -79,13 +79,41 @@ class ProjectDashboardService:
             / "build_manifest.json"
         ).exists()
 
-        build_ready = False
+        build_preview_ready = False
+        build_solver_ready = False
+        build_manifest_stale = False
+        build_failed = False
+        build_detail: str | None = None
         try:
             preview = self.build_service.preview_build(project_id)
             summary = preview.get("summary") if isinstance(preview.get("summary"), dict) else {}
-            build_ready = bool(summary.get("ready_for_build"))
+            build_preview_ready = bool(summary.get("ready_for_build"))
         except Exception:
             preview = {}
+
+        if build_manifest_exists:
+            try:
+                manifest = self.build_service.read_build_manifest(project_id)
+                workspace = manifest.get("solver_workspace") if isinstance(manifest.get("solver_workspace"), dict) else {}
+                build_manifest_stale = bool(manifest.get("manifest_stale", False))
+                build_solver_ready = bool(workspace.get("ready_for_solver", False)) and not build_manifest_stale
+                if build_manifest_stale:
+                    build_failed = True
+                    build_detail = "构建文件已过期"
+                elif not build_solver_ready:
+                    build_failed = True
+                    first_error = next(
+                        (
+                            str(item)
+                            for item in [*(manifest.get("errors") or []), *(workspace.get("errors") or [])]
+                            if str(item).strip()
+                        ),
+                        "",
+                    )
+                    build_detail = first_error or "Solver Workspace 未就绪"
+            except Exception as exc:
+                build_failed = True
+                build_detail = str(exc)
 
         latest_solver_status: str | None = None
         latest_summary: Dict[str, Any] = {}
@@ -192,7 +220,12 @@ class ProjectDashboardService:
 
         # When historical results exist and no task is running, all steps show as completed
         # (the default view reflects the latest historical task's results).
-        show_all_completed = bool(latest_summary) and latest_solver_status not in {"running", "queued"}
+        show_all_completed = (
+            bool(latest_summary)
+            and latest_solver_status not in {"running", "queued"}
+            and build_solver_ready
+            and not build_failed
+        )
 
         steps = [
             WorkflowStepCard(
@@ -223,9 +256,19 @@ class ProjectDashboardService:
             WorkflowStepCard(
                 key="build",
                 label="构建校验",
-                status=ProjectDashboardStepStatus.COMPLETED if show_all_completed else step_status(build_ready, build_manifest_exists),
+                status=(
+                    ProjectDashboardStepStatus.COMPLETED
+                    if show_all_completed
+                    else step_status(build_preview_ready, build_solver_ready, build_failed)
+                ),
                 route=f"/projects/{project_id}/build",
-                counts={"build_ready": build_ready, "build_manifest_exists": build_manifest_exists},
+                detail=build_detail,
+                counts={
+                    "build_preview_ready": build_preview_ready,
+                    "ready_for_solver": build_solver_ready,
+                    "build_manifest_exists": build_manifest_exists,
+                    "build_manifest_stale": build_manifest_stale,
+                },
             ),
             WorkflowStepCard(
                 key="solver",
@@ -252,7 +295,7 @@ class ProjectDashboardService:
             runtime_bound_load_count=len(runtime_bound),
             has_tariff=has_tariff,
             has_device_library=has_device_library,
-            build_ready=build_ready,
+            build_ready=build_solver_ready,
             build_manifest_exists=build_manifest_exists,
             latest_solver_status=latest_solver_status,
             latest_summary=latest_summary,

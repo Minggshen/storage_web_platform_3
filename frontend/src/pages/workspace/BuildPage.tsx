@@ -31,6 +31,8 @@ export default function BuildPage() {
     if (!projectId) return;
     setLoading(true);
     setError(null);
+    setPreview(null);
+    setManifest(null);
     try {
       const [previewData, manifestData] = await Promise.allSettled([
         fetchBuildPreview(projectId),
@@ -38,6 +40,12 @@ export default function BuildPage() {
       ]);
       if (previewData.status === 'fulfilled') setPreview(previewData.value);
       if (manifestData.status === 'fulfilled') setManifest(manifestData.value);
+      if (previewData.status === 'rejected') {
+        setError(errorMessage(previewData.reason));
+      } else if (manifestData.status === 'rejected') {
+        const message = errorMessage(manifestData.reason);
+        if (!isMissingManifestMessage(message)) setError(message);
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -47,6 +55,10 @@ export default function BuildPage() {
 
   async function onBuild() {
     if (!projectId) return;
+    if (!preview || !preview.summary.ready_for_build) {
+      setError('构建预览尚未加载或校验未通过，请先刷新并修正 Errors 后再生成 Solver Workspace。');
+      return;
+    }
     setBuilding(true);
     setError(null);
     try {
@@ -81,6 +93,9 @@ export default function BuildPage() {
   }, [projectId]);
 
   const workspace = manifest?.solver_workspace;
+  const buildGate = manifest?.build_gate;
+  const manifestStale = Boolean(manifest?.manifest_stale);
+  const solverReady = Boolean(workspace?.ready_for_solver) && !manifestStale;
   const compileSummary = manifest?.dss_compile_summary;
   const structuralChecks = compileSummary?.structural_checks;
   const compileProbe = compileSummary?.opendss_probe;
@@ -96,8 +111,8 @@ export default function BuildPage() {
   const capacityProblemLines = (compileSummary?.line_summary ?? [])
     .filter((item) => item.capacity_check_status === 'insufficient')
     .sort((a, b) => String(a.name ?? a.id ?? '').localeCompare(String(b.name ?? b.id ?? ''), 'zh-CN'));
-  const warnings = preview?.summary.warnings ?? manifest?.warnings ?? [];
-  const errors = preview?.summary.errors ?? manifest?.errors ?? [];
+  const warnings = mergeStringLists(preview?.summary.warnings, manifest?.warnings);
+  const errors = mergeStringLists(preview?.summary.errors, manifest?.errors);
   const workspaceWarnings = workspace?.warnings ?? [];
   const workspaceErrors = workspace?.errors ?? [];
   const overloadedCount = gridHealth?.grid_health.summary.overloaded_transformer_count ?? 0;
@@ -116,21 +131,26 @@ export default function BuildPage() {
           <div className="flex items-center justify-between gap-3 flex-wrap">
             <StepBadge step={1} label="构建 Workspace" />
             <span className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-semibold ${
-              workspace?.ready_for_solver
+              solverReady
                 ? 'border border-emerald-500/30 bg-emerald-500/10 text-emerald-600'
                 : 'border border-amber-500/30 bg-amber-500/10 text-amber-600'
             }`}>
-              {workspace?.ready_for_solver ? 'ready_for_solver ✓' : '未就绪'}
+              {solverReady ? 'ready_for_solver ✓' : manifestStale ? '构建已过期' : '未就绪'}
             </span>
           </div>
           <div className="mb-4 flex gap-2 flex-wrap">
-            <Button size="sm" onClick={() => void onBuild()} disabled={building}>
+            <Button size="sm" onClick={() => void onBuild()} disabled={building || loading || !preview || !preview.summary.ready_for_build}>
               {building ? '构建中...' : '生成 Solver Workspace'}
             </Button>
             <Button variant="outline" size="sm" onClick={() => void loadAll()} disabled={loading}>
               {loading ? '刷新中...' : '刷新'}
             </Button>
           </div>
+          {manifestStale ? (
+            <div className="mb-4 rounded-xl border border-amber-500/30 bg-amber-500/10 p-3 text-sm font-semibold text-amber-700">
+              当前拓扑已变化，现有构建文件已过期。请重新生成 Solver Workspace 后再进入求解。
+            </div>
+          ) : null}
 
         {/* Preview + Workspace */}
         <div className="mb-4 grid gap-4 items-start" style={{ gridTemplateColumns: '1fr 1.5fr' }}>
@@ -165,11 +185,19 @@ export default function BuildPage() {
             <h2 className="mb-3.5 mt-0 text-xl font-bold text-foreground">求解器工作目录</h2>
             {manifest ? (
               <>
+                <SummaryRow label="生成时间" value={formatDateTime(manifest.generated_at)} />
+                <SummaryRow label="构建状态" value={manifestStale ? '已过期' : '当前拓扑匹配'} />
                 <SummaryRow label="DSS 目录" value={manifest.dss_dir} />
                 <SummaryRow label="Master.dss" value={manifest.dss_master_path} />
                 <SummaryRow label="workspace" value={workspace?.workspace_dir ?? '--'} />
-                <SummaryRow label="ready_for_solver" value={String(workspace?.ready_for_solver ?? false)} />
+                <SummaryRow label="ready_for_solver" value={String(solverReady)} />
                 <SummaryRow label="registry 行数" value={String(workspace?.registry_row_count ?? 0)} />
+                <div className="mt-4"><MiniTitle>求解放行门槛</MiniTitle>
+                  <SummaryRow label="拓扑校验" value={gateLabel(buildGate?.topology_ready)} />
+                  <SummaryRow label="DSS 结构自检" value={gateLabel(buildGate?.dss_structural_passed)} />
+                  <SummaryRow label="OpenDSS 探测" value={`${gateLabel(buildGate?.opendss_probe_passed)} (${buildGate?.opendss_probe_status ?? '--'})`} />
+                  <SummaryRow label="综合门槛" value={gateLabel(buildGate?.ready_for_solver_gate)} />
+                </div>
                 <div className="mt-4"><MiniTitle>生成文件</MiniTitle>
                   {manifest.dss_files?.length ? <ul className="m-0 pl-4.5 text-foreground/80 leading-relaxed">{manifest.dss_files.map((item) => <li key={item}>{item}</li>)}</ul> : <div className="text-muted-foreground">暂无文件。</div>}
                 </div>
@@ -201,8 +229,8 @@ export default function BuildPage() {
             <div className="mb-2 flex items-center justify-between gap-3">
               <h2 className="m-0 text-base font-bold text-foreground">DSS 结构自检</h2>
               <LocalBadge
-                tone={structuralChecks?.passed ? 'good' : 'warn'}
-                text={structuralChecks ? (structuralChecks.passed ? '通过' : '存在问题') : '未生成'}
+                tone={structuralSummaryTone(structuralChecks)}
+                text={structuralSummaryLabel(structuralChecks)}
               />
             </div>
             {structuralChecks ? (
@@ -216,7 +244,7 @@ export default function BuildPage() {
                   <div className="flex flex-col gap-2.5">
                     {(structuralChecks.checks ?? []).map((item, i) => (
                       <div key={`${item.name ?? 'check'}_${i}`} className="grid gap-2.5 items-start rounded-xl border border-border bg-muted/30 p-3" style={{ gridTemplateColumns: 'auto 1fr' }}>
-                        <LocalBadge tone={item.status === 'pass' ? 'good' : 'warn'} text={item.status === 'pass' ? 'PASS' : 'FAIL'} />
+                        <LocalBadge tone={checkTone(item.status)} text={checkLabel(item.status)} />
                         <div className="min-w-0">
                           <div className="font-bold text-foreground">{item.name ?? `check_${i + 1}`}</div>
                           <div className="mt-0.5 text-sm text-muted-foreground break-words">{item.detail ?? '--'}</div>
@@ -561,7 +589,7 @@ function LocalBadge(props: { tone: 'good' | 'warn' | 'neutral'; text: string }) 
   );
 }
 
-// ── Utility functions (unchanged) ──
+// ── Utility functions ──
 
 function probeTone(status?: string): 'good' | 'warn' | 'neutral' {
   if (status === 'passed') return 'good';
@@ -574,6 +602,84 @@ function probeLabel(status?: string): string {
   if (status === 'failed') return '失败';
   if (status === 'skipped') return '已跳过';
   return '未生成';
+}
+
+function structuralSummaryTone(checks?: { passed?: boolean; warnings?: string[]; errors?: string[] }): 'good' | 'warn' | 'neutral' {
+  if (!checks) return 'neutral';
+  if (!checks.passed || (checks.errors?.length ?? 0) > 0) return 'warn';
+  if ((checks.warnings?.length ?? 0) > 0) return 'neutral';
+  return 'good';
+}
+
+function structuralSummaryLabel(checks?: { passed?: boolean; warnings?: string[]; errors?: string[] }): string {
+  if (!checks) return '未生成';
+  if (!checks.passed || (checks.errors?.length ?? 0) > 0) return '存在问题';
+  if ((checks.warnings?.length ?? 0) > 0) return '有警告';
+  return '通过';
+}
+
+function checkTone(status?: string): 'good' | 'warn' | 'neutral' {
+  if (status === 'pass') return 'good';
+  if (status === 'warn' || status === 'warning') return 'neutral';
+  return 'warn';
+}
+
+function checkLabel(status?: string): string {
+  if (status === 'pass') return 'PASS';
+  if (status === 'warn' || status === 'warning') return 'WARN';
+  return 'FAIL';
+}
+
+function gateLabel(value?: boolean): string {
+  if (value === true) return '通过';
+  if (value === false) return '未通过';
+  return '未生成';
+}
+
+function mergeStringLists(...lists: Array<string[] | undefined>): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const list of lists) {
+    for (const item of list ?? []) {
+      const text = String(item ?? '').trim();
+      if (!text || seen.has(text)) continue;
+      seen.add(text);
+      out.push(text);
+    }
+  }
+  return out;
+}
+
+function errorMessage(reason: unknown): string {
+  const message = reason instanceof Error ? reason.message : String(reason);
+  try {
+    const parsed = JSON.parse(message) as { detail?: unknown };
+    if (typeof parsed.detail === 'string') return parsed.detail;
+    if (Array.isArray(parsed.detail)) {
+      const details = parsed.detail
+        .map((item) => {
+          if (typeof item === 'string') return item;
+          if (item && typeof item === 'object' && 'msg' in item) return String((item as { msg?: unknown }).msg ?? '');
+          return '';
+        })
+        .filter(Boolean);
+      if (details.length) return details.join('；');
+    }
+  } catch {
+    // Keep the original message when the backend did not return JSON.
+  }
+  return message;
+}
+
+function isMissingManifestMessage(message: string): boolean {
+  return message.includes('构建 manifest 不存在') || message.includes('请先执行构建');
+}
+
+function formatDateTime(value?: string): string {
+  if (!value) return '--';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return date.toLocaleString('zh-CN');
 }
 
 function formatAmp(value?: number | null) {

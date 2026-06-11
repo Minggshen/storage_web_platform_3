@@ -7,7 +7,7 @@ import { ErrorBanner } from '@/components/common/ErrorBanner';
 import { ConfirmDialog } from '@/components/common/ConfirmDialog';
 import type { NodeKind, Selection, TopologyData, TopologyDraft, TopologyEdge, TopologyNode } from './topologyTypes';
 import { CANVAS_HEIGHT, CANVAS_WIDTH, DEFAULT_LINE_CODE, ECONOMIC_DEFAULT_PARAMS, EDGE_ADVANCED_PARAM_KEYS, EMPTY_TOPOLOGY_TEXT, LINE_CODE_OPTIONS, LINE_LEGEND_ITEMS, LOAD_CATEGORY_VISUALS, LOAD_PANEL_INFERRED_KEY_LABELS, LOAD_PANEL_READONLY_INFERRED_KEYS, SERVICE_LINE_DEFAULT_LENGTH_KM, SERVICE_LINE_EMERGENCY_MARGIN, SERVICE_LINE_LINECODE, SERVICE_LINE_LOW_Z_CURRENT_THRESHOLD_A, SERVICE_LINE_MIN_RATED_A, SERVICE_LINE_RESOURCE_MARGIN, SERVICE_LINE_TRANSFORMER_EMERGENCY_MARGIN, TOPOLOGY_WORKBENCH_HEIGHT, WIRE_DATA_CU, WIRE_XR_RATIO } from './topologyConstants';
-import { booleanParam, buildDssPreview, buildNodeDefaultParams, clamp, cleanLoadPanelParams, edgeVisualMeta, editableEdgeParams, editableNodeParams, formatCurrentDisplay, getLoadCategory, getLoadCategoryVisual, getLoadNodeCode, getLoadPowerFactor, getNodeBoundaryPoint, getNodeCenter, getNodeDetail, getNodeLabel, getNodeLabelForNode, getNodeSize, getNodeSizeForNode, getNodeVisualForNode, hasPositiveNumberParam, isBusEquipmentType, isDistributionTransformerNode, isLowSideResourceNode, isResourceType, isTransformerType, lineCodeDefaults, normalizeEconomicParams, normalizeTopology, numberInputValue, numberParam, pickParamKeys, resolveNodeOverlaps, resourceApparentPowerKva, safeNumber, sanitizeNodeParamsForEditor, stringParam, stringifyEconomicParams, stringifyTopology, threePhaseCurrentFromKva } from './topologyUtils';
+import { booleanParam, buildNodeDefaultParams, clamp, cleanLoadPanelParams, edgeVisualMeta, editableEdgeParams, editableNodeParams, formatCurrentDisplay, getLoadCategory, getLoadCategoryVisual, getLoadNodeCode, getLoadPowerFactor, getNodeBoundaryPoint, getNodeCenter, getNodeDetail, getNodeLabel, getNodeLabelForNode, getNodeSize, getNodeSizeForNode, getNodeVisualForNode, hasPositiveNumberParam, isBusEquipmentType, isDistributionTransformerNode, isLowSideResourceNode, isResourceType, isTransformerType, lineCodeDefaults, normalizeEconomicParams, normalizeTopology, numberInputValue, numberParam, pickParamKeys, resolveNodeOverlaps, resourceApparentPowerKva, safeNumber, sanitizeNodeParamsForEditor, stringParam, stringifyEconomicParams, stringifyTopology, threePhaseCurrentFromKva } from './topologyUtils';
 
 export default function TopologyPage() {
   const { projectId = '' } = useParams();
@@ -187,7 +187,6 @@ export default function TopologyPage() {
   const replacementCostEnabled = booleanParam(economicParams, 'include_replacement_cost', true);
   const governmentSubsidyEnabled = booleanParam(economicParams, 'include_government_subsidy', false);
 
-  const dssPreview = useMemo(() => buildDssPreview(topology), [topology]);
   const measuredPropertyPanelStyle = useMemo<React.CSSProperties>(() => {
     if (canvasFullscreen || propertyPanelHeight == null) return propertyPanelStyle;
     return {
@@ -2524,18 +2523,18 @@ function createEdge(fromId: string, toId: string) {
         </div>
 
 
-        {/* Step 4: Model Preview */}
+        {/* Step 4: Topology JSON */}
         <section style={{ ...cardStyle, marginTop: 12, padding: '12px 18px' }}>
           <div
             style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}
             onClick={() => setModelPreviewExpanded(!modelPreviewExpanded)}
           >
             <span style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 24, height: 24, borderRadius: '50%', background: '#2563eb', color: '#fff', fontSize: 11, fontWeight: 800, flexShrink: 0 }}>4</span>
-            <span style={{ fontWeight: 700, fontSize: 14 }}>潮流模型预览</span>
+            <span style={{ fontWeight: 700, fontSize: 14 }}>拓扑 JSON</span>
             <span style={{ fontSize: 10, color: '#94a3b8' }}>{modelPreviewExpanded ? '▼ 点击收起' : '▶ 点击展开'}</span>
           </div>
           {modelPreviewExpanded && (
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, marginTop: 10 }}>
+            <div style={{ marginTop: 10 }}>
               <section style={cardStyle}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
                   <h2 style={{ ...sectionTitleStyle, marginBottom: 0 }}>高级文本编辑</h2>
@@ -2575,28 +2574,6 @@ function createEdge(fromId: string, toId: string) {
                 ) : (
                   <div style={{ color: '#6b7280' }}>高级文本编辑已收起。</div>
                 )}
-              </section>
-
-              <section style={cardStyle}>
-                <h2 style={sectionTitleStyle}>潮流模型文件预览</h2>
-                <textarea
-                  value={dssPreview}
-                  readOnly
-                  spellCheck={false}
-                  style={{
-                    width: '100%',
-                    minHeight: 380,
-                    boxSizing: 'border-box',
-                    border: '1px solid #d1d5db',
-                    borderRadius: 12,
-                    padding: 12,
-                    fontFamily: 'Consolas, Menlo, Monaco, monospace',
-                    fontSize: 12,
-                    lineHeight: 1.5,
-                    resize: 'vertical',
-                    background: '#f8fafc',
-                  }}
-                />
               </section>
             </div>
           )}

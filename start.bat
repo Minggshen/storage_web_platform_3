@@ -110,7 +110,7 @@ if not exist "%~dp0.deps_installed" (
     "!PYTHON_EXE!" -m pip install -e ".[full]" --quiet 2>&1
     if errorlevel 1 (
         echo   [WARN] Full install failed, trying base install ...
-        "!PYTHON_EXE!" -m pip install fastapi uvicorn "pydantic>=2" python-multipart numpy scipy pandas openpyxl pywin32 joblib scikit-learn osqp --quiet 2>&1
+        "!PYTHON_EXE!" -m pip install fastapi uvicorn "pydantic>=2" python-multipart numpy scipy pandas openpyxl pywin32 joblib scikit-learn osqp pytest ruff --quiet 2>&1
     )
     if errorlevel 1 (
         echo   [ERROR] Dependency installation failed.

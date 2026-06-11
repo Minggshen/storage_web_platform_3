@@ -15,6 +15,13 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
+from services.build_signature import (
+    asset_signature,
+    build_input_hash,
+    build_input_signature,
+    stable_hash,
+    topology_hash_from_project,
+)
 from services.project_model_service import ProjectModelService
 from storage_engine_project.optimization.objective_scoring import compute_weighted_objective_scores
 
@@ -64,6 +71,21 @@ class SolverExecutionService:
         return project_id.strip()
 
     @staticmethod
+    def _validate_task_id(task_id: str) -> str:
+        normalized = str(task_id or "").strip()
+        if normalized.startswith("task_"):
+            normalized = normalized.removeprefix("task_")
+        if (
+            not normalized
+            or normalized in {".", ".."}
+            or "/" in normalized
+            or "\\" in normalized
+            or not re.fullmatch(r"[A-Za-z0-9_-]{1,80}", normalized)
+        ):
+            raise ValueError(f"无效的任务编号：{task_id}")
+        return normalized
+
+    @staticmethod
     def _validate_output_subdir_name(value: Any) -> str:
         name = str(value or "integrated_optimization").strip() or "integrated_optimization"
         if (
@@ -88,7 +110,7 @@ class SolverExecutionService:
         return self._project_dir(project_id) / "build"
 
     def _task_dir(self, project_id: str, task_id: str) -> Path:
-        return self._solver_runs_dir(project_id) / f"task_{task_id}"
+        return self._solver_runs_dir(project_id) / f"task_{self._validate_task_id(task_id)}"
 
     @staticmethod
     def _model_dump(model: Any) -> Dict[str, Any]:
@@ -125,13 +147,39 @@ class SolverExecutionService:
 
         request = request or {}
         manifest_path = self._build_dir(project_id) / "manifest" / "build_manifest.json"
+        if not manifest_path.exists():
+            raise FileNotFoundError("未找到 build manifest，请先在构建校验页生成 Solver Workspace。")
         manifest = self._safe_load_json(manifest_path, default={})
+        if isinstance(manifest, dict):
+            manifest_hash = str(manifest.get("topology_hash") or "")
+            manifest_build_input_hash = str(manifest.get("build_input_hash") or "")
+            project_data = self._load_project_data(project_id)
+            current_hash = self._topology_hash_from_project(project_data)
+            current_build_input_hash = self._build_input_hash(project_data)
+            if (
+                not manifest_hash
+                or manifest_hash != current_hash
+                or not manifest_build_input_hash
+                or manifest_build_input_hash != current_build_input_hash
+            ):
+                raise ValueError("build manifest 已过期，请先在构建校验页重新生成 Solver Workspace。")
+        else:
+            raise ValueError("build manifest 格式无效，请重新生成 Solver Workspace。")
         workspace_info = manifest.get("solver_workspace") if isinstance(manifest, dict) else None
         if not isinstance(workspace_info, dict):
             raise FileNotFoundError("未找到 solver workspace，请先在构建校验页执行构建。")
-        if not bool(workspace_info.get("ready_for_solver", False)):
-            errors = workspace_info.get("errors") or []
-            raise ValueError("solver workspace 尚未就绪：" + "；".join(map(str, errors)))
+        build_gate = manifest.get("build_gate") if isinstance(manifest.get("build_gate"), dict) else {}
+        manifest_ready = bool(manifest.get("ready_for_solver", False))
+        gate_ready = bool(build_gate.get("ready_for_solver_gate", False))
+        workspace_ready = bool(workspace_info.get("ready_for_solver", False))
+        if not (manifest_ready and gate_ready and workspace_ready):
+            errors = [
+                *[str(item) for item in manifest.get("errors", []) if str(item).strip()],
+                *[str(item) for item in build_gate.get("errors", []) if str(item).strip()],
+                *[str(item) for item in workspace_info.get("errors", []) if str(item).strip()],
+            ]
+            reason = "；".join(dict.fromkeys(errors)) or "build gate 未通过"
+            raise ValueError(f"solver workspace 尚未就绪：{reason}")
 
         task_id = uuid.uuid4().hex[:12]
         task_dir = self._task_dir(project_id, task_id)
@@ -144,7 +192,7 @@ class SolverExecutionService:
         build_workspace = Path(str(workspace_info["workspace_dir"]))
         task_workspace = task_dir / "solver_workspace"
         if task_workspace.exists():
-            shutil.rmtree(task_workspace)
+            raise FileExistsError(f"任务工作目录已存在：{task_workspace}")
         shutil.copytree(build_workspace, task_workspace)
 
         solver_project_root = self._resolve_solver_project_root(project_id)
@@ -306,6 +354,93 @@ class SolverExecutionService:
         self._write_task_files(task_dir, task)
         return task
 
+    def delete_task(self, project_id: str, task_id: str) -> Dict[str, Any]:
+        normalized_project_id = self._validate_project_id(project_id)
+        normalized_task_id, task_dir = self._resolve_task_delete_target(normalized_project_id, task_id)
+
+        task = self._read_task_metadata(task_id=normalized_task_id, project_id=normalized_project_id) or {
+            "task_id": normalized_task_id,
+            "project_id": normalized_project_id,
+            "status": "unknown",
+        }
+        if self._is_task_delete_blocked_status(task.get("status")):
+            raise ValueError("任务仍在运行或正在终止，请先等待任务结束或取消完成后再删除。")
+
+        usage = self._directory_usage(task_dir)
+        removed = self._remove_directory_tree(task_dir)
+        return {
+            "project_id": normalized_project_id,
+            "task_id": normalized_task_id,
+            "task_dir": str(task_dir),
+            "status_before_delete": task.get("status"),
+            "deleted_bytes": usage["bytes"],
+            "deleted_file_count": removed["files"],
+            "deleted_dir_count": removed["directories"],
+            "deleted_scope": f"solver_runs/task_{normalized_task_id}",
+            "preserved_scope": [
+                "project.json",
+                "assets/",
+                "build/",
+                "modeling_output/",
+                "solver_runs/task_*/",
+            ],
+        }
+
+    def _resolve_task_delete_target(self, project_id: str, task_id: str) -> Tuple[str, Path]:
+        normalized_task_id = self._validate_task_id(task_id)
+        project_dir = self._project_dir(project_id).resolve()
+        if not project_dir.exists() or not project_dir.is_dir():
+            raise FileNotFoundError(f"项目不存在：{project_id}")
+
+        solver_runs_dir = (project_dir / "solver_runs").resolve()
+        task_dir = (solver_runs_dir / f"task_{normalized_task_id}").resolve()
+        if task_dir.parent != solver_runs_dir or task_dir.name != f"task_{normalized_task_id}":
+            raise ValueError("任务路径越界，已拒绝删除。")
+        if not task_dir.exists():
+            raise FileNotFoundError(f"未找到任务：{normalized_task_id}")
+        if not task_dir.is_dir():
+            raise ValueError(f"任务路径不是目录：{normalized_task_id}")
+        return normalized_task_id, task_dir
+
+    @staticmethod
+    def _directory_usage(root: Path) -> Dict[str, int]:
+        total_bytes = 0
+        file_count = 0
+        dir_count = 0
+        for path in root.rglob("*"):
+            try:
+                if path.is_file() or path.is_symlink():
+                    total_bytes += path.lstat().st_size
+                    file_count += 1
+                elif path.is_dir():
+                    dir_count += 1
+            except OSError:
+                continue
+        return {"bytes": total_bytes, "files": file_count, "directories": dir_count + 1}
+
+    @staticmethod
+    def _remove_directory_tree(root: Path) -> Dict[str, int]:
+        directories: List[Path] = [root]
+        file_count = 0
+        dir_count = 0
+        stack = [root]
+
+        while stack:
+            current = stack.pop()
+            for child in current.iterdir():
+                if child.is_dir() and not child.is_symlink():
+                    directories.append(child)
+                    stack.append(child)
+                    continue
+                child.unlink()
+                file_count += 1
+
+        for directory in reversed(directories):
+            directory.rmdir()
+            dir_count += 1
+
+        return {"files": file_count, "directories": dir_count}
+
     def _terminate_process_tree(self, pid: int) -> Dict[str, Any]:
         try:
             if os.name == "nt":
@@ -336,6 +471,10 @@ class SolverExecutionService:
     @staticmethod
     def _is_active_task_status(status: Any) -> bool:
         return str(status or "").strip().lower() in {"running", "cancelling", "canceling"}
+
+    @staticmethod
+    def _is_task_delete_blocked_status(status: Any) -> bool:
+        return str(status or "").strip().lower() in {"queued", "running", "cancelling", "canceling"}
 
     def _settle_stale_active_task(self, task: Dict[str, Any], project_id: str) -> Dict[str, Any]:
         if not self._is_active_task_status(task.get("status")):
@@ -3270,6 +3409,25 @@ class SolverExecutionService:
             return data if isinstance(data, dict) else {}
         return {}
 
+    def _current_topology_hash(self, project_id: str) -> str:
+        project = self._load_project_data(project_id)
+        return self._topology_hash_from_project(project)
+
+    def _topology_hash_from_project(self, project: Dict[str, Any]) -> str:
+        return topology_hash_from_project(project)
+
+    def _build_input_hash(self, project: Dict[str, Any]) -> str:
+        return build_input_hash(project)
+
+    def _stable_hash(self, payload: Any) -> str:
+        return stable_hash(payload)
+
+    def _build_input_signature(self, project: Dict[str, Any]) -> Dict[str, Any]:
+        return build_input_signature(project)
+
+    def _asset_signature(self, asset: Any) -> Dict[str, Any] | None:
+        return asset_signature(asset)
+
     def _merge_topology_edges_with_line_summary(
         self,
         project_id: str,
@@ -3557,7 +3715,7 @@ class SolverExecutionService:
     def _safe_name(self, value: str) -> str:
         chars = []
         for ch in str(value).strip():
-            if ch.isalnum() or ch in {"_", "-"}:
+            if ch.isascii() and (ch.isalnum() or ch == "_"):
                 chars.append(ch)
             else:
                 chars.append("_")

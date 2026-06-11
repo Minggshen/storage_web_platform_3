@@ -41,7 +41,7 @@ def get_inference_table(project_id: str) -> SearchSpaceInferenceResponse:
 
 
 @router.post("/project/{project_id}/generate")
-def generate_project_workspace(project_id: str, request: BuildGenerationRequest) -> dict[str, Any]:
+def generate_project_workspace(project_id: str, request: BuildGenerationRequest | None = None) -> dict[str, Any]:
     try:
         return build_service.generate_build(project_id)
     except FileNotFoundError as exc:

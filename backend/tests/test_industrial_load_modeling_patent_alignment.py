@@ -113,6 +113,29 @@ def test_sparse_combo_merge_and_curve_mean_use_representative_days() -> None:
     assert np.isclose(float(target_curve["00:00"]), 10.8)
 
 
+def test_annual_periods_use_fixed_five_load_levels() -> None:
+    mod = _industrial_modeling_module()
+    week_starts = [date(2025, 1, 6) + timedelta(days=7 * i) for i in range(10)]
+    weekly_feature = pd.DataFrame(
+        {
+            "周起始日": week_starts,
+            "周内天数": [7] * 10,
+            "周平均负荷": [100, 90, 80, 70, 60, 50, 40, 30, 20, 10],
+            "周峰值负荷": [120, 108, 96, 84, 72, 60, 48, 36, 24, 12],
+            "周谷值负荷": [70, 63, 56, 49, 42, 35, 28, 21, 14, 7],
+            "周负荷标准差": [5] * 10,
+            "周平均日峰谷差": [30] * 10,
+            "周日均负荷": [100, 90, 80, 70, 60, 50, 40, 30, 20, 10],
+        }
+    )
+
+    out, summary = mod.classify_annual_periods(weekly_feature)
+
+    assert summary["年类名称"].tolist() == ["高负荷期", "较高负荷期", "中负荷期", "较低负荷期", "低负荷期"]
+    assert out.loc[out["周平均负荷"].idxmax(), "年类名称"] == "高负荷期"
+    assert out.loc[out["周平均负荷"].idxmin(), "年类名称"] == "低负荷期"
+
+
 def test_industrial_runtime_model_library_preserves_weight_columns() -> None:
     from services.build_runtime_industrial import build_runtime_model_library  # noqa: PLC0415
 

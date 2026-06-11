@@ -207,7 +207,7 @@ class DssBuilderService:
             "bus_count": len(bus_map),
             "bus_map": bus_map,
             "line_summary": line_summary,
-            "line_count_by_code": self._count_by_key(line_summary, "linecode"),
+            "line_count_by_code": self._count_by_key(line_summary, "linecode", empty_label="EXPLICIT_IMPEDANCE"),
             "topology_case_summary": topology_case_summary,
             "runtime_injection_contract": runtime_injection_contract,
             "structural_checks": structural_checks,
@@ -886,10 +886,10 @@ class DssBuilderService:
                 return name
         return "custom_parallel_or_busbar"
 
-    def _count_by_key(self, rows: list[dict[str, Any]], key: str) -> dict[str, int]:
+    def _count_by_key(self, rows: list[dict[str, Any]], key: str, empty_label: str = "UNSPECIFIED") -> dict[str, int]:
         counts: dict[str, int] = {}
         for row in rows:
-            value = str(row.get(key) or "")
+            value = str(row.get(key) or "").strip() or empty_label
             counts[value] = counts.get(value, 0) + 1
         return counts
 
@@ -1083,9 +1083,75 @@ class DssBuilderService:
             probe["message"] = f"Master.dss 不存在：{master_path}"
             return probe
 
-        script = """
+        script = self._opendss_probe_script()
+
+        probe_timeout_seconds = 30
+        try:
+            probe_env = {
+                **os.environ,
+                "PYTHONUTF8": "1",
+                "PYTHONIOENCODING": "utf-8",
+            }
+            completed = subprocess.run(
+                [sys.executable, "-X", "utf8", "-c", script, str(master_path)],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=probe_timeout_seconds,
+                env=probe_env,
+            )
+        except subprocess.TimeoutExpired:
+            probe["attempted"] = True
+            probe["status"] = "failed"
+            probe["message"] = (
+                f"OpenDSS probe 超时（{probe_timeout_seconds} 秒）："
+                "COM 引擎未在限定时间内完成 Compile/Solve，已阻止求解放行。"
+            )
+            return probe
+        except Exception as exc:
+            probe["message"] = f"OpenDSS probe 启动失败：{type(exc).__name__}: {exc}"
+            return probe
+
+        stdout_text = (completed.stdout or "").strip()
+        stderr_text = (completed.stderr or "").strip()
+        if stderr_text:
+            probe["stderr_tail"] = stderr_text[-2000:]
+
+        if stdout_text:
+            last_line = stdout_text.splitlines()[-1]
+            try:
+                payload = json.loads(last_line)
+            except Exception:
+                payload = None
+            if isinstance(payload, dict):
+                probe.update(payload)
+        if completed.returncode not in {0, None}:
+            if probe["status"] == "passed":
+                probe["status"] = "failed"
+                probe["message"] = f"OpenDSS probe 子进程异常退出（返回码 {completed.returncode}）。"
+            elif probe["status"] == "skipped":
+                probe["message"] = probe["message"] or f"OpenDSS probe 进程返回码 {completed.returncode}"
+        return probe
+
+    @staticmethod
+    def _opendss_probe_script() -> str:
+        return """
 import json
 import sys
+
+if sys.platform.startswith("win"):
+    try:
+        import ctypes
+
+        SEM_FAILCRITICALERRORS = 0x0001
+        SEM_NOGPFAULTERRORBOX = 0x0002
+        SEM_NOOPENFILEERRORBOX = 0x8000
+        ctypes.windll.kernel32.SetErrorMode(
+            SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX | SEM_NOOPENFILEERRORBOX
+        )
+    except Exception:
+        pass
 
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
@@ -1170,46 +1236,6 @@ finally:
 print(json.dumps(result, ensure_ascii=False), flush=True)
 """.strip()
 
-        try:
-            probe_env = {
-                **os.environ,
-                "PYTHONUTF8": "1",
-                "PYTHONIOENCODING": "utf-8",
-            }
-            completed = subprocess.run(
-                [sys.executable, "-X", "utf8", "-c", script, str(master_path)],
-                capture_output=True,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-                timeout=30,
-                env=probe_env,
-            )
-        except Exception as exc:
-            probe["message"] = f"OpenDSS probe 启动失败：{type(exc).__name__}: {exc}"
-            return probe
-
-        stdout_text = (completed.stdout or "").strip()
-        stderr_text = (completed.stderr or "").strip()
-        if stderr_text:
-            probe["stderr_tail"] = stderr_text[-2000:]
-
-        if stdout_text:
-            last_line = stdout_text.splitlines()[-1]
-            try:
-                payload = json.loads(last_line)
-            except Exception:
-                payload = None
-            if isinstance(payload, dict):
-                probe.update(payload)
-        if completed.returncode not in {0, None}:
-            if probe["status"] == "passed":
-                probe["status"] = "failed"
-                probe["message"] = f"OpenDSS probe 子进程异常退出（返回码 {completed.returncode}）。"
-            elif probe["status"] == "skipped":
-                probe["message"] = probe["message"] or f"OpenDSS probe 进程返回码 {completed.returncode}"
-        return probe
-
     def _build_structural_checks(
         self,
         nodes: list[dict[str, Any]],
@@ -1251,14 +1277,21 @@ print(json.dumps(result, ensure_ascii=False), flush=True)
         duplicate_buses = self._find_duplicate_values(
             [str(item.get("bus") or "") for item in bus_map.values() if isinstance(item, dict)]
         )
-        self._append_check(
-            checks,
-            name="bus_names_unique",
-            passed=not duplicate_buses,
-            detail="母线命名唯一。" if not duplicate_buses else f"重复母线：{', '.join(duplicate_buses)}",
+        checks.append(
+            {
+                "name": "bus_names_unique_or_shared",
+                "status": "pass" if not duplicate_buses else "warn",
+                "detail": (
+                    "母线命名唯一。"
+                    if not duplicate_buses
+                    else f"多个可视化节点映射到同一 OpenDSS 母线：{', '.join(duplicate_buses)}。如为同母线挂载设备可忽略，否则请修正。"
+                ),
+            }
         )
         if duplicate_buses:
-            errors.append(f"存在重复 OpenDSS 母线名：{', '.join(duplicate_buses)}")
+            check_warnings.append(
+                f"多个可视化节点映射到同一 OpenDSS 母线：{', '.join(duplicate_buses)}，请确认这不是误填。"
+            )
 
         duplicate_load_names = self._find_duplicate_values(
             [self._load_name(node) for node in nodes if str(node.get("type")) == "load"]
@@ -1681,7 +1714,7 @@ print(json.dumps(result, ensure_ascii=False), flush=True)
     def _safe_name(self, raw: str) -> str:
         out = []
         for ch in raw:
-            if ch.isalnum() or ch == "_":
+            if ch.isascii() and (ch.isalnum() or ch == "_"):
                 out.append(ch)
             else:
                 out.append("_")

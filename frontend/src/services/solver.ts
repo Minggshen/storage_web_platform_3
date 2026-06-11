@@ -58,6 +58,27 @@ export async function cancelSolverTask(projectId: string, taskId: string): Promi
   return data.task;
 }
 
+export type DeletedSolverTask = {
+  project_id: string;
+  task_id: string;
+  task_dir?: string;
+  status_before_delete?: string;
+  deleted_bytes?: number;
+  deleted_file_count?: number;
+  deleted_dir_count?: number;
+  deleted_scope?: string;
+  preserved_scope?: string[];
+};
+
+export async function deleteSolverTask(projectId: string, taskId: string): Promise<DeletedSolverTask> {
+  const encodedTaskId = encodeURIComponent(taskId);
+  const data = await http<{ success: boolean; deleted_task: DeletedSolverTask }>(
+    `/api/solver/project/${projectId}/task/${encodedTaskId}`,
+    { method: 'DELETE' },
+  );
+  return data.deleted_task;
+}
+
 function taskQuery(taskId?: string) {
   return taskId ? `?task_id=${encodeURIComponent(taskId)}` : '';
 }

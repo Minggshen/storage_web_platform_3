@@ -4,11 +4,20 @@ import csv
 import json
 import math
 import shutil
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 from openpyxl import Workbook
 
+from services.build_signature import (
+    asset_signature,
+    build_input_hash,
+    build_input_signature,
+    extract_topology,
+    stable_hash,
+    topology_hash,
+)
 from services.dss_builder_service import DssBuilderService
 from services.search_space_inference_service import SearchSpaceInferenceService
 
@@ -49,12 +58,16 @@ class BuildExportService:
     def preview_build(self, project_id: str) -> dict[str, Any]:
         project = self._load_project(project_id)
         topology = self._extract_topology(project)
+        topology_hash = self._topology_hash(topology)
+        build_input_hash = self._build_input_hash(project)
         validation = self._validate_topology(topology)
         warnings = validation["warnings"]
         errors = validation["errors"]
         summary = {
             "project_id": project_id,
             "project_name": str(project.get("project_name") or project.get("name") or project_id),
+            "topology_hash": topology_hash,
+            "build_input_hash": build_input_hash,
             "ready_for_build": validation["ready_for_build"],
             "warnings": warnings,
             "errors": errors,
@@ -83,6 +96,15 @@ class BuildExportService:
     def generate_build(self, project_id: str) -> dict[str, Any]:
         project = self._load_project(project_id)
         topology = self._extract_topology(project)
+        topology_hash = self._topology_hash(topology)
+        build_input_hash = self._build_input_hash(project)
+        preview = self.preview_build(project_id)
+        if not bool(preview["summary"]["ready_for_build"]):
+            errors = self._dedupe(preview["summary"].get("errors") or [])
+            message = "拓扑预览校验未通过，请先修正 Errors 后再生成 Solver Workspace。"
+            if errors:
+                message = f"{message} {'；'.join(errors)}"
+            raise ValueError(message)
 
         project_dir = self._project_dir(project_id)
         build_dir = project_dir / "build"
@@ -93,21 +115,31 @@ class BuildExportService:
         dss_dir.mkdir(parents=True, exist_ok=True)
         manifest_dir.mkdir(parents=True, exist_ok=True)
 
-        preview = self.preview_build(project_id)
         dss_payload = self.dss_builder.compile_topology(project_id, topology, dss_dir)
+        build_gate = self._build_gate_status(preview, dss_payload)
 
-        handoff = self._prepare_solver_handoff(project_id, build_dir, inputs_dir, dss_payload)
-        solver_workspace = self._prepare_solver_workspace(project_id, project, build_dir, dss_payload)
+        handoff = self._prepare_solver_handoff(project_id, build_dir, inputs_dir, dss_payload, build_gate)
+        solver_workspace = self._prepare_solver_workspace(project_id, project, build_dir, dss_payload, build_gate)
+        all_warnings = self._dedupe([*preview["summary"]["warnings"], *build_gate["warnings"]])
+        all_errors = self._dedupe([*preview["summary"]["errors"], *build_gate["errors"]])
 
         manifest = {
             "success": True,
             "project_id": project_id,
             "project_name": str(project.get("project_name") or project.get("name") or project_id),
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+            "topology_hash": topology_hash,
+            "topology_hash_current": topology_hash,
+            "build_input_hash": build_input_hash,
+            "build_input_hash_current": build_input_hash,
+            "manifest_stale": False,
             "build_dir": str(build_dir),
             "inputs_dir": str(inputs_dir),
             "ready_for_build": preview["summary"]["ready_for_build"],
-            "warnings": preview["summary"]["warnings"],
-            "errors": preview["summary"]["errors"],
+            "ready_for_solver": bool(solver_workspace.get("ready_for_solver", False)),
+            "build_gate": build_gate,
+            "warnings": all_warnings,
+            "errors": all_errors,
             "topology_summary": {
                 "node_count": len(topology["nodes"]),
                 "edge_count": len(topology["edges"]),
@@ -136,9 +168,108 @@ class BuildExportService:
     def read_build_manifest(self, project_id: str) -> dict[str, Any]:
         manifest_path = self._project_dir(project_id) / "build" / "manifest" / "build_manifest.json"
         if not manifest_path.exists():
-            generated = self.generate_build(project_id)
-            return generated["manifest"]
-        return json.loads(manifest_path.read_text(encoding="utf-8"))
+            raise FileNotFoundError(f"构建 manifest 不存在，请先执行构建：{manifest_path}")
+
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        project = self._load_project(project_id)
+        current_topology_hash = self._topology_hash(self._extract_topology(project))
+        current_build_input_hash = self._build_input_hash(project)
+        manifest_hash = str(manifest.get("topology_hash") or "")
+        manifest_build_input_hash = str(manifest.get("build_input_hash") or "")
+        topology_stale = not manifest_hash or manifest_hash != current_topology_hash
+        build_input_stale = not manifest_build_input_hash or manifest_build_input_hash != current_build_input_hash
+        stale = topology_stale or build_input_stale
+        manifest["topology_hash_current"] = current_topology_hash
+        manifest["build_input_hash_current"] = current_build_input_hash
+        manifest["manifest_stale"] = stale
+        if stale:
+            stale_message = "当前拓扑或构建输入已变化，现有 build manifest 已过期，请重新生成 Solver Workspace。"
+            manifest["warnings"] = self._dedupe([*(manifest.get("warnings") or []), stale_message])
+            manifest["ready_for_solver"] = False
+            gate = manifest.get("build_gate")
+            if isinstance(gate, dict):
+                gate["ready_for_solver_gate"] = False
+                gate["warnings"] = self._dedupe([*(gate.get("warnings") or []), stale_message])
+            handoff = manifest.get("solver_handoff")
+            if isinstance(handoff, dict):
+                handoff["status"] = "blocked"
+                handoff["warnings"] = self._dedupe([*(handoff.get("warnings") or []), stale_message])
+            workspace = manifest.get("solver_workspace")
+            if isinstance(workspace, dict):
+                workspace["ready_for_solver"] = False
+                workspace["warnings"] = self._dedupe([*(workspace.get("warnings") or []), stale_message])
+        return manifest
+
+    def _topology_hash(self, topology: dict[str, Any]) -> str:
+        return topology_hash(topology)
+
+    def _build_input_hash(self, project: dict[str, Any]) -> str:
+        return build_input_hash(project)
+
+    def _stable_hash(self, payload: Any) -> str:
+        return stable_hash(payload)
+
+    def _build_input_signature(self, project: dict[str, Any]) -> dict[str, Any]:
+        return build_input_signature(project)
+
+    def _asset_signature(self, asset: Any) -> dict[str, Any] | None:
+        return asset_signature(asset)
+
+    def _build_gate_status(self, preview: dict[str, Any], dss_payload: dict[str, Any]) -> dict[str, Any]:
+        warnings: list[str] = []
+        errors: list[str] = []
+
+        summary = preview.get("summary") if isinstance(preview.get("summary"), dict) else {}
+        topology_ready = bool(summary.get("ready_for_build", False))
+        if not topology_ready:
+            preview_errors = [str(item) for item in (summary.get("errors") or []) if str(item).strip()]
+            errors.extend(preview_errors or ["拓扑预览校验未通过，不能进入求解。"])
+
+        compile_summary = dss_payload.get("dss_compile_summary") if isinstance(dss_payload.get("dss_compile_summary"), dict) else {}
+        structural = compile_summary.get("structural_checks") if isinstance(compile_summary.get("structural_checks"), dict) else {}
+        structural_passed = bool(structural.get("passed", False))
+        warnings.extend(str(item) for item in (structural.get("warnings") or []) if str(item).strip())
+        if not structural_passed:
+            structural_errors = [str(item) for item in (structural.get("errors") or []) if str(item).strip()]
+            errors.extend(structural_errors or ["DSS 结构自检未通过。"])
+
+        probe = compile_summary.get("opendss_probe") if isinstance(compile_summary.get("opendss_probe"), dict) else {}
+        probe_status = str(probe.get("status") or "").strip().lower()
+        compile_ok = bool(probe.get("compile_succeeded", False))
+        solve_ok = bool(probe.get("solve_converged", False))
+        probe_passed = probe_status == "passed" and compile_ok and solve_ok
+        if not probe_passed:
+            message = str(probe.get("message") or "").strip()
+            if probe_status == "skipped":
+                errors.append(message or "OpenDSS 实编译探测被跳过，无法确认模型可被真实 OpenDSS 求解。")
+            elif probe_status == "failed":
+                errors.append(message or "OpenDSS 实编译探测失败。")
+            else:
+                errors.append(message or "OpenDSS 实编译探测未返回通过状态。")
+
+        errors = self._dedupe(errors)
+        warnings = self._dedupe(warnings)
+        return {
+            "ready_for_solver_gate": len(errors) == 0,
+            "topology_ready": topology_ready,
+            "dss_structural_passed": structural_passed,
+            "opendss_probe_passed": probe_passed,
+            "opendss_probe_status": probe_status or "unknown",
+            "errors": errors,
+            "warnings": warnings,
+        }
+
+    @staticmethod
+    def _dedupe(items: list[Any]) -> list[str]:
+        seen: set[str] = set()
+        out: list[str] = []
+        for item in items:
+            text = str(item).strip()
+            if not text or text in seen:
+                continue
+            seen.add(text)
+            out.append(text)
+        return out
 
     def _prepare_solver_handoff(
         self,
@@ -146,24 +277,25 @@ class BuildExportService:
         build_dir: Path,
         inputs_dir: Path,
         dss_payload: dict[str, Any],
+        build_gate: dict[str, Any],
     ) -> dict[str, Any]:
         handoff_dir = build_dir / "solver_handoff"
         handoff_dir.mkdir(parents=True, exist_ok=True)
 
         target_dss_dir = handoff_dir / "dss"
-        if target_dss_dir.exists():
-            shutil.rmtree(target_dss_dir)
-        shutil.copytree(Path(dss_payload["dss_dir"]), target_dss_dir)
+        shutil.copytree(Path(dss_payload["dss_dir"]), target_dss_dir, dirs_exist_ok=True)
 
         summary = {
             "project_id": project_id,
             "handoff_dir": str(handoff_dir),
             "dss_dir": str(target_dss_dir),
             "dss_master_path": str(target_dss_dir / "Master.dss"),
-            "status": "ready",
+            "status": "ready" if build_gate.get("ready_for_solver_gate") else "blocked",
+            "warnings": list(build_gate.get("warnings") or []),
+            "errors": list(build_gate.get("errors") or []),
             "notes": [
                 "该目录用于 solver 阶段读取可视化拓扑编译后的 OpenDSS 输入。",
-                "当前版本仅做输入交接，不强制改写现有求解器主流程。",
+                "只有拓扑、DSS 结构、OpenDSS 探测和运行输入均通过时，solver 才会读取该目录。",
             ],
         }
         (handoff_dir / "handoff_summary.json").write_text(
@@ -178,6 +310,7 @@ class BuildExportService:
         project: dict[str, Any],
         build_dir: Path,
         dss_payload: dict[str, Any],
+        build_gate: dict[str, Any],
     ) -> dict[str, Any]:
         workspace_dir = build_dir / "solver_workspace"
         inputs_dir = workspace_dir / "inputs"
@@ -191,12 +324,10 @@ class BuildExportService:
         for path in [registry_dir, node_loads_dir, storage_dir, tariff_dir, dss_dir.parent, outputs_dir]:
             path.mkdir(parents=True, exist_ok=True)
 
-        if dss_dir.exists():
-            shutil.rmtree(dss_dir)
-        shutil.copytree(Path(dss_payload["dss_dir"]), dss_dir)
+        shutil.copytree(Path(dss_payload["dss_dir"]), dss_dir, dirs_exist_ok=True)
 
-        warnings: list[str] = []
-        errors: list[str] = []
+        warnings: list[str] = list(build_gate.get("warnings") or [])
+        errors: list[str] = list(build_gate.get("errors") or [])
 
         tariff_rel_path, tariff_abs_path = self._prepare_tariff_input(project, tariff_dir, errors)
         strategy_rel_path, strategy_abs_path = self._prepare_strategy_library(project, storage_dir, errors, warnings)
@@ -251,9 +382,9 @@ class BuildExportService:
             "command_path": str(command_path.resolve()),
             "solver_command": command,
             "registry_row_count": len(registry_rows),
-            "warnings": warnings,
-            "errors": errors,
-            "ready_for_solver": len(errors) == 0 and len(registry_rows) > 0,
+            "warnings": self._dedupe(warnings),
+            "errors": self._dedupe(errors),
+            "ready_for_solver": bool(build_gate.get("ready_for_solver_gate")) and len(errors) == 0 and len(registry_rows) > 0,
         }
         (workspace_dir / "workspace_summary.json").write_text(
             json.dumps(summary, ensure_ascii=False, indent=2),
@@ -387,8 +518,13 @@ class BuildExportService:
             load_index += 1
             params = node.get("params") if isinstance(node.get("params"), dict) else {}
             node_id = self._safe_int(params.get("node_id"), load_index)
-            category = str(params.get("category") or "industrial").strip() or "industrial"
-            internal_id = self._safe_name(str(node.get("id") or f"load_{load_index:03d}"))
+            raw_category = str(params.get("category") or "industrial").strip() or "industrial"
+            category = self._path_segment(raw_category)
+            if category != raw_category:
+                warnings.append(
+                    f"负荷节点 {node.get('name') or node.get('id')} 的 category 含有不安全字符，已用于路径时清洗为 {category}。"
+                )
+            internal_id = self._path_segment(str(node.get("id") or f"load_{load_index:03d}"))
             dss_bus_name = self._dss_bus_name(node, node_id)
             dss_load_name = self._dss_load_name(node, node_id)
             dss_phases = 3
@@ -722,9 +858,12 @@ class BuildExportService:
         return path if path.exists() else None
 
     def _safe_name(self, value: str) -> str:
+        return self._path_segment(value)
+
+    def _path_segment(self, value: str) -> str:
         chars = []
-        for ch in value.strip():
-            if ch.isalnum() or ch in {"_", "-"}:
+        for ch in str(value).strip():
+            if ch.isascii() and (ch.isalnum() or ch == "_"):
                 chars.append(ch)
             else:
                 chars.append("_")
@@ -733,7 +872,7 @@ class BuildExportService:
     def _dss_safe_name(self, value: str) -> str:
         chars = []
         for ch in value.strip():
-            if ch.isalnum() or ch in {"_"}:
+            if ch.isascii() and (ch.isalnum() or ch == "_"):
                 chars.append(ch)
             else:
                 chars.append("_")
@@ -853,11 +992,7 @@ class BuildExportService:
         return json.loads(project_file.read_text(encoding="utf-8"))
 
     def _extract_topology(self, project: dict[str, Any]) -> dict[str, Any]:
-        network = project.get("network") if isinstance(project.get("network"), dict) else {}
-        nodes = network.get("nodes") if isinstance(network.get("nodes"), list) else []
-        edges = network.get("edges") if isinstance(network.get("edges"), list) else []
-        economic_params = network.get("economic_parameters") if isinstance(network.get("economic_parameters"), dict) else {}
-        return {"nodes": nodes, "edges": edges, "economic_parameters": economic_params}
+        return extract_topology(project)
 
     def _build_warnings(self, topology: dict[str, Any]) -> list[str]:
         return list(self._validate_topology(topology)["warnings"])
@@ -901,8 +1036,10 @@ class BuildExportService:
 
         load_node_ids: list[str] = []
         load_dss_names: list[str] = []
+        load_internal_ids: list[str] = []
         bus_names: list[str] = []
         legacy_phase_seen = False
+        load_sequence = 0
         for node in nodes:
             node_id = str(node.get("id") or "")
             node_type = str(node.get("type") or "").strip().lower()
@@ -918,6 +1055,13 @@ class BuildExportService:
                     warnings.append(f"节点 {node.get('name') or node_id} 未填写 dss_bus_name，Build 将按规则自动生成。")
 
             if node_type == "load":
+                load_sequence += 1
+                raw_category = str(params.get("category") or "industrial").strip() or "industrial"
+                safe_category = self._path_segment(raw_category)
+                if safe_category != raw_category:
+                    warnings.append(f"负荷节点 {node.get('name') or node_id} 的 category 会在生成文件路径时清洗为 {safe_category}。")
+                load_internal_ids.append(self._path_segment(str(node.get("id") or f"load_{load_sequence:03d}")))
+
                 registry_node_id = str(params.get("node_id") or "").strip()
                 if registry_node_id:
                     load_node_ids.append(registry_node_id)
@@ -937,6 +1081,8 @@ class BuildExportService:
 
         for duplicate in self._find_duplicates(load_node_ids):
             errors.append(f"负荷 node_id 重复：{duplicate}。")
+        for duplicate in self._find_duplicates(load_internal_ids):
+            errors.append(f"负荷节点清洗后的 internal_model_id 重复：{duplicate}。请调整负荷节点 id，避免中文/特殊字符清洗后碰撞。")
         for duplicate in self._find_duplicates(load_dss_names):
             errors.append(f"OpenDSS 负荷名重复：{duplicate}。")
         for duplicate in self._find_duplicates(bus_names):
