@@ -2049,17 +2049,12 @@ function HistoryChart(props: { data: ResultChartPoint[] }) {
       });
   }, [props.data]);
   const multiStrategy = strategyGroups.length > 1;
-  const strategyKey = strategyGroups.map((group) => group.strategy).join('|');
-
-  useEffect(() => {
-    if (!multiStrategy) return;
-    if (!strategyGroups.some((group) => group.strategy === selectedStrategy)) {
-      setSelectedStrategy(strategyGroups[0]?.strategy ?? '');
-    }
-  }, [multiStrategy, selectedStrategy, strategyGroups, strategyKey]);
 
   if (multiStrategy) {
-    const activeGroup = strategyGroups.find((group) => group.strategy === selectedStrategy) ?? strategyGroups[0];
+    const activeStrategy = strategyGroups.some((group) => group.strategy === selectedStrategy)
+      ? selectedStrategy
+      : strategyGroups[0]?.strategy ?? '';
+    const activeGroup = strategyGroups.find((group) => group.strategy === activeStrategy) ?? strategyGroups[0];
     const data = activeGroup?.rows ?? [];
     const hasAvgNpv = data.some((row) => toFiniteNumber(row.avgNpvWan) !== null);
     const hasPopulationSize = data.some((row) => toFiniteNumber(row.populationSize) !== null);
