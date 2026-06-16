@@ -285,6 +285,7 @@ class StorageFitnessEvaluator:
                 "cache_key": cache_key,
                 "network_oracle_scope": oracle_scope,
                 "recheck_performed": bool(annual_mode == "full_recheck"),
+                **self._device_safety_metadata(ctx.strategy),
             },
         )
         self._dedupe_notes(result)
@@ -297,6 +298,34 @@ class StorageFitnessEvaluator:
             )
 
         return result
+
+    @staticmethod
+    def _device_safety_metadata(strategy: object) -> dict[str, object]:
+        available = bool(getattr(strategy, "device_safety_available", False))
+        weighted_raw = getattr(strategy, "device_safety_weighted_score", None)
+        cost_raw = getattr(strategy, "device_safety_cost", None)
+        try:
+            weighted_score = 0.0 if weighted_raw is None else float(weighted_raw)
+        except Exception:
+            weighted_score = 0.0
+        try:
+            cost = 0.5 if cost_raw is None else float(cost_raw)
+        except Exception:
+            cost = 0.5
+        return {
+            "device_safety_available": available,
+            "device_safety_cost": cost,
+            "device_safety_score_pct": weighted_score,
+            "device_safety_weighted_score": weighted_score,
+            "device_safety_sub_scores": dict(getattr(strategy, "device_safety_sub_scores", {}) or {}),
+            "device_safety_trace": {
+                str(key): list(value)
+                for key, value in (getattr(strategy, "device_safety_trace", {}) or {}).items()
+            },
+            "device_safety_data_quality_flags": list(
+                getattr(strategy, "device_safety_data_quality_flags", []) or []
+            ),
+        }
 
     def _should_run_full_recheck(self, fast_result: FitnessEvaluationResult) -> bool:
         cfg = self.config

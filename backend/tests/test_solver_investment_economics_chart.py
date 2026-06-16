@@ -35,6 +35,19 @@ def test_runtime_command_uses_request_objective_weights(tmp_path: Path) -> None:
         "safety_weight_voltage": 0.25,
         "safety_weight_line": 0.35,
         "safety_weight_cycle": 0.45,
+        "device_safety_beta": 0.30,
+        "device_safety_weight_cell": 0.12,
+        "device_safety_weight_capacity": 0.05,
+        "device_safety_weight_thermal": 0.14,
+        "device_safety_weight_temp_range": 0.04,
+        "device_safety_weight_detection": 0.10,
+        "device_safety_weight_fire_suppression": 0.12,
+        "device_safety_weight_explosion": 0.10,
+        "device_safety_weight_bms": 0.12,
+        "device_safety_weight_propagation": 0.08,
+        "device_safety_weight_ip": 0.05,
+        "device_safety_weight_corrosion": 0.03,
+        "device_safety_weight_certification": 0.05,
     }
 
     command = service._build_runtime_command(
@@ -59,6 +72,19 @@ def test_runtime_command_uses_request_objective_weights(tmp_path: Path) -> None:
     assert option_values["--safety-weight-voltage"] == "0.25"
     assert option_values["--safety-weight-line"] == "0.35"
     assert option_values["--safety-weight-cycle"] == "0.45"
+    assert option_values["--device-safety-beta"] == "0.5"
+    assert option_values["--device-safety-weight-cell"] == "0.12"
+    assert option_values["--device-safety-weight-capacity"] == "0.05"
+    assert option_values["--device-safety-weight-thermal"] == "0.14"
+    assert option_values["--device-safety-weight-temp-range"] == "0.04"
+    assert option_values["--device-safety-weight-detection"] == "0.1"
+    assert option_values["--device-safety-weight-fire-suppression"] == "0.12"
+    assert option_values["--device-safety-weight-explosion"] == "0.1"
+    assert option_values["--device-safety-weight-bms"] == "0.12"
+    assert option_values["--device-safety-weight-propagation"] == "0.08"
+    assert option_values["--device-safety-weight-ip"] == "0.05"
+    assert option_values["--device-safety-weight-corrosion"] == "0.03"
+    assert option_values["--device-safety-weight-certification"] == "0.05"
 
 
 def test_investment_economics_chart_marks_highest_fitness_candidate(tmp_path: Path) -> None:

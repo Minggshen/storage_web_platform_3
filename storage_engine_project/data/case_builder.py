@@ -58,6 +58,7 @@ def load_optimization_cases(
     operation_config: OperationConfig | None = None,
     safety_config: SafetyConfig | None = None,
     service_config: ServiceConfig | None = None,
+    device_safety_metric_weights: dict[str, float] | None = None,
     only_enabled_and_optimizable: bool = True,
 ) -> list[OptimizationCase]:
     registry_path = Path(registry_path).resolve()
@@ -75,11 +76,13 @@ def load_optimization_cases(
             operation_config=operation_config or get_default_operation_config(),
             safety_config=safety_config or get_default_safety_config(),
             service_config=service_config or get_default_service_config(),
+            device_safety_metric_weights=device_safety_metric_weights,
         )
         search_spaces = build_search_spaces_for_scenario(
             scenario=scenario,
             strategy_library_path=strategy_library_path,
             context=ctx,
+            device_safety_metric_weights=device_safety_metric_weights,
         )
         cases.append(
             OptimizationCase(
@@ -99,6 +102,7 @@ def load_single_optimization_case(
     operation_config: OperationConfig | None = None,
     safety_config: SafetyConfig | None = None,
     service_config: ServiceConfig | None = None,
+    device_safety_metric_weights: dict[str, float] | None = None,
 ) -> OptimizationCase:
     cases = load_optimization_cases(
         registry_path=registry_path,
@@ -107,6 +111,7 @@ def load_single_optimization_case(
         operation_config=operation_config,
         safety_config=safety_config,
         service_config=service_config,
+        device_safety_metric_weights=device_safety_metric_weights,
         only_enabled_and_optimizable=False,
     )
     for case in cases:

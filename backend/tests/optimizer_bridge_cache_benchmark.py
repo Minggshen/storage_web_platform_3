@@ -62,18 +62,18 @@ class SlowCountingEvaluator:
 def _population_batches() -> list[list[np.ndarray]]:
     return [
         [
-            np.array([0.0, 123.0, 2.06]),
-            np.array([0.0, 124.0, 2.08]),
-            np.array([0.0, 176.0, 2.38]),
-            np.array([0.0, 198.0, 2.51]),
-            np.array([0.0, 251.0, 3.01]),
+            np.array([123.0, 2.06]),
+            np.array([124.0, 2.08]),
+            np.array([176.0, 2.38]),
+            np.array([198.0, 2.51]),
+            np.array([251.0, 3.01]),
         ],
         [
-            np.array([0.0, 124.0, 2.08]),
-            np.array([0.0, 252.0, 2.99]),
-            np.array([0.0, 301.0, 3.24]),
-            np.array([0.0, 299.0, 3.26]),
-            np.array([0.0, 50.0, 1.00]),
+            np.array([124.0, 2.08]),
+            np.array([252.0, 2.99]),
+            np.array([301.0, 3.24]),
+            np.array([299.0, 3.26]),
+            np.array([50.0, 1.00]),
         ],
     ]
 
@@ -82,15 +82,13 @@ def run_benchmark(delay_ms: float) -> dict[str, Any]:
     evaluator = SlowCountingEvaluator(delay_s=max(0.0, delay_ms) / 1000.0)
     bridge = OptimizerBridge(
         evaluator=evaluator,  # type: ignore[arg-type]
-        strategy_ids=["strategy_a"],
-        search_spaces={
-            "strategy_a": SearchSpaceConfig(
-                power_min_kw=50.0,
-                power_max_kw=500.0,
-                duration_min_h=1.0,
-                duration_max_h=4.0,
-            )
-        },
+        fixed_strategy_id="strategy_a",
+        search_space_config=SearchSpaceConfig(
+            power_min_kw=50.0,
+            power_max_kw=500.0,
+            duration_min_h=1.0,
+            duration_max_h=4.0,
+        ),
     )
 
     cache: dict[DecisionCacheKey, FitnessEvaluationResult] = {}

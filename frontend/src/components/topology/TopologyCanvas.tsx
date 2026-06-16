@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import type { TopologyEdge, TopologyNode } from './types';
+import { LINE_STROKE_BY_CODE } from '../../pages/workspace/topologyConstants';
 
 type Props = {
   nodes: TopologyNode[];
@@ -17,8 +18,8 @@ type DragState = {
   offsetY: number;
 } | null;
 
-const NODE_WIDTH = 132;
-const NODE_HEIGHT = 62;
+const NODE_WIDTH = 166;
+const NODE_HEIGHT = 76;
 const PADDING = 160;
 const GRID_MINOR = 24;
 const GRID_MAJOR = 120;
@@ -40,9 +41,133 @@ function nodeColor(type: string) {
   }
 }
 
-function displayType(type: string) {
-  if (type === 'ring_main_unit') return 'rmu';
-  return type;
+const NODE_TYPE_CN: Record<string, string> = {
+  transformer: '主变',
+  bus: '母线',
+  ring_main_unit: '环网柜',
+  branch: '分支点',
+  load: '负荷',
+};
+
+const LINECODE_CN: Record<string, string> = {
+  LC_MAIN: '主干线',
+  LC_BRANCH: '分支线',
+  LC_CABLE: '电缆',
+  LC_LIGHT: '轻载线',
+};
+
+/* ---- 各元件 SVG 图标（24×24 viewBox） ---- */
+
+function TransformerIcon({ color }: { color: string }) {
+  return (
+    <svg width="32" height="28" viewBox="0 0 32 28" fill="none" aria-hidden="true">
+      <circle cx="10" cy="14" r="8" stroke={color} strokeWidth="2" fill="#fffbeb" />
+      <circle cx="22" cy="14" r="8" stroke={color} strokeWidth="2" fill="#fffbeb" />
+      <line x1="18" y1="11" x2="18" y2="17" stroke={color} strokeWidth="1.8" />
+      <line x1="14" y1="11" x2="14" y2="17" stroke={color} strokeWidth="1.8" />
+      <line x1="18" y1="14" x2="14" y2="14" stroke={color} strokeWidth="1.2" />
+    </svg>
+  );
+}
+
+function BusIcon({ color }: { color: string }) {
+  return (
+    <svg width="32" height="28" viewBox="0 0 32 28" fill="none" aria-hidden="true">
+      <rect x="2" y="6" width="28" height="5" rx="2.5" fill={color} opacity="0.15" />
+      <rect x="2" y="6" width="28" height="5" rx="2.5" stroke={color} strokeWidth="1.8" fill="none" />
+      <line x1="8" y1="11" x2="8" y2="22" stroke={color} strokeWidth="1.8" strokeLinecap="round" />
+      <line x1="16" y1="11" x2="16" y2="22" stroke={color} strokeWidth="1.8" strokeLinecap="round" />
+      <line x1="24" y1="11" x2="24" y2="22" stroke={color} strokeWidth="1.8" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+function RingMainUnitIcon({ color }: { color: string }) {
+  return (
+    <svg width="32" height="28" viewBox="0 0 32 28" fill="none" aria-hidden="true">
+      <rect x="4" y="3" width="24" height="22" rx="4" stroke={color} strokeWidth="1.8" fill="#f9fafb" />
+      <line x1="4" y1="13" x2="28" y2="13" stroke={color} strokeWidth="1.2" opacity="0.5" />
+      <circle cx="8" cy="8" r="2" fill={color} />
+      <circle cx="16" cy="8" r="2" fill={color} />
+      <circle cx="24" cy="8" r="2" fill={color} />
+      <circle cx="16" cy="20" r="2" fill={color} opacity="0.5" />
+    </svg>
+  );
+}
+
+function BranchIcon({ color }: { color: string }) {
+  return (
+    <svg width="32" height="28" viewBox="0 0 32 28" fill="none" aria-hidden="true">
+      <line x1="16" y1="2" x2="16" y2="26" stroke={color} strokeWidth="2.2" strokeLinecap="round" />
+      <line x1="16" y1="14" x2="28" y2="14" stroke={color} strokeWidth="2.2" strokeLinecap="round" />
+      <circle cx="16" cy="14" r="4" fill={color} opacity="0.2" stroke={color} strokeWidth="1.5" />
+    </svg>
+  );
+}
+
+function LoadIcon({ color }: { color: string }) {
+  return (
+    <svg width="32" height="28" viewBox="0 0 32 28" fill="none" aria-hidden="true">
+      <path d="M6 26V12L16 2L26 12V26H6Z" stroke={color} strokeWidth="1.8" fill={color} opacity="0.12" />
+      <rect x="12" y="16" width="8" height="10" rx="1" fill={color} opacity="0.3" stroke={color} strokeWidth="1.2" />
+      <line x1="11" y1="22" x2="21" y2="22" stroke={color} strokeWidth="1.2" opacity="0.6" />
+    </svg>
+  );
+}
+
+function nodeIcon(type: string, color: string) {
+  switch (type) {
+    case 'transformer':
+      return <TransformerIcon color={color} />;
+    case 'bus':
+      return <BusIcon color={color} />;
+    case 'ring_main_unit':
+      return <RingMainUnitIcon color={color} />;
+    case 'branch':
+      return <BranchIcon color={color} />;
+    case 'load':
+      return <LoadIcon color={color} />;
+    default:
+      return <BranchIcon color={color} />;
+  }
+}
+
+function nodeParamsSummary(type: string, params: Record<string, unknown>): string {
+  switch (type) {
+    case 'transformer': {
+      const kva = params.rated_kva;
+      const hv = params.primary_voltage_kv;
+      const lv = params.voltage_level_kv;
+      if (kva && hv && lv) return `${kva} kVA · ${hv}/${lv} kV`;
+      if (kva) return `${kva} kVA`;
+      return '';
+    }
+    case 'bus': {
+      const kv = params.voltage_level_kv;
+      const role = params.bus_role;
+      const parts = [kv ? `${kv} kV` : '', role && role !== 'feeder' ? String(role) : ''].filter(Boolean);
+      return parts.join(' · ');
+    }
+    case 'ring_main_unit': {
+      const kv = params.voltage_level_kv;
+      const outlets = params.outlet_count;
+      const parts = [kv ? `${kv} kV` : '', outlets ? `${outlets}回路` : ''].filter(Boolean);
+      return parts.join(' · ');
+    }
+    case 'branch': {
+      const kv = params.voltage_level_kv;
+      return kv ? `${kv} kV` : '';
+    }
+    case 'load': {
+      const kw = params.design_kw;
+      const cat = params.category;
+      const catLabel = typeof cat === 'string' ? (cat === 'industrial' ? '工业' : cat === 'commercial' ? '商业' : cat === 'residential' ? '居民' : '') : '';
+      const parts = [kw ? `${kw} kW` : '', catLabel].filter(Boolean);
+      return parts.join(' · ');
+    }
+    default:
+      return '';
+  }
 }
 
 export function TopologyCanvas(props: Props) {
@@ -106,6 +231,12 @@ export function TopologyCanvas(props: Props) {
               const x2 = toNode.position.x + NODE_WIDTH / 2;
               const y2 = toNode.position.y + NODE_HEIGHT / 2;
               const selected = selectedEdgeId === edge.id;
+              const linecode = typeof edge.params.linecode === 'string' ? edge.params.linecode : '';
+              const linecodeLabel = LINECODE_CN[linecode] || linecode || '';
+              const lengthKm = typeof edge.params.length_km === 'number' ? `${edge.params.length_km}km` : '';
+              const label = [edge.name, lengthKm, linecodeLabel].filter(Boolean).join(' · ');
+              const lineStroke = selected ? '#ef4444' : (LINE_STROKE_BY_CODE[linecode] || '#64748b');
+              const isDashed = edge.type !== 'special_line';
               return (
                 <g key={edge.id} onMouseDown={(event) => { event.stopPropagation(); onSelectEdge(edge.id); onSelectNode(null); }} style={{ cursor: 'pointer' }}>
                   <line
@@ -113,19 +244,20 @@ export function TopologyCanvas(props: Props) {
                     y1={y1}
                     x2={x2}
                     y2={y2}
-                    stroke={selected ? '#ef4444' : edge.type === 'special_line' ? '#2563eb' : '#64748b'}
-                    strokeDasharray={edge.type === 'special_line' ? undefined : '6 4'}
-                    strokeWidth={selected ? 3 : 2.25}
+                    stroke={lineStroke}
+                    strokeDasharray={isDashed ? '8 5' : undefined}
+                    strokeWidth={selected ? 3.5 : 2.75}
+                    strokeLinecap="round"
                   />
                   <text
                     x={(x1 + x2) / 2}
                     y={(y1 + y2) / 2 - 6}
-                    fill="#64748b"
+                    fill="#475569"
                     fontSize="11"
                     textAnchor="middle"
-                    style={{ userSelect: 'none', pointerEvents: 'none' }}
+                    style={{ userSelect: 'none', pointerEvents: 'none', paintOrder: 'stroke', stroke: '#ffffff', strokeWidth: 3 }}
                   >
-                    {edge.name}
+                    {label}
                   </text>
                 </g>
               );
@@ -134,6 +266,9 @@ export function TopologyCanvas(props: Props) {
 
           {nodes.map((node) => {
             const selected = selectedNodeId === node.id;
+            const color = nodeColor(node.type);
+            const typeLabel = NODE_TYPE_CN[node.type] || node.type;
+            const paramText = nodeParamsSummary(node.type, node.params);
             return (
               <div
                 key={node.id}
@@ -153,16 +288,35 @@ export function TopologyCanvas(props: Props) {
                   left: node.position.x,
                   top: node.position.y,
                   borderColor: selected ? '#ef4444' : '#cbd5e1',
-                  boxShadow: selected ? '0 0 0 2px rgba(239,68,68,0.15)' : '0 6px 18px rgba(15,23,42,0.06)',
+                  boxShadow: selected ? `0 0 0 2.5px rgba(239,68,68,0.18)` : `0 6px 18px rgba(15,23,42,0.06)`,
                 }}
               >
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
-                  <span style={{ width: 8, height: 8, borderRadius: '50%', background: nodeColor(node.type), flex: '0 0 auto' }} />
-                  <strong style={{ fontSize: 13, color: '#111827', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                    {node.name}
-                  </strong>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                  {nodeIcon(node.type, color)}
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                      <strong style={{ fontSize: 13, color: '#111827', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        {node.name}
+                      </strong>
+                      <span style={{
+                        fontSize: 10,
+                        color,
+                        background: `${color}15`,
+                        padding: '1px 6px',
+                        borderRadius: 4,
+                        whiteSpace: 'nowrap',
+                        flex: '0 0 auto',
+                      }}>
+                        {typeLabel}
+                      </span>
+                    </div>
+                    {paramText && (
+                      <div style={{ fontSize: 11, color: '#64748b', marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        {paramText}
+                      </div>
+                    )}
+                  </div>
                 </div>
-                <div style={{ fontSize: 12, color: '#64748b' }}>{displayType(node.type)}</div>
               </div>
             );
           })}

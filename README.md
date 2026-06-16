@@ -6,11 +6,13 @@
 
 ## 环境要求
 
-- **Python** 3.11.x
+- **Python** 3.11+（Windows 下载页：https://www.python.org/downloads/windows/）
 - **Node.js** 22+
 - **pnpm** >= 10
-- [OpenDSS](https://www.epri.com/pages/sa/opendss)（可选，仅 Windows，用于潮流计算校验）
+- [OpenDSS](https://opendss.epri.com/Downloads.html)（可选，仅 Windows，用于潮流计算校验；安装包页：https://sourceforge.net/projects/electricdss/files/）
 - Git
+
+`start.bat` 不会联网下载 Python。首次运行前请先安装 64 位 Python 3.11 或更高版本，或在工程目录内提供已准备好的 `python\python.exe` / `.venv\Scripts\python.exe`。
 
 ## 快速开始
 
@@ -160,10 +162,10 @@ python main.py --registry inputs/registry/node_registry.xlsx --solver-tier stand
 在仅需运行（不开发前端）的机器上，使用 `start.bat` 一键启动：
 
 ```bash
-start.bat    # 自动检测 Python → 创建 venv → 安装依赖 → 启动服务
+start.bat    # 检测 Python → 创建/复用 venv → 安装依赖 → 启动服务
 ```
 
-该脚本无需预装 Node.js，仅依赖 Python 3.11。
+该脚本无需预装 Node.js，但需要机器已经安装 Python 3.11 或更高版本，或工程目录已经带有可用的 `python\` / `.venv\`。
 
 ## 许可证
 

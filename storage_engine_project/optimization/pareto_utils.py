@@ -5,7 +5,9 @@ from typing import Iterable, Mapping
 import numpy as np
 
 from storage_engine_project.optimization.objective_scoring import (
+    DEFAULT_DEVICE_SAFETY_BETA,
     compute_weighted_objective_scores,
+    device_safety_cost_metric,
     device_strategy_safety_metric,
 )
 from storage_engine_project.optimization.optimization_models import FitnessEvaluationResult
@@ -54,6 +56,7 @@ def select_best_compromise(
     safety_economy_tradeoff: float = 0.5,
     economic_metric_weights: Mapping[str, float] | None = None,
     safety_metric_weights: Mapping[str, float] | None = None,
+    device_safety_beta: float = DEFAULT_DEVICE_SAFETY_BETA,
 ) -> FitnessEvaluationResult | None:
     if not archive:
         return None
@@ -81,6 +84,8 @@ def select_best_compromise(
         safety_economy_tradeoff=safety_economy_tradeoff,
         economic_metric_weights=economic_metric_weights,
         safety_metric_weights=safety_metric_weights,
+        device_safety_cost=_device_safety_costs(feasible),
+        device_safety_beta=device_safety_beta,
     )
     best_idx = int(np.argmin(scores.compromise_cost))
     return feasible[best_idx]
@@ -94,6 +99,13 @@ def _same_solution(a: FitnessEvaluationResult, b: FitnessEvaluationResult) -> bo
         and abs(da.rated_power_kw - db.rated_power_kw) <= 1e-9
         and abs(da.rated_energy_kwh - db.rated_energy_kwh) <= 1e-9
     )
+
+
+def _device_safety_costs(results: list[FitnessEvaluationResult]) -> list[float] | None:
+    costs = [device_safety_cost_metric(result) for result in results]
+    if not any(cost is not None for cost in costs):
+        return None
+    return [float(cost) if cost is not None else float("nan") for cost in costs]
 
 
 def _investment_metric(result: FitnessEvaluationResult) -> float:

@@ -31,6 +31,7 @@ import {
   fetchResultFiles,
   fetchSolverTasks,
   fetchSolverSummary,
+  getDiagnosticsDownloadUrl,
   getResultFileDownloadUrl,
 } from '../../services/solver';
 import { buildProposalHtml } from '../../services/reportBuilder';
@@ -330,6 +331,7 @@ export default function ResultsPage() {
   const [solverRunning, setSolverRunning] = useState(false);
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [deletingTask, setDeletingTask] = useState(false);
+  const [diagnosticsExporting, setDiagnosticsExporting] = useState(false);
 
   const primary = useMemo<GenericRow | null>(() => {
     if (!summary) return null;
@@ -587,7 +589,7 @@ export default function ResultsPage() {
       const html = buildProposalHtml(payload);
       printWindow = window.open('', '_blank');
       if (!printWindow) {
-        setError('弹窗被浏览器拦截，请允许本站弹窗后重试');
+        setError('PDF 打印窗口被浏览器拦截，请允许本站弹窗后重试；也可以先使用“导出HTML报告”。');
         return;
       }
       printWindow.document.write(html);
@@ -609,6 +611,41 @@ export default function ResultsPage() {
           printWindow?.close();
         }, { once: true });
       }
+    }
+  }
+
+  function filenameFromDisposition(value: string | null): string | null {
+    if (!value) return null;
+    const utf8Match = value.match(/filename\*=UTF-8''([^;]+)/i);
+    if (utf8Match?.[1]) return decodeURIComponent(utf8Match[1]);
+    const plainMatch = value.match(/filename="?([^";]+)"?/i);
+    return plainMatch?.[1] ?? null;
+  }
+
+  async function handleExportDiagnostics() {
+    if (diagnosticsExporting) return;
+    setDiagnosticsExporting(true);
+    setError(null);
+    try {
+      const response = await fetch(getDiagnosticsDownloadUrl(projectId, selectedTaskId || undefined));
+      if (!response.ok) {
+        const text = await response.text();
+        throw new Error(text || `诊断包生成失败：HTTP ${response.status}`);
+      }
+      const blob = await response.blob();
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = filenameFromDisposition(response.headers.get('content-disposition'))
+        || `diagnostics_${projectId}_${selectedTaskId || 'latest'}.zip`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setDiagnosticsExporting(false);
     }
   }
 
@@ -682,6 +719,18 @@ export default function ResultsPage() {
             disabled={pdfExporting}
           >
             {pdfExporting ? '正在生成报告...' : '导出PDF报告'}
+          </button>
+          <button
+            onClick={handleExportDiagnostics}
+            style={{
+              ...btnStyle,
+              opacity: diagnosticsExporting ? 0.6 : 1,
+              cursor: diagnosticsExporting ? 'not-allowed' : 'pointer',
+            }}
+            disabled={diagnosticsExporting}
+            title="导出当前任务的日志、参数、诊断摘要和环境信息"
+          >
+            {diagnosticsExporting ? '正在打包诊断...' : '导出诊断包'}
           </button>
         </div>
 
@@ -1920,7 +1969,7 @@ function InvestmentObjectiveExplanation(props: { summary?: ResultChartPoint; bes
     ['变压器', summary?.safetyWeightTransformer],
     ['电压', summary?.safetyWeightVoltage],
     ['线路', summary?.safetyWeightLine],
-    ['设备策略', summary?.safetyWeightCycle],
+    ['运行循环/策略', summary?.safetyWeightCycle],
   ]
     .map(([label, value]) => `${label} ${metricText((toFiniteNumber(value) ?? 0) * 100, '%')}`)
     .join(' / ');
@@ -1928,9 +1977,13 @@ function InvestmentObjectiveExplanation(props: { summary?: ResultChartPoint; bes
   const investment = best?.bestInvestmentWan ?? best?.initialInvestmentWan;
   const npv = best?.bestNpvWan ?? best?.npvWan;
   const fitness = best?.bestFitnessScorePct ?? best?.fitnessScorePct;
+  const deviceSafetyScore = best?.deviceSafetyScorePct;
+  const deviceSafetyText = toFiniteNumber(deviceSafetyScore) !== null
+    ? ` 设备自身安全得分 ${metricText(deviceSafetyScore, '%')}。`
+    : '';
   const explanationText = isLegacyScore
     ? '该历史任务没有引擎预计算分数字段，页面按旧版折中公式还原当时求解器排序：综合投资-NPV前沿距离、回收期、安全代理和NPV成本。新任务会直接读取引擎导出的当前加权目标评分。'
-    : `${feasibleText} 综合适应度 = 100 × (经济性总权重 × 经济性评分 + 安全性总权重 × 安全性评分)。总权重：${totalWeightText}；经济子权重：${economicWeightText}；安全子权重：${safetyWeightText}。`;
+    : `${feasibleText} 综合适应度 = 100 × (经济性总权重 × 经济性评分 + 安全性总权重 × 安全性评分)。总权重：${totalWeightText}；经济子权重：${economicWeightText}；运行安全子权重：${safetyWeightText}。${deviceSafetyText}`;
   const matchText = isLegacyScore
     ? ' 推荐方案即历史折中评分最高的候选。'
     : ' 推荐方案即当前权重下综合适应度最高的候选。';
@@ -1944,6 +1997,7 @@ function InvestmentObjectiveExplanation(props: { summary?: ResultChartPoint; bes
         <span>投资 {metricText(investment, ' 万元')}</span>
         <span>NPV {metricText(npv, ' 万元')}</span>
         <span>适应度 {metricText(fitness, '%')}</span>
+        {toFiniteNumber(deviceSafetyScore) !== null ? <span>设备自身安全 {metricText(deviceSafetyScore, '%')}</span> : null}
       </div>
       <div style={{ color: '#475569', lineHeight: 1.6, marginTop: 8 }}>
         {explanationText}
@@ -1954,13 +2008,115 @@ function InvestmentObjectiveExplanation(props: { summary?: ResultChartPoint; bes
 }
 
 function HistoryChart(props: { data: ResultChartPoint[] }) {
-  // Show only fields that actually exist in the data
+  const [selectedStrategy, setSelectedStrategy] = useState('');
+  const strategyGroups = useMemo(() => {
+    const grouped = new Map<string, ResultChartPoint[]>();
+    props.data.forEach((row) => {
+      const strategy = String(row.strategyId ?? row.strategyLabel ?? '整体').trim() || '整体';
+      const list = grouped.get(strategy) ?? [];
+      list.push(row);
+      grouped.set(strategy, list);
+    });
+    return Array.from(grouped.entries())
+      .map(([strategy, rows], index) => {
+        const sortedRows = [...rows].sort((a, b) => {
+          const aGen = toFiniteNumber(a.localGeneration) ?? toFiniteNumber(a.generation) ?? 0;
+          const bGen = toFiniteNumber(b.localGeneration) ?? toFiniteNumber(b.generation) ?? 0;
+          return aGen - bGen;
+        });
+        const localValues = sortedRows
+          .map((row) => toFiniteNumber(row.localGeneration))
+          .filter((value): value is number => value !== null);
+        const minLocal = localValues.length ? Math.min(...localValues) : null;
+        const maxLocal = localValues.length ? Math.max(...localValues) : null;
+        const useLocalGeneration =
+          localValues.length === sortedRows.length
+          && minLocal !== null
+          && maxLocal !== null
+          && (minLocal <= 1 || maxLocal <= Math.max(sortedRows.length * 2, 20));
+        const normalizedRows: ResultChartPoint[] = sortedRows.map((row, rowIndex): ResultChartPoint => ({
+          ...row,
+          displayGeneration: useLocalGeneration
+            ? toFiniteNumber(row.localGeneration)
+            : rowIndex + 1,
+        }));
+        return {
+          strategy,
+          label: String(sortedRows[0]?.strategyLabel ?? strategy),
+          color: HISTORY_SERIES_COLORS[index % HISTORY_SERIES_COLORS.length],
+          rows: normalizedRows,
+        };
+      });
+  }, [props.data]);
+  const multiStrategy = strategyGroups.length > 1;
+  const strategyKey = strategyGroups.map((group) => group.strategy).join('|');
+
+  useEffect(() => {
+    if (!multiStrategy) return;
+    if (!strategyGroups.some((group) => group.strategy === selectedStrategy)) {
+      setSelectedStrategy(strategyGroups[0]?.strategy ?? '');
+    }
+  }, [multiStrategy, selectedStrategy, strategyGroups, strategyKey]);
+
+  if (multiStrategy) {
+    const activeGroup = strategyGroups.find((group) => group.strategy === selectedStrategy) ?? strategyGroups[0];
+    const data = activeGroup?.rows ?? [];
+    const hasAvgNpv = data.some((row) => toFiniteNumber(row.avgNpvWan) !== null);
+    const hasPopulationSize = data.some((row) => toFiniteNumber(row.populationSize) !== null);
+    const selectedOrdinal = strategyGroups.findIndex((group) => group.strategy === activeGroup?.strategy) + 1;
+    return (
+      <div>
+        <div style={historyToolbarStyle}>
+          <div style={historyHintStyle}>
+            已按设备型号分组；当前只展示一个型号的收敛曲线，避免不同型号和图例互相覆盖。
+          </div>
+          <label style={historySelectLabelStyle}>
+            <span>设备型号</span>
+            <select
+              value={activeGroup?.strategy ?? ''}
+              onChange={(event) => setSelectedStrategy(event.target.value)}
+              style={historySelectStyle}
+            >
+              {strategyGroups.map((group, index) => (
+                <option key={group.strategy} value={group.strategy}>
+                  {index + 1}. {group.label}
+                </option>
+              ))}
+            </select>
+          </label>
+          <span style={historyCounterStyle}>{selectedOrdinal} / {strategyGroups.length}</span>
+        </div>
+        <ResponsiveContainer width="100%" height={340}>
+          <ComposedChart data={data} margin={{ top: 10, right: 18, bottom: 0, left: 0 }}>
+            <CartesianGrid stroke={SEMANTIC_COLORS.grid} strokeDasharray="3 3" />
+            <XAxis dataKey="displayGeneration" />
+            <YAxis yAxisId="npv" />
+            <YAxis yAxisId="count" orientation="right" allowDecimals={false} />
+            <Tooltip formatter={numberTooltipFormatter} labelFormatter={(value) => `本型号第 ${metricText(value)} 代`} />
+            <Legend />
+            <Line yAxisId="npv" type="monotone" dataKey="bestNpvWan" name="最优NPV" stroke={activeGroup?.color ?? SEMANTIC_COLORS.optimized} strokeWidth={2.2} connectNulls />
+            {hasAvgNpv ? (
+              <Line yAxisId="npv" type="monotone" dataKey="avgNpvWan" name="平均NPV" stroke={SEMANTIC_COLORS.baseline} strokeWidth={1.6} strokeDasharray={LINE_STYLES.dashed} dot={false} connectNulls />
+            ) : null}
+            <Line yAxisId="count" type="monotone" dataKey="archiveSize" name="Archive大小" stroke={SEMANTIC_COLORS.revenue.secondary} strokeWidth={1.8} dot={false} connectNulls />
+            {hasPopulationSize ? (
+              <Line yAxisId="count" type="monotone" dataKey="populationSize" name="种群规模" stroke={SEMANTIC_COLORS.tariff} strokeWidth={1.5} strokeDasharray="2,4" dot={false} connectNulls />
+            ) : null}
+            <Bar yAxisId="count" dataKey="feasibleCount" name="可行解数量" fill={SEMANTIC_COLORS.feasible} opacity={0.45} />
+          </ComposedChart>
+        </ResponsiveContainer>
+      </div>
+    );
+  }
+
   const hasAvgNpv = props.data.some(d => toFiniteNumber(d.avgNpvWan) !== null);
+  const hasPopulationSize = props.data.some(d => toFiniteNumber(d.populationSize) !== null);
+  const xKey = props.data.some(d => toFiniteNumber(d.localGeneration) !== null) ? 'localGeneration' : 'generation';
   return (
     <ResponsiveContainer width="100%" height={310}>
       <ComposedChart data={props.data} margin={{ top: 10, right: 18, bottom: 0, left: 0 }}>
         <CartesianGrid stroke={SEMANTIC_COLORS.grid} strokeDasharray="3 3" />
-        <XAxis dataKey="generation" />
+        <XAxis dataKey={xKey} />
         <YAxis yAxisId="npv" />
         <YAxis yAxisId="count" orientation="right" allowDecimals={false} />
         <Tooltip formatter={numberTooltipFormatter} />
@@ -1968,6 +2124,7 @@ function HistoryChart(props: { data: ResultChartPoint[] }) {
         <Line yAxisId="npv" type="monotone" dataKey="bestNpvWan" name="最优NPV" stroke={SEMANTIC_COLORS.optimized} strokeWidth={2} />
         {hasAvgNpv && <Line yAxisId="npv" type="monotone" dataKey="avgNpvWan" name="平均NPV" stroke={SEMANTIC_COLORS.baseline} strokeWidth={1.5} strokeDasharray={LINE_STYLES.dashed} dot={false} />}
         <Line yAxisId="count" type="monotone" dataKey="archiveSize" name="Archive大小" stroke={SEMANTIC_COLORS.revenue.secondary} strokeWidth={2} />
+        {hasPopulationSize && <Line yAxisId="count" type="monotone" dataKey="populationSize" name="种群规模" stroke={SEMANTIC_COLORS.tariff} strokeWidth={1.6} strokeDasharray="2,4" dot={false} />}
         <Bar yAxisId="count" dataKey="feasibleCount" name="可行解数量" fill={SEMANTIC_COLORS.feasible} opacity={0.55} />
       </ComposedChart>
     </ResponsiveContainer>
@@ -2010,13 +2167,25 @@ function EngineDiagnosticsScenarioBlock(props: { scenario: EngineDiagnosticsScen
   const rawEntries = Object.entries(raw)
     .map(([key, value]) => [key, toFiniteNumber(value)] as const)
     .filter(([, value]) => value !== null && Math.abs(value as number) > 1e-9);
-  const historyData = history.map((row) => ({
-    generation: toFiniteNumber(row.generation) ?? 0,
-    population_size: toFiniteNumber(row.population_size) ?? 0,
-    feasible_count: toFiniteNumber(row.feasible_count) ?? 0,
-    archive_size: toFiniteNumber(row.archive_size) ?? 0,
-    best_npv_yuan: toFiniteNumber(row.best_npv_yuan),
-  }));
+  const historyData: ResultChartPoint[] = history.map((row) => {
+    const bestNpvYuan = toFiniteNumber(row.best_npv_yuan);
+    const strategyId = String(row.strategy_id ?? '').trim();
+    return {
+      generation: toFiniteNumber(row.generation) ?? 0,
+      globalGeneration: toFiniteNumber(row.global_generation) ?? toFiniteNumber(row.generation) ?? 0,
+      localGeneration: toFiniteNumber(row.local_generation) ?? toFiniteNumber(row.generation) ?? 0,
+      localGenerations: toFiniteNumber(row.local_generations),
+      strategyId: strategyId || null,
+      strategyLabel: strategyId || '整体',
+      strategyIndex: toFiniteNumber(row.strategy_index),
+      strategyOrdinal: toFiniteNumber(row.strategy_ordinal),
+      strategyTotal: toFiniteNumber(row.strategy_total),
+      populationSize: toFiniteNumber(row.population_size) ?? 0,
+      feasibleCount: toFiniteNumber(row.feasible_count) ?? 0,
+      archiveSize: toFiniteNumber(row.archive_size) ?? 0,
+      bestNpvWan: bestNpvYuan === null ? null : bestNpvYuan / 10000,
+    };
+  });
   const scenarioLabel = scenario.scenario ? String(scenario.scenario) : `场景 ${index + 1}`;
   return (
     <div style={{ border: '1px solid #e5e7eb', borderRadius: 8, padding: 16, background: '#fafbff' }}>
@@ -2045,20 +2214,7 @@ function EngineDiagnosticsScenarioBlock(props: { scenario: EngineDiagnosticsScen
 
       <div style={{ fontWeight: 700, marginBottom: 8, color: '#334155' }}>自适应种群历史</div>
       {historyData.length ? (
-        <ResponsiveContainer width="100%" height={310}>
-          <ComposedChart data={historyData} margin={{ top: 10, right: 18, bottom: 0, left: 0 }}>
-            <CartesianGrid stroke={SEMANTIC_COLORS.grid} strokeDasharray="3 3" />
-            <XAxis dataKey="generation" />
-            <YAxis yAxisId="npv" />
-            <YAxis yAxisId="count" orientation="right" allowDecimals={false} />
-            <Tooltip formatter={numberTooltipFormatter} />
-            <Legend />
-            <Bar yAxisId="count" dataKey="feasible_count" name="可行解数量" fill={SEMANTIC_COLORS.feasible} opacity={0.55} />
-            <Line yAxisId="count" type="monotone" dataKey="population_size" name="种群规模" stroke={SEMANTIC_COLORS.revenue.secondary} strokeWidth={2} dot={false} />
-            <Line yAxisId="count" type="monotone" dataKey="archive_size" name="Archive 大小" stroke={SEMANTIC_COLORS.tariff} strokeWidth={2} dot={false} />
-            <Line yAxisId="npv" type="monotone" dataKey="best_npv_yuan" name="最优 NPV (元)" stroke={SEMANTIC_COLORS.optimized} strokeWidth={2.2} dot={false} />
-          </ComposedChart>
-        </ResponsiveContainer>
+        <HistoryChart data={historyData} />
       ) : (
         <EmptyChart />
       )}
@@ -2309,6 +2465,19 @@ function IsoBuildingBlock(props: { x: number; y: number; height: number; warning
     </g>
   );
 }
+
+const HISTORY_SERIES_COLORS = [
+  '#2563eb',
+  '#16a34a',
+  '#dc2626',
+  '#0891b2',
+  '#d97706',
+  '#7c3aed',
+  '#475569',
+  '#be123c',
+  '#0f766e',
+  '#4d7c0f',
+];
 
 function NetworkTopologyPanel(props: { data: NetworkTopologyChart | null }) {
   const nodes = chartRows(props.data?.nodes);
@@ -3539,6 +3708,11 @@ const chartCardStyle: React.CSSProperties = { background: '#fff', border: '1px s
 const fullWidthChartCardStyle: React.CSSProperties = { ...chartCardStyle, gridColumn: '1 / -1' };
 const investmentTrendGridStyle: React.CSSProperties = { display: 'grid', gridTemplateColumns: 'minmax(0, 1fr)', gap: 20 };
 const subChartTitleStyle: React.CSSProperties = { fontSize: 13, fontWeight: 700, color: '#334155', marginBottom: 4 };
+const historyToolbarStyle: React.CSSProperties = { display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', margin: '0 0 10px 2px' };
+const historyHintStyle: React.CSSProperties = { color: '#64748b', fontSize: 12, lineHeight: 1.5, flex: '1 1 320px' };
+const historySelectLabelStyle: React.CSSProperties = { display: 'inline-flex', alignItems: 'center', gap: 8, color: '#334155', fontSize: 12, fontWeight: 700 };
+const historySelectStyle: React.CSSProperties = { minWidth: 260, maxWidth: 460, padding: '6px 9px', borderRadius: 8, border: '1px solid #cbd5e1', background: '#fff', color: '#0f172a' };
+const historyCounterStyle: React.CSSProperties = { padding: '5px 8px', borderRadius: 999, border: '1px solid #dbeafe', background: '#eff6ff', color: '#1d4ed8', fontSize: 12, fontWeight: 800 };
 const objectiveExplainerStyle: React.CSSProperties = { marginTop: 12, padding: '12px 14px', borderRadius: 8, background: '#f8fafc', fontSize: 13 };
 const objectiveMetricRowStyle: React.CSSProperties = { display: 'flex', gap: 14, flexWrap: 'wrap', color: '#0f172a', fontWeight: 700 };
 const socZoomFooterStyle: React.CSSProperties = { display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, flexWrap: 'wrap', marginTop: 8, color: '#64748b', fontSize: 12 };

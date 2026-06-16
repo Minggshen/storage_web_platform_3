@@ -239,8 +239,12 @@ def load_registry_scenarios(
 def _resolve_strategy_list_for_scenario(
     scenario: RegistryScenario,
     strategy_library_path: str | Path,
+    device_safety_metric_weights: dict[str, float] | None = None,
 ) -> tuple[str, list[str]]:
-    strategies = load_storage_strategies(strategy_library_path)
+    strategies = load_storage_strategies(
+        strategy_library_path,
+        device_safety_metric_weights=device_safety_metric_weights,
+    )
     enabled_ids = [sid for sid, st in strategies.items() if getattr(st, "enabled", True)]
     default_ids = [
         sid for sid, st in strategies.items()
@@ -302,23 +306,14 @@ def _first_optional_float(*values: Any) -> float | None:
 
 def _apply_frontend_economic_overrides(ctx: AnnualOperationContext) -> AnnualOperationContext:
     meta = dict(ctx.meta)
-    direct_degradation = _to_optional_float(meta.get("degradation_cost_yuan_per_kwh_throughput"))
     battery_capex_share = _to_optional_float(meta.get("battery_capex_share"))
-    cycle_life_efc = _to_optional_float(meta.get("cycle_life_efc"))
-    annual_cycle_limit = _to_optional_float(meta.get("annual_cycle_limit"))
 
     for strategy in ctx.strategy_library.values():
         strategy_cycle_life = _first_optional_float(
-            cycle_life_efc,
             getattr(strategy, "cycle_life_efc", None),
             strategy.metadata.get("cycle_life_efc") if isinstance(strategy.metadata, dict) else None,
         )
-        if annual_cycle_limit is not None and annual_cycle_limit > 0:
-            strategy.annual_cycle_limit = float(annual_cycle_limit)
-
-        if direct_degradation is not None:
-            strategy.degradation_cost_yuan_per_kwh_throughput = max(0.0, direct_degradation)
-        elif (
+        if (
             float(getattr(strategy, "degradation_cost_yuan_per_kwh_throughput", 0.0)) <= 0
             and battery_capex_share is not None
             and strategy_cycle_life is not None
@@ -341,8 +336,13 @@ def build_context_from_registry_scenario(
     operation_config: OperationConfig | None = None,
     safety_config: SafetyConfig | None = None,
     service_config: ServiceConfig | None = None,
+    device_safety_metric_weights: dict[str, float] | None = None,
 ) -> AnnualOperationContext:
-    base_strategy_id, candidate_ids = _resolve_strategy_list_for_scenario(scenario, strategy_library_path)
+    base_strategy_id, candidate_ids = _resolve_strategy_list_for_scenario(
+        scenario,
+        strategy_library_path,
+        device_safety_metric_weights=device_safety_metric_weights,
+    )
     scenario.base_strategy_id = base_strategy_id
     scenario.strategy_candidates = candidate_ids
 
@@ -384,6 +384,7 @@ def build_context_from_registry_scenario(
         voltage_penalty_coeff_yuan=scenario.voltage_penalty_coeff_yuan,
         dispatch_mode=scenario.dispatch_mode,
         run_mode=scenario.run_mode,
+        device_safety_metric_weights=device_safety_metric_weights,
         extra_meta=scenario.extra_meta,
     )
     return _apply_frontend_economic_overrides(ctx)
@@ -393,12 +394,20 @@ def build_search_spaces_for_scenario(
     scenario: RegistryScenario,
     strategy_library_path: str | Path = "inputs/storage/工商业储能设备策略库.xlsx",
     context: AnnualOperationContext | None = None,
+    device_safety_metric_weights: dict[str, float] | None = None,
 ) -> dict[str, SearchSpaceConfig]:
-    base_strategy_id, candidate_ids = _resolve_strategy_list_for_scenario(scenario, strategy_library_path)
+    base_strategy_id, candidate_ids = _resolve_strategy_list_for_scenario(
+        scenario,
+        strategy_library_path,
+        device_safety_metric_weights=device_safety_metric_weights,
+    )
     scenario.base_strategy_id = base_strategy_id
     scenario.strategy_candidates = candidate_ids
 
-    strategies = load_storage_strategies(strategy_library_path)
+    strategies = load_storage_strategies(
+        strategy_library_path,
+        device_safety_metric_weights=device_safety_metric_weights,
+    )
     out: dict[str, SearchSpaceConfig] = {}
     boundary_records: dict[str, dict[str, Any]] = {}
 

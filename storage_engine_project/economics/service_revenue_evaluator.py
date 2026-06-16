@@ -36,11 +36,11 @@ class AnnualRevenueAuditConfig:
     default_om_ratio_annual: float = 0.02
     use_strategy_om_ratio: bool = True
 
-    # 与前端全局经济参数保持一致；registry 缺字段时才作为兜底。
+    # 历史固定/可变运维口径仅保留为兼容字段；默认以设备库 annual_om_ratio 计算。
     default_fixed_om_yuan_per_kw_year: float = 18.0
     default_variable_om_yuan_per_kwh: float = 0.004
 
-    use_fixed_and_variable_om: bool = True
+    use_fixed_and_variable_om: bool = False
     recompute_demand_saving_if_missing: bool = True
     default_capacity_revenue_days: float = 365.0
     default_network_loss_proxy_rate: float = 0.02
@@ -89,6 +89,7 @@ class AnnualRevenueAuditor:
             float(annual_result.rated_power_kw) * fixed_om_yuan_per_kw_year
             + float(annual_result.annual_battery_throughput_kwh) * variable_om_yuan_per_kwh
         )
+        annual_om_cost_method = "fixed_variable" if cfg.use_fixed_and_variable_om else "strategy_om_ratio"
         annual_om_cost_yuan = (
             annual_om_cost_yuan_fixed_var if cfg.use_fixed_and_variable_om else annual_om_cost_yuan_ratio
         )
@@ -216,6 +217,7 @@ class AnnualRevenueAuditor:
             monthly_summary=monthly_summary,
             metadata={
                 "om_ratio_annual": float(om_ratio),
+                "annual_om_cost_method": annual_om_cost_method,
                 "annual_om_cost_yuan_ratio_method": float(annual_om_cost_yuan_ratio),
                 "annual_om_cost_yuan_fixed_var_method": float(annual_om_cost_yuan_fixed_var),
                 "annual_fixed_om_yuan_per_kw_year": float(fixed_om_yuan_per_kw_year),

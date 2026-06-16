@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import csv
+import importlib.metadata as importlib_metadata
 import json
 import math
 import os
+import platform
 import re
 import shutil
 import signal
@@ -11,9 +13,12 @@ import subprocess
 import sys
 import threading
 import uuid
+import zipfile
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
+
+import numpy as np
 
 from services.build_signature import (
     asset_signature,
@@ -23,7 +28,16 @@ from services.build_signature import (
     topology_hash_from_project,
 )
 from services.project_model_service import ProjectModelService
-from storage_engine_project.optimization.objective_scoring import compute_weighted_objective_scores
+from storage_engine_project.optimization.objective_scoring import (
+    DEFAULT_DEVICE_SAFETY_BETA,
+    compute_weighted_objective_scores,
+)
+
+SOLVER_TIER_DEFAULTS = {
+    "fast": {"population_size": 8, "generations": 3},
+    "standard": {"population_size": 12, "generations": 5},
+    "delivery": {"population_size": 16, "generations": 8},
+}
 
 
 class SolverExecutionService:
@@ -140,12 +154,24 @@ class SolverExecutionService:
             return self._model_dump(getattr(project, "solver_binding", {}))
         return {}
 
+    @staticmethod
+    def _apply_effective_solver_tier_request(request: Dict[str, Any]) -> None:
+        tier = str(request.get("solver_tier") or "").strip().lower()
+        defaults = SOLVER_TIER_DEFAULTS.get(tier)
+        if defaults is None:
+            return
+        request["solver_tier"] = tier
+        request["population_size"] = defaults["population_size"]
+        request["generations"] = defaults["generations"]
+
     def run_solver(self, project_id: str, request: Dict[str, Any] | None = None) -> Dict[str, Any]:
         project_dir = self._project_dir(project_id)
         if not project_dir.exists():
             raise FileNotFoundError(f"项目不存在：{project_id}")
 
-        request = request or {}
+        request = dict(request or {})
+        request["device_safety_beta"] = DEFAULT_DEVICE_SAFETY_BETA
+        self._apply_effective_solver_tier_request(request)
         manifest_path = self._build_dir(project_id) / "manifest" / "build_manifest.json"
         if not manifest_path.exists():
             raise FileNotFoundError("未找到 build manifest，请先在构建校验页生成 Solver Workspace。")
@@ -748,16 +774,18 @@ class SolverExecutionService:
             terminal_soc_mode = "fixed"
         if terminal_soc_mode:
             command.extend(["--terminal-soc-mode", terminal_soc_mode])
-        if math.isfinite(fixed_terminal_soc_target):
+        terminal_soc_free = terminal_soc_mode == "free"
+        if math.isfinite(fixed_terminal_soc_target) and not terminal_soc_free:
             command.extend(["--fixed-terminal-soc-target", self._format_float(min(max(fixed_terminal_soc_target, 0.0), 1.0))])
 
         daily_terminal_soc_tolerance = self._safe_float(request.get("daily_terminal_soc_tolerance"), math.nan)
-        if math.isfinite(daily_terminal_soc_tolerance):
+        if math.isfinite(daily_terminal_soc_tolerance) and not terminal_soc_free:
             command.extend(["--daily-terminal-soc-tolerance", self._format_float(min(max(daily_terminal_soc_tolerance, 0.0), 0.20))])
 
         safety_tradeoff = self._safe_float(request.get("safety_economy_tradeoff"), math.nan)
         if math.isfinite(safety_tradeoff):
             command.extend(["--safety-economy-tradeoff", self._format_float(min(max(safety_tradeoff, 0.0), 1.0))])
+        command.extend(["--device-safety-beta", self._format_float(DEFAULT_DEVICE_SAFETY_BETA)])
         for request_key, option_name in [
             ("economic_weight_npv", "--economic-weight-npv"),
             ("economic_weight_irr", "--economic-weight-irr"),
@@ -767,6 +795,18 @@ class SolverExecutionService:
             ("safety_weight_voltage", "--safety-weight-voltage"),
             ("safety_weight_line", "--safety-weight-line"),
             ("safety_weight_cycle", "--safety-weight-cycle"),
+            ("device_safety_weight_cell", "--device-safety-weight-cell"),
+            ("device_safety_weight_capacity", "--device-safety-weight-capacity"),
+            ("device_safety_weight_thermal", "--device-safety-weight-thermal"),
+            ("device_safety_weight_temp_range", "--device-safety-weight-temp-range"),
+            ("device_safety_weight_detection", "--device-safety-weight-detection"),
+            ("device_safety_weight_fire_suppression", "--device-safety-weight-fire-suppression"),
+            ("device_safety_weight_explosion", "--device-safety-weight-explosion"),
+            ("device_safety_weight_bms", "--device-safety-weight-bms"),
+            ("device_safety_weight_propagation", "--device-safety-weight-propagation"),
+            ("device_safety_weight_ip", "--device-safety-weight-ip"),
+            ("device_safety_weight_corrosion", "--device-safety-weight-corrosion"),
+            ("device_safety_weight_certification", "--device-safety-weight-certification"),
         ]:
             weight = self._safe_float(request.get(request_key), math.nan)
             if math.isfinite(weight):
@@ -1193,7 +1233,10 @@ class SolverExecutionService:
         total_cases = self._last_number(stdout_text, r"共加载\s+(\d+)\s+个待优化场景")
         case_match = self._last_match(stdout_text, r"开始场景优化\s+\[(\d+)\/(\d+)\]")
         completed_cases = self._count_matches(stdout_text, r"场景完成：")
-        generations_from_log = self._last_number(stdout_text, r"优化参数：总代数=(\d+)")
+        generations_from_log = (
+            self._last_number(stdout_text, r"优化参数：每型号代数=(\d+)")
+            or self._last_number(stdout_text, r"优化参数：总代数=(\d+)")
+        )
         generations = max(generations_from_log or requested_generations or 0, 1)
         iteration = min(self._last_number(stdout_text, r"优化迭代\s+(\d+)") or 0, generations)
 
@@ -1223,6 +1266,18 @@ class SolverExecutionService:
 
         def case_percent(relative: float) -> int:
             return self._clamp_progress(case_start_percent + (case_end_percent - case_start_percent) * relative)
+
+        strategy_match = self._last_match(stdout_text, r"设备型号\s+(\d+)\/(\d+)")
+        if strategy_match and total and current and not in_full_recheck and not in_final_recheck:
+            strategy_index = max(1, self._safe_int(strategy_match[0], 1))
+            strategy_total = max(1, self._safe_int(strategy_match[1], 1))
+            strategy_fraction = min(max((strategy_index - 1) / strategy_total, 0.0), 1.0)
+            return {
+                "percent": case_percent(0.04 + strategy_fraction * 0.36),
+                "label": "按设备型号搜索",
+                "detail": f"第 {current}/{total} 个场景，正在优化设备型号 {strategy_index}/{strategy_total}。",
+                "source": "backend_log_parser",
+            }
 
         # --- 阶段 4：结果导出 (93-100%) ---
         if in_export and total and completed_cases >= total:
@@ -1516,6 +1571,266 @@ class SolverExecutionService:
         return task_copy
 
     # ---------------------------------------------------------------------
+    # 诊断包
+    # ---------------------------------------------------------------------
+    def create_diagnostics_package(self, project_id: str, task_id: Optional[str] = None) -> Tuple[Path, str]:
+        normalized_project_id = self._validate_project_id(project_id)
+        task = self._read_task_metadata(task_id, normalized_project_id) if task_id else self.get_latest_task(normalized_project_id)
+        if not task:
+            raise FileNotFoundError("未找到可导出的求解任务。")
+
+        normalized_task_id = self._validate_task_id(str(task.get("task_id") or task_id or ""))
+        task_dir = self._task_dir(normalized_project_id, normalized_task_id)
+        if not task_dir.exists():
+            raise FileNotFoundError(f"未找到任务目录：{normalized_task_id}")
+
+        diagnostics_dir = task_dir / "diagnostics"
+        diagnostics_dir.mkdir(parents=True, exist_ok=True)
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = f"diagnostics_{normalized_project_id}_{normalized_task_id}_{timestamp}.zip"
+        zip_path = diagnostics_dir / filename
+
+        task_logs = self.get_task(normalized_task_id, normalized_project_id) or task
+        stdout_tail = self._read_text_tail(Path(str(task_logs.get("stdout_log") or "")))
+        stderr_tail = self._read_text_tail(Path(str(task_logs.get("stderr_log") or "")))
+        task_logs = {
+            **task_logs,
+            "stdout_text": stdout_tail.get("text") or "",
+            "stderr_text": stderr_tail.get("text") or "",
+            "stdout_size": stdout_tail.get("size") or 0,
+            "stderr_size": stderr_tail.get("size") or 0,
+            "stdout_encoding": stdout_tail.get("encoding"),
+            "stderr_encoding": stderr_tail.get("encoding"),
+        }
+        result_manifest = self._diagnostics_result_manifest(normalized_project_id, normalized_task_id)
+        environment_info = self._diagnostics_environment_info(task_logs)
+        recent_errors = self._diagnostics_recent_errors(task_logs)
+        project_snapshot = self._diagnostics_project_snapshot(normalized_project_id)
+
+        with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+            self._zip_json(zf, "manifest.json", {
+                "created_at": self._now(),
+                "project_id": normalized_project_id,
+                "task_id": normalized_task_id,
+                "task_status": task_logs.get("status"),
+                "task_message": task_logs.get("message"),
+                "package_version": 1,
+                "note": "诊断包仅包含日志、元数据、诊断摘要和关键配置，不包含完整求解结果大文件。",
+            })
+            self._zip_json(zf, "environment_info.json", environment_info)
+            self._zip_json(zf, "project_snapshot.json", project_snapshot)
+            self._zip_json(zf, "task/task_meta.json", self._safe_load_json(task_dir / "task_meta.json", default=task_logs))
+            self._zip_json(zf, "task/state_task.json", self._safe_load_json(task_dir / "state" / "task.json", default=task_logs))
+            self._zip_json(zf, "task/result_files_manifest.json", result_manifest)
+            self._zip_text(zf, "task/recent_errors.txt", recent_errors)
+            self._zip_text_file_tail(zf, "logs/stdout.log", Path(str(task_logs.get("stdout_log") or "")))
+            self._zip_text_file_tail(zf, "logs/stderr.log", Path(str(task_logs.get("stderr_log") or "")))
+            self._zip_text_file_tail(zf, "logs/backend.log", self._backend_log_path())
+            self._zip_text_file_tail(zf, "logs/solver.log", self._solver_log_path())
+            self._zip_optional_file(zf, "build/build_manifest.json", self._build_dir(normalized_project_id) / "manifest" / "build_manifest.json")
+            self._zip_optional_file(zf, "build/grid_health.json", self._build_dir(normalized_project_id) / "manifest" / "grid_health.json")
+            self._zip_engine_diagnostics(zf, task_logs)
+
+        return zip_path, filename
+
+    def _diagnostics_result_manifest(self, project_id: str, task_id: str) -> Dict[str, Any]:
+        try:
+            manifest = self.list_result_files(project_id, task_id=task_id)
+        except Exception as exc:
+            return {"error": f"{type(exc).__name__}: {exc}"}
+        files = manifest.get("files") if isinstance(manifest.get("files"), list) else []
+        return {
+            "project_id": project_id,
+            "task_id": task_id,
+            "counts": manifest.get("counts") or {},
+            "file_count": len(files),
+            "files": [
+                {
+                    "group": item.get("group"),
+                    "relative_path": item.get("relative_path"),
+                    "size_bytes": item.get("size_bytes"),
+                    "suffix": item.get("suffix"),
+                }
+                for item in files
+            ],
+        }
+
+    def _diagnostics_environment_info(self, task: Dict[str, Any]) -> Dict[str, Any]:
+        package_names = [
+            "fastapi",
+            "uvicorn",
+            "pydantic",
+            "numpy",
+            "pandas",
+            "scipy",
+            "scikit-learn",
+            "openpyxl",
+            "pywin32",
+            "osqp",
+        ]
+        packages: Dict[str, str | None] = {}
+        for name in package_names:
+            try:
+                packages[name] = importlib_metadata.version(name)
+            except importlib_metadata.PackageNotFoundError:
+                packages[name] = None
+            except Exception as exc:
+                packages[name] = f"error:{type(exc).__name__}"
+        return {
+            "created_at": self._now(),
+            "platform": platform.platform(),
+            "python_version": sys.version,
+            "python_executable": sys.executable,
+            "cwd": str(Path.cwd()),
+            "task_pid": task.get("pid"),
+            "task_command": task.get("command"),
+            "packages": packages,
+            "log_dir": str(self._log_dir()),
+        }
+
+    def _diagnostics_project_snapshot(self, project_id: str) -> Dict[str, Any]:
+        try:
+            project = self._load_project_data(project_id)
+        except Exception as exc:
+            return {"project_id": project_id, "error": f"{type(exc).__name__}: {exc}"}
+        topology = project.get("topology") if isinstance(project.get("topology"), dict) else {}
+        nodes = topology.get("nodes") if isinstance(topology.get("nodes"), list) else []
+        edges = topology.get("edges") if isinstance(topology.get("edges"), list) else []
+        assets = project.get("assets") if isinstance(project.get("assets"), dict) else {}
+        return {
+            "project_id": project_id,
+            "project_name": project.get("name") or project.get("project_name"),
+            "created_at": project.get("created_at"),
+            "updated_at": project.get("updated_at"),
+            "node_count": len(nodes),
+            "edge_count": len(edges),
+            "asset_count": len(assets),
+            "topology_hash": self._topology_hash_from_project(project),
+            "build_input_hash": self._build_input_hash(project),
+            "asset_ids": list(assets.keys()),
+        }
+
+    def _diagnostics_recent_errors(self, task: Dict[str, Any]) -> str:
+        sources = {
+            "stdout": str(task.get("stdout_text") or ""),
+            "stderr": str(task.get("stderr_text") or ""),
+            "backend.log": self._read_text_tail(self._backend_log_path(), max_bytes=2_000_000).get("text") or "",
+            "solver.log": self._read_text_tail(self._solver_log_path(), max_bytes=2_000_000).get("text") or "",
+        }
+        patterns = [
+            "error",
+            "exception",
+            "traceback",
+            "failed",
+            "out of memory",
+            "opendss",
+            "失败",
+            "报错",
+            "异常",
+            "内存",
+        ]
+        chunks: List[str] = []
+        for name, text in sources.items():
+            matched = [
+                line
+                for line in str(text).splitlines()
+                if any(pattern in line.lower() for pattern in patterns)
+            ]
+            chunks.append(f"===== {name} ({len(matched)} matched lines) =====")
+            chunks.extend(matched[-200:] if matched else ["<no matched lines>"])
+        return "\n".join(chunks) + "\n"
+
+    def _zip_engine_diagnostics(self, zf: zipfile.ZipFile, task: Dict[str, Any]) -> None:
+        raw_output_dir = str(task.get("outputs_dir") or "").strip()
+        output_dir = Path(raw_output_dir) if raw_output_dir else Path("__missing_outputs__")
+        candidates: List[Path] = []
+        if output_dir.exists():
+            candidates.extend(sorted(output_dir.glob("engine_diagnostics.json")))
+            candidates.extend(sorted(output_dir.glob("*/engine_diagnostics.json")))
+            candidates.extend(sorted(output_dir.glob("*/run_health_report.json")))
+            candidates.extend(sorted(output_dir.glob("*/network_impact_report.json")))
+        raw_workspace = str(task.get("solver_workspace") or "").strip()
+        workspace_output = Path(raw_workspace) / "outputs" / "integrated_optimization" if raw_workspace else Path("__missing_workspace_outputs__")
+        if workspace_output.exists() and workspace_output != output_dir:
+            candidates.extend(sorted(workspace_output.glob("engine_diagnostics.json")))
+            candidates.extend(sorted(workspace_output.glob("*/engine_diagnostics.json")))
+            candidates.extend(sorted(workspace_output.glob("*/run_health_report.json")))
+            candidates.extend(sorted(workspace_output.glob("*/network_impact_report.json")))
+
+        seen: set[str] = set()
+        for path in candidates:
+            try:
+                key = str(path.resolve())
+            except Exception:
+                key = str(path)
+            if key in seen:
+                continue
+            seen.add(key)
+            base = output_dir if output_dir.exists() and path.is_relative_to(output_dir) else path.parent
+            try:
+                rel = path.relative_to(base).as_posix()
+            except Exception:
+                rel = path.name
+            self._zip_optional_file(zf, f"engine/{rel}", path)
+
+    def _log_dir(self) -> Path:
+        raw = os.getenv("LOG_DIR")
+        if raw:
+            return Path(raw)
+        return Path(__file__).resolve().parents[2] / "logs"
+
+    def _backend_log_path(self) -> Path:
+        return self._log_dir() / "backend.log"
+
+    def _solver_log_path(self) -> Path:
+        return self._log_dir() / "solver.log"
+
+    @staticmethod
+    def _zip_json(zf: zipfile.ZipFile, arcname: str, payload: Any) -> None:
+        zf.writestr(arcname, json.dumps(payload, ensure_ascii=False, indent=2, default=str))
+
+    @staticmethod
+    def _zip_text(zf: zipfile.ZipFile, arcname: str, text: str) -> None:
+        zf.writestr(arcname, text)
+
+    def _zip_text_file_tail(self, zf: zipfile.ZipFile, arcname: str, path: Path, max_bytes: int = 2_000_000) -> None:
+        info = self._read_text_tail(path, max_bytes=max_bytes)
+        header = {
+            "path": str(path),
+            "exists": info["exists"],
+            "size": info["size"],
+            "encoding": info["encoding"],
+            "truncated": info["truncated"],
+        }
+        zf.writestr(arcname, json.dumps(header, ensure_ascii=False) + "\n" + str(info["text"]))
+
+    def _zip_optional_file(self, zf: zipfile.ZipFile, arcname: str, path: Path, max_bytes: int = 4_000_000) -> None:
+        if not path.exists() or not path.is_file():
+            return
+        if path.stat().st_size <= max_bytes:
+            zf.write(path, arcname)
+            return
+        self._zip_text_file_tail(zf, arcname, path, max_bytes=max_bytes)
+
+    def _read_text_tail(self, path: Path, max_bytes: int = 2_000_000) -> Dict[str, Any]:
+        if not path.exists() or not path.is_file():
+            return {"exists": False, "path": str(path), "text": "", "encoding": None, "size": 0, "truncated": False}
+        size = path.stat().st_size
+        with path.open("rb") as handle:
+            if size > max_bytes:
+                handle.seek(max(0, size - max_bytes))
+            raw = handle.read()
+        text, enc = self._decode_bytes(raw)
+        return {
+            "exists": True,
+            "path": str(path),
+            "text": text,
+            "encoding": enc,
+            "size": size,
+            "truncated": size > max_bytes,
+        }
+
+    # ---------------------------------------------------------------------
     # 结果目录与摘要
     # ---------------------------------------------------------------------
     @staticmethod
@@ -1707,6 +2022,7 @@ class SolverExecutionService:
         candidate_rows = archive_rows or population_rows
         operation = self._build_operation_charts(hourly_rows)
         safety_economy_tradeoff = self._task_safety_economy_tradeoff(latest_task)
+        device_safety_beta = self._task_device_safety_beta(latest_task)
         economic_metric_weights = self._task_metric_weights(
             latest_task,
             {
@@ -1730,6 +2046,7 @@ class SolverExecutionService:
             safety_economy_tradeoff=safety_economy_tradeoff,
             economic_metric_weights=economic_metric_weights,
             safety_metric_weights=safety_metric_weights,
+            device_safety_beta=device_safety_beta,
             best_result_summary=best_result_summary,
         )
         investment_economics = self._build_investment_economics_chart(pareto_chart)
@@ -1758,6 +2075,7 @@ class SolverExecutionService:
                 safety_economy_tradeoff=safety_economy_tradeoff,
                 economic_metric_weights=economic_metric_weights,
                 safety_metric_weights=safety_metric_weights,
+                device_safety_beta=device_safety_beta,
             ),
             "optimization_history": self._build_history_chart(history_rows),
             "storage_impact": self._build_storage_impact_chart(operation["representative_day"].get("rows", [])),
@@ -3451,13 +3769,13 @@ class SolverExecutionService:
                 "name": str(edge.get("name") or edge_id),
                 "from_node_id": str(edge.get("from_node_id") or ""),
                 "to_node_id": str(edge.get("to_node_id") or ""),
-                "linecode": str(params.get("linecode") or params.get("line_code") or row.get("linecode") or "LC_MAIN"),
-                "length_km": self._number(params, "length_km", self._number(row, "length_km", 1.0)),
+                "linecode": str(params.get("linecode") or params.get("line_code") or row.get("linecode") or ""),
+                "length_km": self._number(params, "length_km", self._number(row, "length_km", 0.0)),
                 "r_ohm_per_km": self._number(params, "r_ohm_per_km", self._number(row, "r_ohm_per_km", 0.0)),
                 "x_ohm_per_km": self._number(params, "x_ohm_per_km", self._number(row, "x_ohm_per_km", 0.0)),
                 "normamps": self._number(params, "rated_current_a", self._number(row, "normamps", 0.0)),
                 "emergamps": self._number(params, "emerg_current_a", self._number(row, "emergamps", 0.0)),
-                "phases": int(self._number(params, "phases", self._number(row, "phases", 3))),
+                "phases": int(self._number(params, "phases", self._number(row, "phases", 0))),
                 "enabled": self._bool_value(params.get("enabled")) is not False,
                 "normally_open": self._bool_value(params.get("normally_open")) is True,
             }
@@ -4041,6 +4359,7 @@ class SolverExecutionService:
         safety_economy_tradeoff: float = 0.5,
         economic_metric_weights: Dict[str, float] | None = None,
         safety_metric_weights: Dict[str, float] | None = None,
+        device_safety_beta: float = DEFAULT_DEVICE_SAFETY_BETA,
         best_result_summary: Dict[str, Any] | None = None,
     ) -> List[Dict[str, Any]]:
         chart: List[Dict[str, Any]] = []
@@ -4113,6 +4432,16 @@ class SolverExecutionService:
                 "objectiveSafetyVoltageScorePct": self._optional_number(row, "objective_voltage_score_pct"),
                 "objectiveSafetyLineScorePct": self._optional_number(row, "objective_line_score_pct"),
                 "objectiveSafetyCycleScorePct": self._optional_number(row, "objective_cycle_score_pct"),
+                "operationSafetyCost": self._optional_number(row, "operation_safety_cost"),
+                "operationSafetyScore": self._optional_number(row, "operation_safety_score"),
+                "operationSafetyScorePct": self._optional_number(row, "operation_safety_score_pct"),
+                "deviceSafetyAvailable": self._bool(row.get("device_safety_available")),
+                "deviceSafetyCost": self._optional_number(row, "device_safety_cost"),
+                "deviceSafetyScore": self._optional_number(row, "device_safety_score"),
+                "deviceSafetyScorePct": self._optional_number(row, "device_safety_score_pct"),
+                "deviceSafetyBeta": self._optional_number(row, "device_safety_beta"),
+                "deviceSafetyTrace": row.get("device_safety_trace"),
+                "deviceSafetyDataQualityFlags": row.get("device_safety_data_quality_flags"),
             }
             chart.append(point)
         self._annotate_pareto_frontier(chart)
@@ -4122,6 +4451,7 @@ class SolverExecutionService:
             safety_economy_tradeoff=safety_economy_tradeoff,
             economic_metric_weights=economic_metric_weights,
             safety_metric_weights=safety_metric_weights,
+            device_safety_beta=device_safety_beta,
             allow_legacy_compromise=any(point.get("recommendedCandidate") is True for point in chart),
         )
         return chart
@@ -4195,6 +4525,16 @@ class SolverExecutionService:
                     "objectiveSafetyVoltageScorePct",
                     "objectiveSafetyLineScorePct",
                     "objectiveSafetyCycleScorePct",
+                    "operationSafetyCost",
+                    "operationSafetyScore",
+                    "operationSafetyScorePct",
+                    "deviceSafetyAvailable",
+                    "deviceSafetyCost",
+                    "deviceSafetyScore",
+                    "deviceSafetyScorePct",
+                    "deviceSafetyBeta",
+                    "deviceSafetyTrace",
+                    "deviceSafetyDataQualityFlags",
                     "objectiveScoreSource",
                     "objectiveScoreSourceLabel",
                 )
@@ -4218,6 +4558,7 @@ class SolverExecutionService:
         safety_economy_tradeoff: float,
         economic_metric_weights: Dict[str, float] | None = None,
         safety_metric_weights: Dict[str, float] | None = None,
+        device_safety_beta: float = DEFAULT_DEVICE_SAFETY_BETA,
     ) -> Dict[str, Any]:
         feasible_rows = [row for row in chart if row.get("feasible") is True]
         scored_rows = [
@@ -4252,6 +4593,7 @@ class SolverExecutionService:
             "safetyWeightVoltage": safety_weights["voltage"],
             "safetyWeightLine": safety_weights["line"],
             "safetyWeightCycle": safety_weights["cycle"],
+            "deviceSafetyBeta": float(device_safety_beta),
             "recommendationMatchesFitness": bool(best is not None and fitness_best is not None and best is fitness_best),
             "scoreSource": (fitness_best or best or {}).get("objectiveScoreSource"),
             "scoreSourceLabel": (fitness_best or best or {}).get("objectiveScoreSourceLabel"),
@@ -4360,6 +4702,7 @@ class SolverExecutionService:
         safety_economy_tradeoff: float,
         economic_metric_weights: Dict[str, float] | None = None,
         safety_metric_weights: Dict[str, float] | None = None,
+        device_safety_beta: float = DEFAULT_DEVICE_SAFETY_BETA,
         allow_legacy_compromise: bool = False,
     ) -> None:
         for point in chart:
@@ -4389,11 +4732,18 @@ class SolverExecutionService:
             point["objectiveBest"] = False
             point["compromiseCost"] = None
             point["economicCost"] = None
+            point["operationSafetyCost"] = None
+            point["deviceSafetyCost"] = point.get("deviceSafetyCost")
             point["safetyCost"] = None
             point["economicScore"] = None
+            point["operationSafetyScore"] = None
+            point["deviceSafetyScore"] = point.get("deviceSafetyScore")
             point["safetyScore"] = None
             point["economicScorePct"] = None
+            point["operationSafetyScorePct"] = None
+            point["deviceSafetyScorePct"] = point.get("deviceSafetyScorePct")
             point["safetyScorePct"] = None
+            point["deviceSafetyBeta"] = None
             point["objectivePaybackScore"] = None
             point["objectiveInvestmentScore"] = None
             point["objectiveIrrScore"] = None
@@ -4433,11 +4783,16 @@ class SolverExecutionService:
             point["objectiveBest"] = True
             point["compromiseCost"] = 0.0
             point["economicCost"] = 0.0
+            point["operationSafetyCost"] = 0.0
             point["safetyCost"] = 0.0
             point["economicScore"] = 1.0
+            point["operationSafetyScore"] = 1.0
             point["safetyScore"] = 1.0
             point["economicScorePct"] = 100.0
+            point["operationSafetyScorePct"] = 100.0
             point["safetyScorePct"] = 100.0
+            if point.get("deviceSafetyAvailable") is True:
+                point["deviceSafetyBeta"] = min(max(float(device_safety_beta), 0.0), 1.0)
             point["objectivePaybackScore"] = 0.0
             point["objectiveInvestmentScore"] = 0.0
             point["objectiveIrrScore"] = 0.0
@@ -4493,6 +4848,9 @@ class SolverExecutionService:
             self._device_strategy_safety_input(chart[idx])
             for idx in feasible_indices
         ]
+        device_safety_costs = self._device_safety_cost_inputs(
+            [chart[idx] for idx in feasible_indices]
+        )
 
         objective_scores = compute_weighted_objective_scores(
             npv=npv,
@@ -4506,6 +4864,8 @@ class SolverExecutionService:
             safety_economy_tradeoff=safety_economy_tradeoff,
             economic_metric_weights=economic_metric_weights,
             safety_metric_weights=safety_metric_weights,
+            device_safety_cost=device_safety_costs,
+            device_safety_beta=device_safety_beta,
         )
         scored: List[Tuple[int, float, float]] = []
         for local_idx, chart_idx in enumerate(feasible_indices):
@@ -4518,11 +4878,28 @@ class SolverExecutionService:
             point["fitnessScorePct"] = fitness * 100.0
             point["compromiseCost"] = compromise_cost
             point["economicCost"] = economic_cost
+            point["operationSafetyCost"] = float(objective_scores.operation_safety_cost[local_idx])
+            point["deviceSafetyCost"] = (
+                None
+                if not np.isfinite(objective_scores.device_safety_cost[local_idx])
+                else float(objective_scores.device_safety_cost[local_idx])
+            )
             point["safetyCost"] = safety_cost
             point["economicScore"] = float(objective_scores.economic_score[local_idx])
+            point["operationSafetyScore"] = float(objective_scores.operation_safety_score[local_idx])
+            point["deviceSafetyScore"] = (
+                None
+                if not np.isfinite(objective_scores.device_safety_score[local_idx])
+                else float(objective_scores.device_safety_score[local_idx])
+            )
             point["safetyScore"] = float(objective_scores.safety_score[local_idx])
             point["economicScorePct"] = point["economicScore"] * 100.0
+            point["operationSafetyScorePct"] = point["operationSafetyScore"] * 100.0
+            point["deviceSafetyScorePct"] = (
+                None if point["deviceSafetyScore"] is None else point["deviceSafetyScore"] * 100.0
+            )
             point["safetyScorePct"] = point["safetyScore"] * 100.0
+            point["deviceSafetyBeta"] = float(objective_scores.device_safety_beta)
             point["objectivePaybackScore"] = float(objective_scores.economic_metric_costs["payback"][local_idx])
             point["objectiveInvestmentScore"] = float(objective_scores.economic_metric_costs["investment"][local_idx])
             point["objectiveIrrScore"] = float(objective_scores.economic_metric_costs["irr"][local_idx])
@@ -4713,6 +5090,18 @@ class SolverExecutionService:
             + (self._finite_number(point.get("durationViolationH"), 0.0) or 0.0)
         )
 
+    def _device_safety_cost_inputs(self, points: List[Dict[str, Any]]) -> List[float] | None:
+        costs: List[float] = []
+        any_available = False
+        for point in points:
+            if point.get("deviceSafetyAvailable") is True:
+                value = self._finite_number(point.get("deviceSafetyCost"), None)
+                costs.append(float(value) if value is not None else math.nan)
+                any_available = True
+            else:
+                costs.append(math.nan)
+        return costs if any_available else None
+
     def _apply_precomputed_scores(
         self,
         chart: List[Dict[str, Any]],
@@ -4744,6 +5133,22 @@ class SolverExecutionService:
                 point["economicScore"] = economic_score
             if point.get("economicScorePct") is None and economic_score is not None:
                 point["economicScorePct"] = economic_score * 100.0
+
+            operation_cost = self._finite_number(point.get("operationSafetyCost"), None)
+            operation_score = self._finite_number(point.get("operationSafetyScore"), None)
+            if operation_score is None and operation_cost is not None:
+                operation_score = max(0.0, min(1.0, 1.0 - operation_cost))
+                point["operationSafetyScore"] = operation_score
+            if point.get("operationSafetyScorePct") is None and operation_score is not None:
+                point["operationSafetyScorePct"] = operation_score * 100.0
+
+            device_cost = self._finite_number(point.get("deviceSafetyCost"), None)
+            device_score = self._finite_number(point.get("deviceSafetyScore"), None)
+            if device_score is None and device_cost is not None and point.get("deviceSafetyAvailable") is True:
+                device_score = max(0.0, min(1.0, 1.0 - device_cost))
+                point["deviceSafetyScore"] = device_score
+            if point.get("deviceSafetyScorePct") is None and device_score is not None:
+                point["deviceSafetyScorePct"] = device_score * 100.0
 
             safety_cost = self._finite_number(point.get("safetyCost"), None)
             safety_score = self._finite_number(point.get("safetyScore"), None)
@@ -4869,6 +5274,24 @@ class SolverExecutionService:
                         return min(max(float(value), 0.0), 1.0)
         return 0.5
 
+    def _task_device_safety_beta(self, task: Dict[str, Any]) -> float:
+        metadata = task.get("metadata") if isinstance(task, dict) else None
+        if isinstance(metadata, dict):
+            request = metadata.get("run_request")
+            if isinstance(request, dict):
+                value = self._finite_number(request.get("device_safety_beta"), None)
+                if value is not None:
+                    return min(max(float(value), 0.0), 1.0)
+
+        command = task.get("command") if isinstance(task, dict) else None
+        if isinstance(command, list):
+            for index, token in enumerate(command):
+                if str(token) == "--device-safety-beta" and index + 1 < len(command):
+                    value = self._finite_number(command[index + 1], None)
+                    if value is not None:
+                        return min(max(float(value), 0.0), 1.0)
+        return DEFAULT_DEVICE_SAFETY_BETA
+
     def _task_metric_weights(
         self,
         task: Dict[str, Any],
@@ -4898,10 +5321,26 @@ class SolverExecutionService:
 
     def _build_history_chart(self, rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         chart: List[Dict[str, Any]] = []
+        strategy_local_counts: Dict[str, int] = {}
         for row in rows:
+            strategy_id = str(row.get("strategy_id") or "").strip()
+            raw_generation = int(self._number(row, "generation"))
+            local_generation = self._optional_number(row, "local_generation")
+            if local_generation is None and strategy_id:
+                strategy_local_counts[strategy_id] = strategy_local_counts.get(strategy_id, 0) + 1
+                local_generation = strategy_local_counts[strategy_id]
+            global_generation = self._optional_number(row, "global_generation")
             chart.append(
                 {
-                    "generation": int(self._number(row, "generation")),
+                    "generation": raw_generation,
+                    "globalGeneration": int(global_generation) if global_generation is not None else raw_generation,
+                    "localGeneration": int(local_generation) if local_generation is not None else raw_generation,
+                    "localGenerations": int(self._number(row, "local_generations")) if self._optional_number(row, "local_generations") is not None else None,
+                    "strategyId": strategy_id or None,
+                    "strategyLabel": strategy_id or "整体",
+                    "strategyIndex": int(self._number(row, "strategy_index")) if self._optional_number(row, "strategy_index") is not None else None,
+                    "strategyOrdinal": int(self._number(row, "strategy_ordinal")) if self._optional_number(row, "strategy_ordinal") is not None else None,
+                    "strategyTotal": int(self._number(row, "strategy_total")) if self._optional_number(row, "strategy_total") is not None else None,
                     "populationSize": int(self._number(row, "population_size")),
                     "feasibleCount": int(self._number(row, "feasible_count")),
                     "archiveSize": int(self._number(row, "archive_size")),

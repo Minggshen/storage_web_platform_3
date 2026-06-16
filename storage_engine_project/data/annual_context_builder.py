@@ -224,6 +224,7 @@ def build_annual_operation_context(
     voltage_penalty_coeff_yuan: float = 0.0,
     dispatch_mode: str = "hybrid",
     run_mode: str = "single_user",
+    device_safety_metric_weights: dict[str, float] | None = None,
     extra_meta: dict[str, Any] | None = None,
     print_input_summary: bool | None = None,
 ) -> AnnualOperationContext:
@@ -231,7 +232,10 @@ def build_annual_operation_context(
     safety_config = safety_config or get_default_safety_config()
     service_config = service_config or get_default_service_config()
 
-    strategy_lib = load_storage_strategies(strategy_library_path)
+    strategy_lib = load_storage_strategies(
+        strategy_library_path,
+        device_safety_metric_weights=device_safety_metric_weights,
+    )
     if strategy_id not in strategy_lib:
         raise KeyError(f"未在设备策略库中找到 strategy_id={strategy_id}")
 

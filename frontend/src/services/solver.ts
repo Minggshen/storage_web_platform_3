@@ -28,6 +28,18 @@ export type SolverRunOptions = {
   safety_weight_voltage?: number;
   safety_weight_line?: number;
   safety_weight_cycle?: number;
+  device_safety_weight_cell?: number;
+  device_safety_weight_capacity?: number;
+  device_safety_weight_thermal?: number;
+  device_safety_weight_temp_range?: number;
+  device_safety_weight_detection?: number;
+  device_safety_weight_fire_suppression?: number;
+  device_safety_weight_explosion?: number;
+  device_safety_weight_bms?: number;
+  device_safety_weight_propagation?: number;
+  device_safety_weight_ip?: number;
+  device_safety_weight_corrosion?: number;
+  device_safety_weight_certification?: number;
 };
 
 export async function fetchLatestSolverTask(projectId: string): Promise<SolverTask | null> {
@@ -114,6 +126,13 @@ export function getResultFileDownloadUrl(projectId: string, relativePath: string
   if (group) query.set('group', group);
   if (taskId) query.set('task_id', taskId);
   return `${API_BASE}/api/solver/project/${projectId}/result-file/download?${query.toString()}`;
+}
+
+export function getDiagnosticsDownloadUrl(projectId: string, taskId?: string) {
+  const query = new URLSearchParams();
+  if (taskId) query.set('task_id', taskId);
+  const suffix = query.toString() ? `?${query.toString()}` : '';
+  return `${API_BASE}/api/solver/project/${projectId}/diagnostics/download${suffix}`;
 }
 
 export async function rerunSolver(projectId: string, options: SolverRunOptions = {}) {

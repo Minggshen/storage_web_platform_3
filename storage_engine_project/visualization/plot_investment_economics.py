@@ -73,6 +73,7 @@ def _annotate_fitness(
     safety_economy_tradeoff: float,
     economic_metric_weights: Mapping[str, float] | None,
     safety_metric_weights: Mapping[str, float] | None,
+    device_safety_beta: float,
 ) -> pd.DataFrame:
     out = df.copy()
     if out.empty:
@@ -82,6 +83,7 @@ def _annotate_fitness(
         safety_economy_tradeoff=safety_economy_tradeoff,
         economic_metric_weights=economic_metric_weights,
         safety_metric_weights=safety_metric_weights,
+        device_safety_beta=device_safety_beta,
     )
     scored = out[pd.to_numeric(out.get("fitness_score"), errors="coerce").notna()]
     out["objective_best"] = False
@@ -111,13 +113,20 @@ def plot_investment_economics_trends(
     safety_economy_tradeoff: float = 0.5,
     economic_metric_weights: Mapping[str, float] | None = None,
     safety_metric_weights: Mapping[str, float] | None = None,
+    device_safety_beta: float = 0.5,
 ) -> list[str]:
     setup_matplotlib_chinese()
     out_dir = _ensure_dir(output_dir)
     df = _records(run_result)
     if df.empty:
         return []
-    work = _annotate_fitness(df, safety_economy_tradeoff, economic_metric_weights, safety_metric_weights)
+    work = _annotate_fitness(
+        df,
+        safety_economy_tradeoff,
+        economic_metric_weights,
+        safety_metric_weights,
+        device_safety_beta,
+    )
     work = work.sort_values(["initial_investment_yuan", "npv_yuan"], kind="stable")
     for column in (
         "initial_investment_yuan",

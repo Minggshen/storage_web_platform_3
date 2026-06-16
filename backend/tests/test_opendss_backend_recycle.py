@@ -155,6 +155,9 @@ def test_recycles_backend_on_hour_boundary_after_solve_interval(tmp_path) -> Non
     assert first.metadata["opendss_backend_recycle_count"] == 0
     assert second.metadata["opendss_backend_recycle_count"] == 1
     assert second.metadata["opendss_backend_solve_calls_since_recycle"] == 2
+    assert first.metadata["opendss_compile_mode"] == "compile"
+    assert second.metadata["opendss_compile_mode"] == "compile"
+    assert first.metadata["opendss_validated"] is True
 
 
 def test_recycles_backend_and_retries_current_hour_on_oom(tmp_path) -> None:
@@ -177,3 +180,21 @@ def test_recycles_backend_and_retries_current_hour_on_oom(tmp_path) -> None:
     assert second_backend.solve_calls == 2
     assert result.metadata["opendss_backend_retry_attempt"] == 1
     assert result.metadata["opendss_backend_recycle_count"] == 1
+    assert result.metadata["opendss_fallback_used"] is False
+    assert result.metadata["opendss_validated"] is True
+
+
+def test_runtime_metadata_records_model_identity_and_storage_sign(tmp_path) -> None:
+    backend = _FakeBackend()
+    oracle = _make_oracle(tmp_path, backend)
+
+    result = _evaluate(oracle, day=0, hour=0)
+
+    assert result.metadata["opendss_master_dss_path"].endswith("Master.dss")
+    assert len(result.metadata["opendss_master_dss_sha256"]) == 64
+    assert result.metadata["opendss_compile_mode"] == "compile"
+    assert result.metadata["storage_planned_charge_kw"] == 10.0
+    assert result.metadata["storage_planned_discharge_kw"] == 0.0
+    assert result.metadata["storage_dispatch_net_kw"] == -10.0
+    assert result.metadata["storage_dispatch_state"] == "CHARGING"
+    assert "positive discharge" in result.metadata["storage_opendss_sign_convention"]

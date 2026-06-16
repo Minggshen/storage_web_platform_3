@@ -34,8 +34,11 @@ REM 1c. System Python >= 3.11 -- create local venv from it
 python --version >nul 2>&1
 if not errorlevel 1 (
     for /f "tokens=2" %%v in ('python --version 2^>^&1') do set "PY_VER=%%v"
-    for /f "tokens=2 delims=." %%a in ("!PY_VER!") do set "PY_MINOR=%%a"
-    if !PY_MINOR! GEQ 11 (
+    for /f "tokens=1,2 delims=." %%a in ("!PY_VER!") do (
+        set "PY_MAJOR=%%a"
+        set "PY_MINOR=%%b"
+    )
+    if "!PY_MAJOR!"=="3" if !PY_MINOR! GEQ 11 (
         echo   Found system Python !PY_VER!
         echo   Creating local venv (isolated from system^) ...
         python -m venv "%~dp0.venv"
@@ -45,61 +48,25 @@ if not errorlevel 1 (
             echo   Created .venv
             goto :deps_check
         )
-        echo   [WARN] venv creation failed, trying portable Python...
+        echo   [ERROR] Failed to create local .venv.
+        echo   Please check Python installation and permissions, then retry.
+        pause
+        exit /b 1
     ) else (
         echo   System Python !PY_VER! is too old (need 3.11+^)
     )
 )
 
-REM 1d. Nothing usable -- download portable Python into project folder
 echo.
 echo   ========================================
-echo   No suitable Python found.
-echo   Downloading portable Python 3.11 ...
-echo   (one-time setup, ~8 MB, project folder only)
+echo   No suitable Python environment found.
+echo   Please install 64-bit Python 3.11 or newer first,
+echo   or provide python\python.exe / .venv in this folder.
+echo   See README.md for setup instructions.
 echo   ========================================
 echo.
-
-set "PYTHON_ZIP=%~dp0python_temp.zip"
-set "PYTHON_URL=https://www.python.org/ftp/python/3.11.9/python-3.11.9-embed-amd64.zip"
-
-echo   [*] Downloading ...
-powershell -NoProfile -Command "& { try { $ProgressPreference='SilentlyContinue'; Invoke-WebRequest -Uri '%PYTHON_URL%' -OutFile '%PYTHON_ZIP%' -ErrorAction Stop } catch { exit 1 } }"
-if not exist "%PYTHON_ZIP%" (
-    echo   [ERROR] Download failed. Check your internet connection.
-    pause
-    exit /b 1
-)
-
-echo   [*] Extracting to python\ ...
-if not exist "%~dp0python" mkdir "%~dp0python"
-powershell -NoProfile -Command "& { Expand-Archive -Path '%PYTHON_ZIP%' -DestinationPath '%~dp0python' -Force }"
-del "%PYTHON_ZIP%" 2>nul
-
-if not exist "%~dp0python\python.exe" (
-    echo   [ERROR] Extraction failed. Check disk space.
-    pause
-    exit /b 1
-)
-
-REM Enable site-packages in embeddable Python (required for pip)
-echo   [*] Enabling site-packages ...
-set "PTH_FILE=%~dp0python\python311._pth"
-if exist "!PTH_FILE!" (
-    powershell -NoProfile -Command "& { (Get-Content '!PTH_FILE!') -replace '#import site', 'import site' | Set-Content '!PTH_FILE!' }"
-)
-
-REM Install pip
-echo   [*] Installing pip ...
-powershell -NoProfile -Command "& { try { $ProgressPreference='SilentlyContinue'; Invoke-WebRequest -Uri 'https://bootstrap.pypa.io/get-pip.py' -OutFile '%~dp0python\get-pip.py' -ErrorAction Stop } catch { exit 1 } }"
-if exist "%~dp0python\get-pip.py" (
-    "%~dp0python\python.exe" "%~dp0python\get-pip.py" --no-warn-script-location >nul 2>&1
-    del "%~dp0python\get-pip.py" 2>nul
-)
-
-set "PYTHON_EXE=%~dp0python\python.exe"
-set "PATH=%~dp0python;%~dp0python\Scripts;!PATH!"
-echo   Portable Python 3.11 ready.
+pause
+exit /b 1
 
 :deps_check
 echo.
@@ -156,11 +123,10 @@ echo     Press Ctrl+C to stop the server.
 echo   ========================================
 echo.
 
-timeout /t 2 /nobreak >nul
-start "" http://127.0.0.1:8000
+start "" /min powershell -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -Command "& { for ($i = 0; $i -lt 90; $i++) { try { $ProgressPreference='SilentlyContinue'; $r = Invoke-WebRequest -Uri 'http://127.0.0.1:8000/health' -UseBasicParsing -TimeoutSec 2; if ($r.StatusCode -ge 200 -and $r.StatusCode -lt 500) { Start-Process 'http://127.0.0.1:8000'; exit 0 } } catch { Start-Sleep -Seconds 1 } }; Write-Host 'Backend health check timed out; open http://127.0.0.1:8000 manually after startup.' }"
 
 set "LOG_DIR=%~dp0logs"
 cd /d "%~dp0backend"
-"!PYTHON_EXE!" -m uvicorn storage_fastapi_backend:app --host 0.0.0.0 --port 8000
+"!PYTHON_EXE!" -m uvicorn storage_fastapi_backend:app --host 127.0.0.1 --port 8000
 
 pause

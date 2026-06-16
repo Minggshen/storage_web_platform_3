@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import os
+import logging
 from pathlib import Path
+from logging.handlers import TimedRotatingFileHandler
+from time import perf_counter
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -15,6 +18,36 @@ from routes.topology import router as topology_router
 from routes.solver import router as solver_router
 
 APP_VERSION = "2.6.0"
+
+
+def _log_dir() -> Path:
+    raw = os.getenv("LOG_DIR")
+    if raw:
+        return Path(raw)
+    return Path(__file__).resolve().parents[1] / "logs"
+
+
+def _configure_backend_logging() -> logging.Logger:
+    log_dir = _log_dir()
+    log_dir.mkdir(parents=True, exist_ok=True)
+    logger = logging.getLogger("storage_backend")
+    logger.setLevel(logging.INFO)
+    if not any(getattr(handler, "_storage_backend_file", False) for handler in logger.handlers):
+        handler = TimedRotatingFileHandler(
+            str(log_dir / "backend.log"),
+            when="midnight",
+            interval=1,
+            backupCount=14,
+            encoding="utf-8",
+        )
+        handler._storage_backend_file = True  # type: ignore[attr-defined]
+        handler.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s"))
+        logger.addHandler(handler)
+    logger.propagate = True
+    return logger
+
+
+backend_logger = _configure_backend_logging()
 
 app = FastAPI(
     title="Storage Visual Modeling Backend",
@@ -41,8 +74,31 @@ app.add_middleware(
 
 
 @app.middleware("http")
-async def _cache_control_middleware(request, call_next):
-    response = await call_next(request)
+async def _cache_control_middleware(request: Request, call_next):
+    started = perf_counter()
+    try:
+        response = await call_next(request)
+    except Exception:
+        backend_logger.exception("Unhandled request error: %s %s", request.method, request.url.path)
+        raise
+    elapsed_ms = (perf_counter() - started) * 1000.0
+    should_log_success = not (request.url.path.startswith("/assets/") or request.url.path == "/health")
+    if response.status_code >= 400:
+        backend_logger.warning(
+            "HTTP %s %s -> %s %.1fms",
+            request.method,
+            request.url.path,
+            response.status_code,
+            elapsed_ms,
+        )
+    elif should_log_success:
+        backend_logger.info(
+            "HTTP %s %s -> %s %.1fms",
+            request.method,
+            request.url.path,
+            response.status_code,
+            elapsed_ms,
+        )
     path = request.url.path
     if path.startswith("/assets/"):
         response.headers["Cache-Control"] = "public, max-age=31536000, immutable"

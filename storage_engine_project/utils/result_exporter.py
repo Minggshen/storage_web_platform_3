@@ -317,34 +317,52 @@ def _build_financial_audit_ledger(summary: dict[str, Any], ann_summary: dict[str
         )
     )
 
-    fixed_om_price = _safe_float(audit_meta.get("annual_fixed_om_yuan_per_kw_year"))
-    variable_om_price = _safe_float(audit_meta.get("annual_variable_om_yuan_per_kwh"))
-    items.append(
-        _ledger_item(
-            name="固定运维成本",
-            category="cost",
-            amount_yuan=rated_power * fixed_om_price,
-            quantity=rated_power,
-            quantity_unit="kW",
-            unit_price=fixed_om_price,
-            unit_price_unit="yuan/kW·year",
-            formula="额定功率 × 固定运维单价",
-            source="AnnualRevenueAuditor.metadata",
+    om_method = str(audit_meta.get("annual_om_cost_method") or "strategy_om_ratio")
+    if om_method == "fixed_variable":
+        fixed_om_price = _safe_float(audit_meta.get("annual_fixed_om_yuan_per_kw_year"))
+        variable_om_price = _safe_float(audit_meta.get("annual_variable_om_yuan_per_kwh"))
+        items.append(
+            _ledger_item(
+                name="固定运维成本",
+                category="cost",
+                amount_yuan=rated_power * fixed_om_price,
+                quantity=rated_power,
+                quantity_unit="kW",
+                unit_price=fixed_om_price,
+                unit_price_unit="yuan/kW·year",
+                formula="额定功率 × 固定运维单价",
+                source="AnnualRevenueAuditor.metadata",
+            )
         )
-    )
-    items.append(
-        _ledger_item(
-            name="可变运维成本",
-            category="cost",
-            amount_yuan=throughput * variable_om_price,
-            quantity=throughput,
-            quantity_unit="kWh throughput",
-            unit_price=variable_om_price,
-            unit_price_unit="yuan/kWh",
-            formula="年吞吐电量 × 可变运维单价",
-            source="AnnualRevenueAuditor.metadata",
+        items.append(
+            _ledger_item(
+                name="可变运维成本",
+                category="cost",
+                amount_yuan=throughput * variable_om_price,
+                quantity=throughput,
+                quantity_unit="kWh throughput",
+                unit_price=variable_om_price,
+                unit_price_unit="yuan/kWh",
+                formula="年吞吐电量 × 可变运维单价",
+                source="AnnualRevenueAuditor.metadata",
+            )
         )
-    )
+    else:
+        om_ratio = _safe_float(audit_meta.get("om_ratio_annual"))
+        initial_investment = _safe_float(summary.get("initial_investment_yuan"))
+        items.append(
+            _ledger_item(
+                name="设备运维成本",
+                category="cost",
+                amount_yuan=_safe_float(summary.get("annual_om_cost_yuan")),
+                quantity=initial_investment,
+                quantity_unit="yuan",
+                unit_price=om_ratio,
+                unit_price_unit="ratio/year",
+                formula="初始投资 × 设备库年运维比例",
+                source="StorageStrategy.annual_om_ratio",
+            )
+        )
 
     degradation_amount = _safe_float(summary.get("annual_degradation_cost_yuan"))
     items.append(
@@ -1371,6 +1389,7 @@ def export_optimization_run(
     safety_economy_tradeoff: float = 0.5,
     economic_metric_weights: Mapping[str, float] | None = None,
     safety_metric_weights: Mapping[str, float] | None = None,
+    device_safety_beta: float = 0.5,
 ) -> dict[str, str]:
     out_dir = _ensure_dir(output_dir)
     case_name = case_name or out_dir.name
@@ -1384,12 +1403,14 @@ def export_optimization_run(
         safety_economy_tradeoff=safety_economy_tradeoff,
         economic_metric_weights=economic_metric_weights,
         safety_metric_weights=safety_metric_weights,
+        device_safety_beta=device_safety_beta,
     )
     pop_df = annotate_dataframe_scores(
         pop_df,
         safety_economy_tradeoff=safety_economy_tradeoff,
         economic_metric_weights=economic_metric_weights,
         safety_metric_weights=safety_metric_weights,
+        device_safety_beta=device_safety_beta,
     )
 
     archive_path = out_dir / "archive_results.csv"
@@ -1493,6 +1514,7 @@ def export_optimization_run(
                     safety_economy_tradeoff=safety_economy_tradeoff,
                     economic_metric_weights=economic_metric_weights,
                     safety_metric_weights=safety_metric_weights,
+                    device_safety_beta=device_safety_beta,
                 )
             )
             plot_paths.extend(plot_scheme_overview(case_name=case_name, best_result=run_result.best_result, output_dir=fig_root / "scheme"))

@@ -9,6 +9,18 @@ import type { NodeKind, Selection, TopologyData, TopologyDraft, TopologyEdge, To
 import { CANVAS_HEIGHT, CANVAS_WIDTH, DEFAULT_LINE_CODE, ECONOMIC_DEFAULT_PARAMS, EDGE_ADVANCED_PARAM_KEYS, EMPTY_TOPOLOGY_TEXT, LINE_CODE_OPTIONS, LINE_LEGEND_ITEMS, LOAD_CATEGORY_VISUALS, LOAD_PANEL_INFERRED_KEY_LABELS, LOAD_PANEL_READONLY_INFERRED_KEYS, SERVICE_LINE_DEFAULT_LENGTH_KM, SERVICE_LINE_EMERGENCY_MARGIN, SERVICE_LINE_LINECODE, SERVICE_LINE_LOW_Z_CURRENT_THRESHOLD_A, SERVICE_LINE_MIN_RATED_A, SERVICE_LINE_RESOURCE_MARGIN, SERVICE_LINE_TRANSFORMER_EMERGENCY_MARGIN, TOPOLOGY_WORKBENCH_HEIGHT, WIRE_DATA_CU, WIRE_XR_RATIO } from './topologyConstants';
 import { booleanParam, buildNodeDefaultParams, clamp, cleanLoadPanelParams, edgeVisualMeta, editableEdgeParams, editableNodeParams, formatCurrentDisplay, getLoadCategory, getLoadCategoryVisual, getLoadNodeCode, getLoadPowerFactor, getNodeBoundaryPoint, getNodeCenter, getNodeDetail, getNodeLabel, getNodeLabelForNode, getNodeSize, getNodeSizeForNode, getNodeVisualForNode, hasPositiveNumberParam, isBusEquipmentType, isDistributionTransformerNode, isLowSideResourceNode, isResourceType, isTransformerType, lineCodeDefaults, normalizeEconomicParams, normalizeTopology, numberInputValue, numberParam, pickParamKeys, resolveNodeOverlaps, resourceApparentPowerKva, safeNumber, sanitizeNodeParamsForEditor, stringParam, stringifyEconomicParams, stringifyTopology, threePhaseCurrentFromKva } from './topologyUtils';
 
+function stableStringify(value: unknown): string {
+  return JSON.stringify(value, (_key, current) => {
+    if (!current || typeof current !== 'object' || Array.isArray(current)) return current;
+    return Object.keys(current as Record<string, unknown>)
+      .sort()
+      .reduce((acc, key) => {
+        acc[key] = (current as Record<string, unknown>)[key];
+        return acc;
+      }, {} as Record<string, unknown>);
+  });
+}
+
 export default function TopologyPage() {
   const { projectId = '' } = useParams();
 
@@ -82,12 +94,17 @@ export default function TopologyPage() {
     try {
       const data = await fetchProjectTopology(projectId);
       const normalized = normalizeTopology(data);
+      const savedTopologySnapshot = stableStringify({ nodes: data.nodes, edges: data.edges });
+      const normalizedTopologySnapshot = stableStringify({ nodes: normalized.nodes, edges: normalized.edges });
       setTopology(normalized);
       setEditorText(stringifyTopology(normalized));
       setLastSavedEconomicSnapshot(stringifyEconomicParams(normalized.economic_parameters));
-      setLastSavedTopologySnapshot(JSON.stringify({ nodes: normalized.nodes, edges: normalized.edges }));
+      setLastSavedTopologySnapshot(savedTopologySnapshot);
       setLastSavedEconomicAt(null);
       setLastSavedTopologyAt(null);
+      if (savedTopologySnapshot !== normalizedTopologySnapshot) {
+        setMessage('已按 OpenDSS 建模需要补齐默认参数，请保存拓扑后再进行构建校验。');
+      }
       if (!selection && normalized.nodes.length > 0) {
         setSelection({ kind: 'node', id: normalized.nodes[0].id });
       }
@@ -151,7 +168,7 @@ export default function TopologyPage() {
   }, [economicSnapshot, lastSavedEconomicAt, lastSavedEconomicSnapshot, savingEconomic]);
 
   const topologySnapshot = useMemo(
-    () => JSON.stringify({ nodes: topology.nodes, edges: topology.edges }),
+    () => stableStringify({ nodes: topology.nodes, edges: topology.edges }),
     [topology.nodes, topology.edges],
   );
   const topologySaveStatus = useMemo(() => {
@@ -425,6 +442,7 @@ function inferAutoEdgeParams(
       return {
         params: {
           length_km: SERVICE_LINE_DEFAULT_LENGTH_KM,
+          units: 'km',
           linecode: '',  // empty → use explicit r1/x1
           r_ohm_per_km: r1,
           x_ohm_per_km: x1,
@@ -446,6 +464,7 @@ function inferAutoEdgeParams(
     return {
       params: {
         length_km: SERVICE_LINE_DEFAULT_LENGTH_KM,
+        units: 'km',
         linecode: SERVICE_LINE_LINECODE,
         r_ohm_per_km: lineCodeDefaults(SERVICE_LINE_LINECODE).r_ohm_per_km,
         x_ohm_per_km: lineCodeDefaults(SERVICE_LINE_LINECODE).x_ohm_per_km,
@@ -466,6 +485,7 @@ function inferAutoEdgeParams(
   return {
     params: {
       length_km: 0.5,
+      units: 'km',
       linecode: autoLinecode,
       r_ohm_per_km: selected.r_ohm_per_km,
       x_ohm_per_km: selected.x_ohm_per_km,
@@ -651,6 +671,7 @@ function createEdge(fromId: string, toId: string) {
     applyEdgeField('params', {
       ...(selectedEdge.params ?? {}),
       linecode,
+      units: stringParam(selectedEdge.params, 'units', 'km'),
       r_ohm_per_km: defaults.r_ohm_per_km,
       x_ohm_per_km: defaults.x_ohm_per_km,
       r0_ohm_per_km: defaults.r0_ohm_per_km,
@@ -697,7 +718,7 @@ function createEdge(fromId: string, toId: string) {
     }
     try {
       const templateTopo = await fetchTemplateDetail(templateId);
-      updateTopology(templateTopo as unknown as TopologyDraft);
+      updateTopology(normalizeTopology(templateTopo) as unknown as TopologyDraft);
       setMessage('已载入模板配电网模型。请保存拓扑后继续进行构建校验。');
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -729,14 +750,15 @@ function createEdge(fromId: string, toId: string) {
     setError(null);
     setMessage(null);
     try {
-      const saved = await saveProjectTopology(projectId, topology);
+      const normalizedForSave = normalizeTopology(topology);
+      const saved = await saveProjectTopology(projectId, normalizedForSave);
       const normalized = normalizeTopology(saved);
       const savedEconomicSnapshot = stringifyEconomicParams(normalized.economic_parameters);
       setTopology(normalized);
       setEditorText(stringifyTopology(normalized));
       setLastSavedEconomicSnapshot(savedEconomicSnapshot);
       setLastSavedEconomicAt(new Date());
-      setLastSavedTopologySnapshot(JSON.stringify({ nodes: normalized.nodes, edges: normalized.edges }));
+      setLastSavedTopologySnapshot(stableStringify({ nodes: normalized.nodes, edges: normalized.edges }));
       if (!lastSavedTopologyAt) setLastSavedTopologyAt(new Date());
       void refreshInferenceRows();
       setMessage('全局经济参数已保存成功。');
@@ -753,12 +775,13 @@ function createEdge(fromId: string, toId: string) {
     setError(null);
     setMessage(null);
     try {
-      const saved = await saveProjectTopology(projectId, topology);
+      const normalizedForSave = normalizeTopology(topology);
+      const saved = await saveProjectTopology(projectId, normalizedForSave);
       const normalized = normalizeTopology(saved);
       const savedEconomicSnapshot = stringifyEconomicParams(normalized.economic_parameters);
       setTopology(normalized);
       setEditorText(stringifyTopology(normalized));
-      setLastSavedTopologySnapshot(JSON.stringify({ nodes: normalized.nodes, edges: normalized.edges }));
+      setLastSavedTopologySnapshot(stableStringify({ nodes: normalized.nodes, edges: normalized.edges }));
       setLastSavedTopologyAt(new Date());
       setLastSavedEconomicSnapshot(savedEconomicSnapshot);
       if (!lastSavedEconomicAt) setLastSavedEconomicAt(new Date());
@@ -1098,7 +1121,7 @@ function createEdge(fromId: string, toId: string) {
             </button>
           </div>
           <div style={{ color: '#64748b', fontSize: 12, lineHeight: 1.5, marginBottom: 4 }}>
-            这些参数按项目统一生效，构建时会写入所有候选配储目标的 registry 行。
+            这些参数按项目统一生效；设备价格、效率、SOC、循环寿命、运维比例等型号参数来自储能设备策略库。
           </div>
           <div style={economicGridStyle}>
             <EconomicParamGroup
@@ -1140,14 +1163,11 @@ function createEdge(fromId: string, toId: string) {
             </EconomicParamGroup>
 
             <EconomicParamGroup
-              title="退化成本"
+              title="退化与寿命规则"
               enabled={degradationCostEnabled}
               control={<ToggleParam label="计入" params={economicParams} name="include_degradation_cost" fallback={true} onChange={applyEconomicParam} />}
             >
-              <EconomicNumberInput label="退化成本 元/kWh吞吐" name="degradation_cost_yuan_per_kwh_throughput" fallback={0.03} step="0.001" min={0} reference="由电池成本/寿命折算，参考 0.02-0.08" params={economicParams} onChange={applyEconomicParam} />
-              <EconomicNumberInput label="电池成本占比" name="battery_capex_share" fallback={0.6} step="0.01" min={0} max={1} reference="参考 0.5-0.7，默认 0.6" params={economicParams} onChange={applyEconomicParam} />
-              <EconomicNumberInput label="循环寿命 EFC" name="cycle_life_efc" fallback={8000} step="100" min={1} reference="磷酸铁锂参考 6000-10000" params={economicParams} onChange={applyEconomicParam} />
-              <EconomicNumberInput label="年循环上限 次/年" name="annual_cycle_limit" fallback={0} step="1" min={0} reference="0 表示不设硬约束；保守可填循环寿命/项目寿命，8000/20≈400" params={economicParams} onChange={applyEconomicParam} />
+              <EconomicNumberInput label="电池成本折算占比" name="battery_capex_share" fallback={0.6} step="0.01" min={0} max={1} reference="仅用于按设备库价格和寿命折算退化成本，默认 0.6" params={economicParams} onChange={applyEconomicParam} />
               <EconomicNumberInput label="日历寿命 年" name="calendar_life_years" fallback={20} step="1" min={1} reference="参考 15-20，默认 20" params={economicParams} onChange={applyEconomicParam} />
               <EconomicNumberInput label="日历衰减占比" name="calendar_fade_share" fallback={0.15} step="0.01" min={0} max={1} reference="参考 0.1-0.2，默认 0.15" params={economicParams} onChange={applyEconomicParam} />
             </EconomicParamGroup>
@@ -1178,15 +1198,12 @@ function createEdge(fromId: string, toId: string) {
               <EconomicNumberInput label="项目寿命 年" name="project_life_years" fallback={20} step="1" min={1} reference="工商业储能参考 15-20，默认 20" params={economicParams} onChange={applyEconomicParam} />
               <EconomicNumberInput label="折现率" name="discount_rate" fallback={0.06} step="0.01" min={0} max={1} reference="参考 0.05-0.08，默认 0.06" params={economicParams} onChange={applyEconomicParam} />
               <EconomicNumberInput label="年收益增长率" name="annual_revenue_growth_rate" fallback={0} step="0.01" min={0} reference="基准 0" params={economicParams} onChange={applyEconomicParam} />
-              <EconomicNumberInput label="功率侧投资 元/kW" name="power_related_capex_yuan_per_kw" fallback={300} step="1" min={0} reference="仅设备库缺功率价时使用，参考 200-500" params={economicParams} onChange={applyEconomicParam} />
               <EconomicNumberInput label="集成建站附加比例" name="integration_markup_ratio" fallback={0.15} step="0.01" min={0} reference="参考 0.1-0.2，默认 0.15" params={economicParams} onChange={applyEconomicParam} />
               <EconomicNumberInput label="安全消防附加比例" name="safety_markup_ratio" fallback={0.02} step="0.01" min={0} reference="参考 0.02-0.08，默认 0.02" params={economicParams} onChange={applyEconomicParam} />
               <EconomicNumberInput label="其他一次性投资 元" name="other_capex_yuan" fallback={0} step="1" min={0} reference="无额外土建/接入时填 0" params={economicParams} onChange={applyEconomicParam} />
             </EconomicParamGroup>
 
-            <EconomicParamGroup title="运维与约束">
-              <EconomicNumberInput label="固定运维 元/kW·年" name="annual_fixed_om_yuan_per_kw_year" fallback={18} step="0.01" min={0} reference="参考 10-30，默认 18" params={economicParams} onChange={applyEconomicParam} />
-              <EconomicNumberInput label="可变运维 元/kWh" name="annual_variable_om_yuan_per_kwh" fallback={0.004} step="0.001" min={0} reference="参考 0.002-0.01，默认 0.004" params={economicParams} onChange={applyEconomicParam} />
+            <EconomicParamGroup title="运维增长与约束">
               <EconomicNumberInput label="年运维增长率" name="annual_om_growth_rate" fallback={0.02} step="0.01" min={0} reference="参考 0.02" params={economicParams} onChange={applyEconomicParam} />
               <EconomicNumberInput label="电压罚金系数 元" name="voltage_penalty_coeff_yuan" fallback={0} step="1" min={0} reference="基准 0，约束惩罚情景再设置" params={economicParams} onChange={applyEconomicParam} />
             </EconomicParamGroup>
@@ -1606,7 +1623,11 @@ function createEdge(fromId: string, toId: string) {
                   <PropertyGroupTitle>潮流模型</PropertyGroupTitle>
 
                   <FieldLabel marker="必填">潮流模型相数</FieldLabel>
-                  <select value="3" onChange={() => applyNodeParam('phases', 3)} style={inputStyle}>
+                  <select
+                    value={String(numberParam(selectedNode.params, 'phases', 3))}
+                    onChange={(e) => applyNodeParam('phases', Number(e.target.value))}
+                    style={inputStyle}
+                  >
                     <option value="3">三相平衡</option>
                   </select>
 
@@ -2144,6 +2165,29 @@ function createEdge(fromId: string, toId: string) {
                         由无功/有功比自动换算，仅展示；负荷求解优先使用 kvar 和 q_to_p_ratio。
                       </div>
 
+                      <label style={labelStyle}>接线方式</label>
+                      <select
+                        value={stringParam(selectedNode.params, 'connection', 'wye')}
+                        onChange={(e) => applyNodeParam('connection', e.target.value)}
+                        style={inputStyle}
+                      >
+                        <option value="wye">wye / 星形</option>
+                        <option value="delta">delta / 三角形</option>
+                      </select>
+
+                      <label style={labelStyle}>OpenDSS 负荷模型</label>
+                      <select
+                        value={String(numberParam(selectedNode.params, 'model', 1))}
+                        onChange={(e) => applyNodeParam('model', Number(e.target.value))}
+                        style={inputStyle}
+                      >
+                        <option value="1">1 - 恒 P/Q</option>
+                        <option value="2">2 - 恒阻抗</option>
+                        <option value="3">3 - 恒 P / 二次 Q</option>
+                        <option value="4">4 - 线性 P / 二次 Q</option>
+                        <option value="5">5 - 恒电流</option>
+                      </select>
+
                       <PropertyGroupTitle>配储目标与变压器约束</PropertyGroupTitle>
 
                       <label style={labelStyle}>参与配储优化</label>
@@ -2358,7 +2402,11 @@ function createEdge(fromId: string, toId: string) {
                   </select>
 
                   <FieldLabel marker="必填">潮流模型相数</FieldLabel>
-                  <select value="3" onChange={() => applyEdgeParam('phases', 3)} style={inputStyle}>
+                  <select
+                    value={String(numberParam(selectedEdge.params, 'phases', 3))}
+                    onChange={(e) => applyEdgeParam('phases', Number(e.target.value))}
+                    style={inputStyle}
+                  >
                     <option value="3">三相平衡</option>
                   </select>
 
@@ -2390,6 +2438,15 @@ function createEdge(fromId: string, toId: string) {
                     onChange={(e) => applyEdgeParam('length_km', Number(e.target.value || 0))}
                     style={inputStyle}
                   />
+
+                  <FieldLabel marker="必填">长度单位</FieldLabel>
+                  <select
+                    value={stringParam(selectedEdge.params, 'units', 'km')}
+                    onChange={(e) => applyEdgeParam('units', e.target.value)}
+                    style={inputStyle}
+                  >
+                    <option value="km">km</option>
+                  </select>
 
                   <PropertyGroupTitle>电气参数</PropertyGroupTitle>
 

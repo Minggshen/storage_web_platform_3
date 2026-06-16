@@ -4,6 +4,7 @@ import json
 import os
 import subprocess
 import sys
+from pathlib import Path
 
 import pytest
 
@@ -297,6 +298,187 @@ def test_line_count_summary_uses_explicit_label_for_empty_linecode():
     )
 
     assert counts == {"EXPLICIT_IMPEDANCE": 1, "LC_MAIN": 2}
+
+
+def test_model_review_blocks_missing_line_impedance_and_writes_reports(tmp_path, monkeypatch):
+    builder = DssBuilderService()
+
+    def fail_probe(_master_path):
+        raise AssertionError("probe should be blocked before OpenDSS COM is invoked")
+
+    monkeypatch.setattr(builder, "_probe_opendss_compile", fail_probe)
+
+    topology = {
+        "nodes": [
+            {
+                "id": "grid_001",
+                "type": "grid",
+                "name": "grid",
+                "params": {
+                    "source_bus": "sourcebus",
+                    "base_kv": 110,
+                    "pu": 1.0,
+                    "phases": 3,
+                    "mvasc3": 500,
+                    "mvasc1": 250,
+                    "x1r1": 10,
+                    "x0r0": 10,
+                },
+            },
+            {
+                "id": "tx_001",
+                "type": "transformer",
+                "name": "tx",
+                "params": {
+                    "dss_bus_name": "n0",
+                    "rated_kva": 1000,
+                    "primary_voltage_kv": 110,
+                    "voltage_level_kv": 10,
+                    "primary_conn": "delta",
+                    "secondary_conn": "wye",
+                    "percent_r": 0.5,
+                    "xhl_percent": 6.0,
+                    "phases": 3,
+                },
+            },
+            {
+                "id": "load_001",
+                "type": "load",
+                "name": "load",
+                "params": {
+                    "dss_bus_name": "n1",
+                    "dss_load_name": "LD01",
+                    "target_kv_ln": 10,
+                    "design_kw": 100,
+                    "model": 1,
+                    "connection": "wye",
+                    "phases": 3,
+                    "pf": 0.95,
+                },
+            },
+        ],
+        "edges": [
+            {
+                "id": "edge_grid_tx",
+                "from_node_id": "grid_001",
+                "to_node_id": "tx_001",
+                "params": {"enabled": True},
+            },
+            {
+                "id": "edge_tx_load",
+                "from_node_id": "tx_001",
+                "to_node_id": "load_001",
+                "params": {
+                    "length_km": 1.0,
+                    "units": "km",
+                    "phases": 3,
+                    "rated_current_a": 100,
+                    "emerg_current_a": 120,
+                },
+            },
+        ],
+    }
+
+    payload = builder.compile_topology("proj01", topology, tmp_path)
+    summary = payload["dss_compile_summary"]
+    review = json.loads((tmp_path / "opendss_model_review.json").read_text(encoding="utf-8"))
+
+    assert summary["opendss_probe"]["status"] == "blocked"
+    assert summary["structural_checks"]["passed"] is False
+    assert any("OPENDSS_LINE_IMPEDANCE_REQUIRED" in item for item in summary["errors"])
+    assert any(item["code"] == "OPENDSS_LINE_IMPEDANCE_REQUIRED" for item in review["issues"])
+    assert (tmp_path / "opendss_model_review.md").exists()
+    assert "LC_MAIN" not in (tmp_path / "LineCodes_Custom.dss").read_text(encoding="utf-8")
+
+
+def test_length_km_and_selected_frontend_linecode_are_sufficient_for_line_units_and_library_fields():
+    service = BuildExportService(data_root="unused")
+    topology = {
+        "nodes": [
+            {
+                "id": "grid_001",
+                "type": "grid",
+                "name": "grid",
+                "params": {"source_bus": "sourcebus", "base_kv": 110, "phases": 3},
+            },
+            {
+                "id": "tx_001",
+                "type": "transformer",
+                "name": "tx",
+                "params": {"rated_kva": 1000, "phases": 3},
+            },
+            {
+                "id": "load_001",
+                "type": "load",
+                "name": "load",
+                "params": {
+                    "node_id": 1,
+                    "target_kv_ln": 10,
+                    "dss_bus_name": "n1",
+                    "dss_load_name": "LD01",
+                    "design_kw": 100,
+                    "phases": 3,
+                },
+            },
+        ],
+        "edges": [
+            {
+                "id": "edge_grid_tx",
+                "from_node_id": "grid_001",
+                "to_node_id": "tx_001",
+                "params": {"enabled": True},
+            },
+            {
+                "id": "edge_tx_load",
+                "from_node_id": "tx_001",
+                "to_node_id": "load_001",
+                "params": {
+                    "length_km": 0.005,
+                    "linecode": "LC_CABLE",
+                    "r_ohm_per_km": 0.254261364,
+                    "x_ohm_per_km": 0.097045455,
+                    "rated_current_a": 400,
+                    "emerg_current_a": 500,
+                    "phases": 3,
+                    "enabled": True,
+                },
+            },
+        ],
+        "economic_parameters": {},
+    }
+
+    validation = service._validate_topology(topology)
+    assert not any("缺少长度单位" in item for item in validation["errors"])
+    assert not any("LineCode 参数不完整" in item for item in validation["errors"])
+
+    builder = DssBuilderService()
+    node_map = {str(node["id"]): node for node in topology["nodes"]}
+    review = builder._build_model_review("proj01", topology["nodes"], topology["edges"], node_map, Path("unused"))
+    issue_messages = [str(item.get("message") or "") for item in review["issues"]]
+    assert not any("缺少长度单位" in item for item in issue_messages)
+    assert not any("LineCode 但参数不完整" in item for item in issue_messages)
+
+
+def test_legacy_loads_without_connection_and_model_use_frontend_defaults(tmp_path, monkeypatch):
+    builder = DssBuilderService()
+    topology_path = Path("backend/data/topology_templates/403a70db9fe2.json")
+    topology = json.loads(topology_path.read_text(encoding="utf-8"))["topology"]
+
+    def blocked_probe(_master_path):
+        return DssBuilderService._blocked_opendss_probe("unit test")
+
+    monkeypatch.setattr(builder, "_probe_opendss_compile", blocked_probe)
+
+    node_map = {str(node["id"]): node for node in topology["nodes"]}
+    review = builder._build_model_review("proj01", topology["nodes"], topology["edges"], node_map, tmp_path)
+    issue_text = "\n".join(str(item.get("message") or "") for item in review["issues"])
+    assert "缺少 OpenDSS 建模字段：model, connection" not in issue_text
+
+    payload = builder.compile_topology("proj01", topology, tmp_path)
+    assert payload["dss_compile_summary"]["structural_checks"]["passed"] is True
+    loads_text = (tmp_path / "Loads_Runtime.dss").read_text(encoding="utf-8")
+    assert "conn=wye" in loads_text
+    assert "Model=1" in loads_text
 
 
 def test_duplicate_bus_mapping_is_warning_not_structural_error():

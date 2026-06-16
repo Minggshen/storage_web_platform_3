@@ -130,6 +130,8 @@ export function createDefaultNode(type: NodeType, index: number): TopologyNode {
       phases: 3,
       category: 'industrial',
       pf: 0.95,
+      connection: 'wye',
+      model: 1,
       optimize_storage: true,
       transformer_capacity_kva: 2000,
       transformer_pf_limit: 0.95,

@@ -47,6 +47,18 @@ class SolverRunRequest(BaseModel):
     safety_weight_voltage: float | None = None
     safety_weight_line: float | None = None
     safety_weight_cycle: float | None = None
+    device_safety_weight_cell: float | None = None
+    device_safety_weight_capacity: float | None = None
+    device_safety_weight_thermal: float | None = None
+    device_safety_weight_temp_range: float | None = None
+    device_safety_weight_detection: float | None = None
+    device_safety_weight_fire_suppression: float | None = None
+    device_safety_weight_explosion: float | None = None
+    device_safety_weight_bms: float | None = None
+    device_safety_weight_propagation: float | None = None
+    device_safety_weight_ip: float | None = None
+    device_safety_weight_corrosion: float | None = None
+    device_safety_weight_certification: float | None = None
 
 
 @router.post("/project/{project_id}/configure")
@@ -244,6 +256,20 @@ def download_result_file(
     try:
         path, _ = solver_service.resolve_result_file_path(project_id, relative_path=relative_path, group=group, task_id=task_id)
         return FileResponse(path=str(path), filename=path.name)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/project/{project_id}/diagnostics/download")
+def download_diagnostics_package(
+    project_id: str,
+    task_id: str | None = Query(default=None),
+) -> FileResponse:
+    try:
+        path, filename = solver_service.create_diagnostics_package(project_id, task_id=task_id)
+        return FileResponse(path=str(path), filename=filename, media_type="application/zip")
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except Exception as exc:

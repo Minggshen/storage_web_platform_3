@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 from dataclasses import dataclass
@@ -94,9 +95,8 @@ class _ComBackend:
         if not load_name or not bus_name:
             return
 
-        phase_count = 3
-        phase_suffix = ".1.2.3"
-        bus_ref = bus_name if "." in bus_name else f"{bus_name}{phase_suffix}"
+        phase_count = self._phase_count(phases)
+        bus_ref = self._bus_ref(bus_name, phase_count)
         kv_value = max(0.0, float(kv_ln))
         q_ratio = max(0.0, float(q_to_p_ratio))
         net_kw = float(net_load_kw)
@@ -132,7 +132,7 @@ class _ComBackend:
             reference_kw = 0.0
         delta_kw = float(actual_net_load_kw) - float(reference_kw)
         kvar = abs(delta_kw) * max(0.0, float(q_to_p_ratio))
-        phase_count = 3
+        phase_count = self._phase_count(phases)
         bus_ref = self._bus_ref(target_bus_name, phase_count)
         if delta_kw >= 0:
             if abs(delta_kw) > 1e-6:
@@ -152,7 +152,7 @@ class _ComBackend:
         rated_energy_kwh: float,
         current_soc: float,
     ) -> None:
-        phase_count = 3
+        phase_count = self._phase_count(phases)
         bus_ref = self._bus_ref(target_bus_name, phase_count)
         net_kw = float(discharge_kw) - float(charge_kw)
         state = "IDLING"
@@ -203,7 +203,16 @@ class _ComBackend:
     def _bus_ref(bus_name: str, phases: int) -> str:
         if "." in str(bus_name):
             return str(bus_name)
-        return f"{bus_name}.1.2.3"
+        phase_count = _ComBackend._phase_count(phases)
+        return f"{bus_name}." + ".".join(str(index) for index in range(1, phase_count + 1))
+
+    @staticmethod
+    def _phase_count(value: Any) -> int:
+        try:
+            parsed = int(float(value))
+        except Exception:
+            return 3
+        return parsed if parsed in {1, 2, 3} else 3
 
     @staticmethod
     def _safe_temp_name(raw: str) -> str:
@@ -436,7 +445,12 @@ class OpenDSSConstraintOracle(NetworkConstraintOracle):
         self._edit_fallback_count: int = 0
         self._backend_solve_calls: int = 0
         self._backend_compile_calls: int = 0
+        self._backend_total_solve_calls: int = 0
+        self._backend_total_compile_calls: int = 0
         self._backend_recycle_count: int = 0
+        self._last_backend_recycle_reason: str | None = None
+        self._last_backend_error: str | None = None
+        self._master_dss_hash = self._file_sha256(Path(self.master_dss_path))
 
     def _init_backend(self):
         pref = str(self.config.engine_preference).strip().lower()
@@ -457,6 +471,55 @@ class OpenDSSConstraintOracle(NetworkConstraintOracle):
             return 0
         return max(0, parsed)
 
+    @staticmethod
+    def _file_sha256(path: Path | None) -> str | None:
+        if path is None:
+            return None
+        try:
+            resolved = Path(path)
+            if not resolved.exists() or not resolved.is_file():
+                return None
+            digest = hashlib.sha256()
+            with resolved.open("rb") as handle:
+                for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                    digest.update(chunk)
+            return digest.hexdigest()
+        except Exception:
+            return None
+
+    def _runtime_identity_metadata(self, runtime_manifest_path: Path | None = None) -> dict[str, Any]:
+        master_path = Path(self.master_dss_path)
+        master_hash = getattr(self, "_master_dss_hash", None) or self._file_sha256(master_path)
+        return {
+            "opendss_master_dss_path": str(master_path),
+            "opendss_master_dss_sha256": master_hash,
+            "network_runtime_manifest_path": str(runtime_manifest_path) if runtime_manifest_path else None,
+            "network_runtime_manifest_sha256": self._file_sha256(runtime_manifest_path) if runtime_manifest_path else None,
+        }
+
+    @staticmethod
+    def _storage_dispatch_trace(
+        planned_charge_kw: float,
+        planned_discharge_kw: float,
+        current_soc: float,
+    ) -> dict[str, Any]:
+        net_kw = float(planned_discharge_kw) - float(planned_charge_kw)
+        if net_kw > 1e-6:
+            state = "DISCHARGING"
+        elif net_kw < -1e-6:
+            state = "CHARGING"
+        else:
+            state = "IDLING"
+        return {
+            "storage_planned_charge_kw": float(planned_charge_kw),
+            "storage_planned_discharge_kw": float(planned_discharge_kw),
+            "storage_dispatch_net_kw": net_kw,
+            "storage_dispatch_state": state,
+            "storage_soc_fraction": float(current_soc),
+            "storage_optimizer_sign_convention": "charge/discharge are separate non-negative values; net_kw = discharge_kw - charge_kw",
+            "storage_opendss_sign_convention": "Storage.kW uses positive discharge and negative charge when dispmode=external",
+        }
+
     def _maybe_recycle_backend(self, reason: str) -> None:
         if self._backend is None:
             return
@@ -471,6 +534,7 @@ class OpenDSSConstraintOracle(NetworkConstraintOracle):
     def _recycle_backend(self, reason: str) -> None:
         old_backend = self._backend
         self._backend = None
+        self._last_backend_recycle_reason = str(reason)
         if old_backend is not None:
             close = getattr(old_backend, "close", None)
             if callable(close):
@@ -497,6 +561,7 @@ class OpenDSSConstraintOracle(NetworkConstraintOracle):
             raise RuntimeError("OpenDSS 后端不可用，无法 Compile。")
         self._backend.compile(self.master_dss_path)
         self._backend_compile_calls += 1
+        self._backend_total_compile_calls = int(getattr(self, "_backend_total_compile_calls", 0)) + 1
 
     def _backend_solve(self) -> bool:
         if self._backend is None:
@@ -505,6 +570,25 @@ class OpenDSSConstraintOracle(NetworkConstraintOracle):
             return bool(self._backend.solve())
         finally:
             self._backend_solve_calls += 1
+            self._backend_total_solve_calls = int(getattr(self, "_backend_total_solve_calls", 0)) + 1
+
+    def diagnostics_snapshot(self) -> dict[str, Any]:
+        return {
+            "engine_available": self._backend is not None,
+            "master_dss_path": self.master_dss_path,
+            "master_dss_sha256": getattr(self, "_master_dss_hash", None),
+            "runtime_manifest_cache_size": len(self._runtime_manifest_cache),
+            "edit_fallback_count": self._edit_fallback_count,
+            "backend_recycle_count": self._backend_recycle_count,
+            "backend_solve_calls_since_recycle": self._backend_solve_calls,
+            "backend_compile_calls_since_recycle": self._backend_compile_calls,
+            "backend_total_solve_calls": int(getattr(self, "_backend_total_solve_calls", self._backend_solve_calls)),
+            "backend_total_compile_calls": int(getattr(self, "_backend_total_compile_calls", self._backend_compile_calls)),
+            "backend_recycle_solve_interval": self.config.engine_recycle_solve_interval,
+            "backend_recycle_compile_interval": self.config.engine_recycle_compile_interval,
+            "last_backend_recycle_reason": getattr(self, "_last_backend_recycle_reason", None),
+            "last_backend_error": getattr(self, "_last_backend_error", None),
+        }
 
     @staticmethod
     def _is_recyclable_backend_error(exc: Exception) -> bool:
@@ -743,12 +827,31 @@ class OpenDSSConstraintOracle(NetworkConstraintOracle):
             return 10.0
         return kv
 
-    def _build_proxy_constraint(self, ctx, actual_net_load_kw: float, effective_power_cap_kw: float) -> HourlyNetworkConstraint:
+    def _build_proxy_constraint(
+        self,
+        ctx,
+        actual_net_load_kw: float,
+        effective_power_cap_kw: float,
+        *,
+        metadata: dict[str, Any] | None = None,
+        fallback_reason: str = "opendss_unavailable",
+    ) -> HourlyNetworkConstraint:
         transformer_limit = ctx.transformer_active_power_limit_kw
         max_charge_kw = float(effective_power_cap_kw)
         max_discharge_kw = float(effective_power_cap_kw)
         if transformer_limit is not None:
             max_charge_kw = min(max_charge_kw, max(0.0, float(transformer_limit) - float(actual_net_load_kw)))
+        proxy_metadata = dict(metadata or {})
+        proxy_metadata.update(
+            {
+                "opendss_used": False,
+                "opendss_engine_available": self._backend is not None,
+                "opendss_compile_mode": "simple_fallback",
+                "opendss_fallback_used": True,
+                "opendss_fallback_reason": fallback_reason,
+                "opendss_validated": False,
+            }
+        )
         return HourlyNetworkConstraint(
             max_charge_kw=max_charge_kw,
             max_discharge_kw=max_discharge_kw,
@@ -756,7 +859,7 @@ class OpenDSSConstraintOracle(NetworkConstraintOracle):
             transformer_limit_kw=transformer_limit,
             voltage_penalty_yuan=0.0,
             notes=["OpenDSS 不可用，已回退到轻量代理约束。"],
-            metadata={"opendss_used": False},
+            metadata=proxy_metadata,
         )
 
     def _voltage_violation_pu(self, voltage_min_pu: float, voltage_max_pu: float) -> float:
@@ -810,12 +913,28 @@ class OpenDSSConstraintOracle(NetworkConstraintOracle):
         if self._backend is None:
             if not self.config.allow_engine_fallback:
                 raise RuntimeError("OpenDSS oracle 已启用，但 OpenDSS 后端不可用。")
-            return self._build_proxy_constraint(ctx, actual_net_load_kw, effective_power_cap_kw)
+            fallback_metadata = self._runtime_identity_metadata(None)
+            fallback_metadata.update(self._storage_dispatch_trace(planned_charge_kw, planned_discharge_kw, current_soc))
+            return self._build_proxy_constraint(
+                ctx,
+                actual_net_load_kw,
+                effective_power_cap_kw,
+                metadata=fallback_metadata,
+                fallback_reason="opendss_backend_unavailable",
+            )
         self._maybe_recycle_backend("hour_boundary")
         if self._backend is None:
             if not self.config.allow_engine_fallback:
                 raise RuntimeError("OpenDSS oracle 已启用，但 OpenDSS 后端不可用。")
-            return self._build_proxy_constraint(ctx, actual_net_load_kw, effective_power_cap_kw)
+            fallback_metadata = self._runtime_identity_metadata(None)
+            fallback_metadata.update(self._storage_dispatch_trace(planned_charge_kw, planned_discharge_kw, current_soc))
+            return self._build_proxy_constraint(
+                ctx,
+                actual_net_load_kw,
+                effective_power_cap_kw,
+                metadata=fallback_metadata,
+                fallback_reason="opendss_backend_unavailable_after_recycle",
+            )
 
         transformer_limit = ctx.transformer_active_power_limit_kw
         max_charge_kw = float(effective_power_cap_kw)
@@ -827,9 +946,18 @@ class OpenDSSConstraintOracle(NetworkConstraintOracle):
         if not target_bus:
             if not self.config.allow_engine_fallback:
                 raise RuntimeError(f"场景 {getattr(ctx, 'internal_model_id', '')} 缺少 OpenDSS 目标母线。")
-            return self._build_proxy_constraint(ctx, actual_net_load_kw, effective_power_cap_kw)
+            fallback_metadata = self._runtime_identity_metadata(None)
+            fallback_metadata.update(self._storage_dispatch_trace(planned_charge_kw, planned_discharge_kw, current_soc))
+            return self._build_proxy_constraint(
+                ctx,
+                actual_net_load_kw,
+                effective_power_cap_kw,
+                metadata=fallback_metadata,
+                fallback_reason="missing_target_bus",
+            )
         target_load = self._resolve_target_load(ctx)
         kv_ln = self._normalize_distribution_base_kv(ctx.meta.get("target_kv_ln", self.config.target_kv_ln))
+        target_phases = self._to_int(ctx.meta.get("dss_phases"), 3)
         q_to_p_ratio = float(getattr(ctx, "q_to_p_ratio", 0.25))
         reference_kw = ctx.meta.get("static_load_reference_kw", ctx.meta.get("inference_peak_kw", None))
         runtime_manifest_path = self._resolve_network_runtime_manifest_path(ctx)
@@ -837,14 +965,21 @@ class OpenDSSConstraintOracle(NetworkConstraintOracle):
         notes: list[str] = []
         metadata: dict[str, Any] = {
             "opendss_used": True,
+            "opendss_engine_available": True,
+            "opendss_compile_mode": "not_started",
+            "opendss_fallback_used": False,
+            "opendss_fallback_reason": "",
+            "opendss_validated": None,
             "target_bus": target_bus,
             "target_load": target_load,
+            "target_phases": target_phases,
             "reference_kw": reference_kw,
-            "network_runtime_manifest_path": str(runtime_manifest_path) if runtime_manifest_path else None,
             "opendss_backend_recycle_count": self._backend_recycle_count,
             "opendss_backend_solve_calls_since_recycle": self._backend_solve_calls,
             "opendss_backend_compile_calls_since_recycle": self._backend_compile_calls,
         }
+        metadata.update(self._runtime_identity_metadata(runtime_manifest_path))
+        metadata.update(self._storage_dispatch_trace(planned_charge_kw, planned_discharge_kw, current_soc))
         if retry_attempt > 0:
             metadata["opendss_backend_retry_attempt"] = retry_attempt
 
@@ -852,9 +987,11 @@ class OpenDSSConstraintOracle(NetworkConstraintOracle):
             runtime_entries = self._load_network_runtime_entries(ctx) if runtime_manifest_path else []
             is_first_hour_of_day = (self._current_dss_day != int(day_index))
             if is_first_hour_of_day:
+                metadata["opendss_compile_mode"] = "compile"
                 self._backend_compile()
                 self._current_dss_day = int(day_index)
             else:
+                metadata["opendss_compile_mode"] = "edit"
                 self._backend.disable_temp_generators()
             self._backend.clear_temp()
             if runtime_entries:
@@ -862,7 +999,7 @@ class OpenDSSConstraintOracle(NetworkConstraintOracle):
                     self._backend.set_load_power(
                         load_name=str(entry.get("load_name") or ""),
                         bus_name=str(entry.get("bus_name") or ""),
-                        phases=3,
+                        phases=self._to_int(entry.get("phases"), target_phases),
                         kv_ln=self._normalize_distribution_base_kv(entry.get("kv_ln") or kv_ln),
                         net_load_kw=self._runtime_kw_for_hour(entry, int(day_index), int(hour_index)),
                         q_to_p_ratio=float(entry.get("q_to_p_ratio") or 0.25),
@@ -871,7 +1008,7 @@ class OpenDSSConstraintOracle(NetworkConstraintOracle):
                     self._backend.set_load_power(
                         load_name=target_load,
                         bus_name=target_bus,
-                        phases=self._to_int(ctx.meta.get("dss_phases"), 1),
+                        phases=target_phases,
                         kv_ln=kv_ln,
                         net_load_kw=float(actual_net_load_kw),
                         q_to_p_ratio=q_to_p_ratio,
@@ -882,7 +1019,7 @@ class OpenDSSConstraintOracle(NetworkConstraintOracle):
                 self._backend.set_or_add_target_load(
                         target_load_name=target_load,
                         target_bus_name=target_bus,
-                        phases=3,
+                        phases=target_phases,
                         kv_ln=kv_ln,
                     actual_net_load_kw=float(actual_net_load_kw),
                     q_to_p_ratio=q_to_p_ratio,
@@ -891,6 +1028,7 @@ class OpenDSSConstraintOracle(NetworkConstraintOracle):
             baseline_converged = self._backend_solve()
             if not baseline_converged and not is_first_hour_of_day:
                 # Edit may have left circuit in bad state; fall back to full compile
+                metadata["opendss_compile_mode"] = "fallback_compile"
                 self._backend_compile()
                 self._current_dss_day = int(day_index)
                 is_first_hour_of_day = True
@@ -901,7 +1039,7 @@ class OpenDSSConstraintOracle(NetworkConstraintOracle):
                         self._backend.set_load_power(
                             load_name=str(entry.get("load_name") or ""),
                             bus_name=str(entry.get("bus_name") or ""),
-                            phases=3,
+                            phases=self._to_int(entry.get("phases"), target_phases),
                             kv_ln=self._normalize_distribution_base_kv(entry.get("kv_ln") or kv_ln),
                             net_load_kw=self._runtime_kw_for_hour(entry, int(day_index), int(hour_index)),
                             q_to_p_ratio=float(entry.get("q_to_p_ratio") or 0.25),
@@ -910,7 +1048,7 @@ class OpenDSSConstraintOracle(NetworkConstraintOracle):
                         self._backend.set_load_power(
                             load_name=target_load,
                             bus_name=target_bus,
-                            phases=self._to_int(ctx.meta.get("dss_phases"), 1),
+                            phases=target_phases,
                             kv_ln=kv_ln,
                             net_load_kw=float(actual_net_load_kw),
                             q_to_p_ratio=q_to_p_ratio,
@@ -919,7 +1057,7 @@ class OpenDSSConstraintOracle(NetworkConstraintOracle):
                     self._backend.set_or_add_target_load(
                         target_load_name=target_load,
                         target_bus_name=target_bus,
-                        phases=3,
+                        phases=target_phases,
                         kv_ln=kv_ln,
                         actual_net_load_kw=float(actual_net_load_kw),
                         q_to_p_ratio=q_to_p_ratio,
@@ -928,6 +1066,20 @@ class OpenDSSConstraintOracle(NetworkConstraintOracle):
                 baseline_converged = self._backend_solve()
                 metadata["edit_fallback"] = True
             metadata["opendss_baseline_converged"] = bool(baseline_converged)
+            if not baseline_converged:
+                metadata["opendss_solve_converged"] = False
+                metadata["opendss_validated"] = False
+                if not self.config.allow_engine_fallback:
+                    raise RuntimeError(
+                        f"OpenDSS 基准潮流未收敛：day={int(day_index) + 1}, hour={int(hour_index)}。"
+                    )
+                return self._build_proxy_constraint(
+                    ctx,
+                    actual_net_load_kw,
+                    effective_power_cap_kw,
+                    metadata=metadata,
+                    fallback_reason="baseline_not_converged",
+                )
             loss_base_kw, loss_base_kvar = self._backend.total_losses_kw_kvar()
             if loss_base_kw is not None:
                 metadata["opendss_loss_baseline_kw"] = float(loss_base_kw)
@@ -986,7 +1138,7 @@ class OpenDSSConstraintOracle(NetworkConstraintOracle):
             if is_first_hour_of_day:
                 self._backend.add_storage_dispatch(
                     target_bus_name=target_bus,
-                    phases=3,
+                    phases=target_phases,
                     kv_ln=kv_ln,
                     charge_kw=float(planned_charge_kw),
                     discharge_kw=float(planned_discharge_kw),
@@ -1005,6 +1157,19 @@ class OpenDSSConstraintOracle(NetworkConstraintOracle):
             storage_converged = self._backend_solve()
             metadata["opendss_storage_converged"] = bool(storage_converged)
             metadata["opendss_solve_converged"] = bool(baseline_converged and storage_converged)
+            if not storage_converged:
+                metadata["opendss_validated"] = False
+                if not self.config.allow_engine_fallback:
+                    raise RuntimeError(
+                        f"OpenDSS 储能调度潮流未收敛：day={int(day_index) + 1}, hour={int(hour_index)}。"
+                    )
+                return self._build_proxy_constraint(
+                    ctx,
+                    actual_net_load_kw,
+                    effective_power_cap_kw,
+                    metadata=metadata,
+                    fallback_reason="storage_dispatch_not_converged",
+                )
             loss_with_storage_kw, loss_with_storage_kvar = self._backend.total_losses_kw_kvar()
             if loss_with_storage_kw is not None:
                 metadata["opendss_loss_with_storage_kw"] = float(loss_with_storage_kw)
@@ -1025,7 +1190,13 @@ class OpenDSSConstraintOracle(NetworkConstraintOracle):
                     raise RuntimeError(
                         f"OpenDSS 潮流完成但未返回电压结果：day={int(day_index) + 1}, hour={int(hour_index)}。"
                     )
-                return self._build_proxy_constraint(ctx, actual_net_load_kw, effective_power_cap_kw)
+                return self._build_proxy_constraint(
+                    ctx,
+                    actual_net_load_kw,
+                    effective_power_cap_kw,
+                    metadata=metadata,
+                    fallback_reason="missing_voltage_results",
+                )
 
             v_min = min(v_all)
             v_max = max(v_all)
@@ -1102,6 +1273,7 @@ class OpenDSSConstraintOracle(NetworkConstraintOracle):
 
             service_cap = min(float(effective_power_cap_kw), max_charge_kw if planned_charge_kw > planned_discharge_kw else max_discharge_kw)
             metadata["edit_fallback_count"] = self._edit_fallback_count
+            metadata["opendss_validated"] = bool(metadata.get("opendss_solve_converged"))
             metadata["opendss_backend_recycle_count"] = self._backend_recycle_count
             metadata["opendss_backend_solve_calls_since_recycle"] = self._backend_solve_calls
             metadata["opendss_backend_compile_calls_since_recycle"] = self._backend_compile_calls
@@ -1115,6 +1287,7 @@ class OpenDSSConstraintOracle(NetworkConstraintOracle):
                 metadata=metadata,
             )
         except Exception as exc:  # pragma: no cover
+            self._last_backend_error = f"{type(exc).__name__}: {exc}"
             if self._should_retry_backend_error(exc, retry_attempt):
                 if self.config.log_failures:
                     logger.warning(
@@ -1142,10 +1315,14 @@ class OpenDSSConstraintOracle(NetworkConstraintOracle):
                 raise
             if self.config.log_failures:
                 logger.warning("OpenDSS 小时约束评估失败，回退轻量代理：%s", exc)
-            proxy = self._build_proxy_constraint(ctx, actual_net_load_kw, effective_power_cap_kw)
+            proxy = self._build_proxy_constraint(
+                ctx,
+                actual_net_load_kw,
+                effective_power_cap_kw,
+                metadata=metadata,
+                fallback_reason=f"runtime_exception:{type(exc).__name__}",
+            )
             proxy.notes.append(f"OpenDSS 小时约束失败：{type(exc).__name__}: {exc}")
-            proxy.metadata.update(metadata)
-            proxy.metadata["opendss_used"] = False
             proxy.metadata["opendss_backend_recycle_count"] = self._backend_recycle_count
             proxy.metadata["opendss_backend_solve_calls_since_recycle"] = self._backend_solve_calls
             proxy.metadata["opendss_backend_compile_calls_since_recycle"] = self._backend_compile_calls

@@ -82,23 +82,21 @@ def test_evaluate_population_reuses_duplicate_quantized_candidates() -> None:
     evaluator = _CountingEvaluator()
     bridge = OptimizerBridge(
         evaluator=evaluator,  # type: ignore[arg-type]
-        strategy_ids=["strategy_a"],
-        search_spaces={
-            "strategy_a": SearchSpaceConfig(
-                power_min_kw=50.0,
-                power_max_kw=500.0,
-                duration_min_h=1.0,
-                duration_max_h=4.0,
-            )
-        },
+        fixed_strategy_id="strategy_a",
+        search_space_config=SearchSpaceConfig(
+            power_min_kw=50.0,
+            power_max_kw=500.0,
+            duration_min_h=1.0,
+            duration_max_h=4.0,
+        ),
     )
 
     results = bridge.evaluate_population(
         ctx=object(),  # type: ignore[arg-type]
         population=[
-            np.array([0.0, 123.0, 2.06]),
-            np.array([0.0, 124.0, 2.08]),
-            np.array([0.0, 176.0, 2.38]),
+            np.array([123.0, 2.06]),
+            np.array([124.0, 2.08]),
+            np.array([176.0, 2.38]),
         ],
     )
 
@@ -116,28 +114,26 @@ def test_evaluate_population_reuses_supplied_cache_across_calls() -> None:
     evaluator = _CountingEvaluator()
     bridge = OptimizerBridge(
         evaluator=evaluator,  # type: ignore[arg-type]
-        strategy_ids=["strategy_a"],
-        search_spaces={
-            "strategy_a": SearchSpaceConfig(
-                power_min_kw=50.0,
-                power_max_kw=500.0,
-                duration_min_h=1.0,
-                duration_max_h=4.0,
-            )
-        },
+        fixed_strategy_id="strategy_a",
+        search_space_config=SearchSpaceConfig(
+            power_min_kw=50.0,
+            power_max_kw=500.0,
+            duration_min_h=1.0,
+            duration_max_h=4.0,
+        ),
     )
     evaluation_cache: dict[DecisionCacheKey, FitnessEvaluationResult] = {}
 
     bridge.evaluate_population(
         ctx=object(),  # type: ignore[arg-type]
-        population=[np.array([0.0, 123.0, 2.06])],
+        population=[np.array([123.0, 2.06])],
         evaluation_cache=evaluation_cache,
     )
     results = bridge.evaluate_population(
         ctx=object(),  # type: ignore[arg-type]
         population=[
-            np.array([0.0, 124.0, 2.08]),
-            np.array([0.0, 176.0, 2.38]),
+            np.array([124.0, 2.08]),
+            np.array([176.0, 2.38]),
         ],
         evaluation_cache=evaluation_cache,
     )
@@ -153,15 +149,13 @@ def test_lemming_optimizer_counts_unique_cached_evaluations_across_generations()
     evaluator = _CountingEvaluator()
     bridge = OptimizerBridge(
         evaluator=evaluator,  # type: ignore[arg-type]
-        strategy_ids=["strategy_a"],
-        search_spaces={
-            "strategy_a": SearchSpaceConfig(
-                power_min_kw=100.0,
-                power_max_kw=100.0,
-                duration_min_h=2.0,
-                duration_max_h=2.0,
-            )
-        },
+        fixed_strategy_id="strategy_a",
+        search_space_config=SearchSpaceConfig(
+            power_min_kw=100.0,
+            power_max_kw=100.0,
+            duration_min_h=2.0,
+            duration_max_h=2.0,
+        ),
     )
     optimizer = LemmingOptimizer(
         bridge=bridge,

@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from openpyxl import Workbook
+from openpyxl import Workbook, load_workbook
 
 from services.build_signature import (
     asset_signature,
@@ -417,25 +417,22 @@ class BuildExportService:
         errors: list[str],
         warnings: list[str],
     ) -> tuple[str | None, Path | None]:
+        _ = warnings
         target_path = storage_dir / "工商业储能设备策略库.xlsx"
-        records = ((project.get("device_library") or {}).get("records") or []) if isinstance(project.get("device_library"), dict) else []
-        if records:
-            self._write_strategy_library_xlsx(target_path, records)
-            return "inputs/storage/工商业储能设备策略库.xlsx", target_path
-
         asset = (project.get("device_library") or {}).get("asset") if isinstance(project.get("device_library"), dict) else None
         source_path = self._asset_path(asset)
+        if source_path is not None and source_path.suffix.lower() in {".xlsx", ".xlsm"}:
+            if not self._strategy_library_has_v2_schema(source_path):
+                errors.append("设备策略库必须使用 device_library_v2 模板，不能生成求解器 strategy-library 输入。")
+                return None, None
+            shutil.copy2(source_path, target_path)
+            return "inputs/storage/工商业储能设备策略库.xlsx", target_path
+
         if source_path is None:
-            errors.append("未绑定设备策略库，无法生成求解器 strategy-library 输入。")
-            return None, None
-
-        if source_path.suffix.lower() not in {".xlsx", ".xlsm", ".xls"}:
-            errors.append("设备策略库不是 Excel 文件，且项目中没有可导出的设备记录。")
-            return None, None
-
-        shutil.copy2(source_path, target_path)
-        warnings.append("设备策略库按原文件复制，需确认其 sheet/schema 与求解器兼容。")
-        return "inputs/storage/工商业储能设备策略库.xlsx", target_path
+            errors.append("未绑定 device_library_v2 设备策略库，无法生成求解器 strategy-library 输入。")
+        else:
+            errors.append("设备策略库必须是 device_library_v2 模板 .xlsx/.xlsm 文件。")
+        return None, None
 
     def _load_runtime_stats(self, year_path: Path, model_path: Path) -> dict[str, Any]:
         if not year_path.exists() or not model_path.exists():
@@ -620,20 +617,14 @@ class BuildExportService:
                     "replacement_year_override": self._safe_float(self._economic_param(params, economic_params, "replacement_year_override", 0.0), 0.0),
                     "replacement_trigger_soh": self._safe_float(self._economic_param(params, economic_params, "replacement_trigger_soh", 0.70), 0.70),
                     "replacement_reset_soh": self._safe_float(self._economic_param(params, economic_params, "replacement_reset_soh", 0.95), 0.95),
-                    "annual_fixed_om_yuan_per_kw_year": self._safe_float(self._economic_param(params, economic_params, "annual_fixed_om_yuan_per_kw_year", 18.0), 18.0),
-                    "annual_variable_om_yuan_per_kwh": self._safe_float(self._economic_param(params, economic_params, "annual_variable_om_yuan_per_kwh", 0.004), 0.004),
                     "project_life_years": self._safe_int(self._economic_param(params, economic_params, "project_life_years", 20), 20),
                     "discount_rate": self._safe_float(self._economic_param(params, economic_params, "discount_rate", 0.06), 0.06),
                     "annual_revenue_growth_rate": self._safe_float(self._economic_param(params, economic_params, "annual_revenue_growth_rate", 0.0), 0.0),
                     "annual_om_growth_rate": self._safe_float(self._economic_param(params, economic_params, "annual_om_growth_rate", 0.02), 0.02),
-                    "power_related_capex_yuan_per_kw": self._safe_float(self._economic_param(params, economic_params, "power_related_capex_yuan_per_kw", 300.0), 300.0),
                     "integration_markup_ratio": self._safe_float(self._economic_param(params, economic_params, "integration_markup_ratio", 0.15), 0.15),
                     "safety_markup_ratio": self._safe_float(self._economic_param(params, economic_params, "safety_markup_ratio", 0.02), 0.02),
                     "other_capex_yuan": self._safe_float(self._economic_param(params, economic_params, "other_capex_yuan", 0.0), 0.0),
-                    "degradation_cost_yuan_per_kwh_throughput": self._safe_float(self._economic_param(params, economic_params, "degradation_cost_yuan_per_kwh_throughput", 0.03), 0.03),
                     "battery_capex_share": self._safe_float(self._economic_param(params, economic_params, "battery_capex_share", 0.60), 0.60),
-                    "cycle_life_efc": self._safe_float(self._economic_param(params, economic_params, "cycle_life_efc", 8000.0), 8000.0),
-                    "annual_cycle_limit": self._safe_float(self._economic_param(params, economic_params, "annual_cycle_limit", 0.0), 0.0),
                     "calendar_life_years": self._safe_float(self._economic_param(params, economic_params, "calendar_life_years", 20.0), 20.0),
                     "calendar_fade_share": self._safe_float(self._economic_param(params, economic_params, "calendar_fade_share", 0.15), 0.15),
                     "dispatch_mode": str(params.get("dispatch_mode") or "hybrid"),
@@ -754,10 +745,9 @@ class BuildExportService:
             "government_subsidy_rate_on_capex", "government_subsidy_yuan_per_kwh",
             "government_subsidy_yuan_per_kw", "government_subsidy_cap_yuan",
             "replacement_cost_ratio", "replacement_year_override", "replacement_trigger_soh", "replacement_reset_soh",
-            "annual_fixed_om_yuan_per_kw_year", "annual_variable_om_yuan_per_kwh",
             "project_life_years", "discount_rate", "annual_revenue_growth_rate", "annual_om_growth_rate",
-            "power_related_capex_yuan_per_kw", "integration_markup_ratio", "safety_markup_ratio", "other_capex_yuan",
-            "degradation_cost_yuan_per_kwh_throughput", "battery_capex_share", "cycle_life_efc", "annual_cycle_limit",
+            "integration_markup_ratio", "safety_markup_ratio", "other_capex_yuan",
+            "battery_capex_share",
             "calendar_life_years", "calendar_fade_share",
             "dispatch_mode", "demand_charge_yuan_per_kw_month", "daily_demand_shadow_yuan_per_kw", "voltage_penalty_coeff_yuan",
             "run_mode",
@@ -768,51 +758,6 @@ class BuildExportService:
         ws.append(headers)
         for row in rows:
             ws.append([row.get(header) for header in headers])
-        wb.save(path)
-
-    def _write_strategy_library_xlsx(self, path: Path, records: list[dict[str, Any]]) -> None:
-        wb = Workbook()
-        ws = wb.active
-        ws.title = "储能策略与设备库"
-        headers = [
-            "enabled", "manufacturer", "device_model", "rated_power_kw", "rated_energy_kwh",
-            "duration_hour", "battery_chemistry", "manual_safety_grade", "round_trip_efficiency",
-            "energy_unit_price_yuan_per_kwh", "power_related_capex_yuan_per_kw", "annual_om_ratio",
-            "soc_min", "soc_max", "cycle_life", "is_default_candidate", "ems_package_name",
-        ]
-        ws.append(headers)
-        ws.append(["启用", "厂家", "型号", "额定功率", "额定容量", "时长", "电芯", "安全等级", "效率", "容量单价", "功率单价", "年运维比例", "SOC下限", "SOC上限", "循环寿命", "默认候选", "EMS包"])
-        for idx, record in enumerate(records, start=1):
-            rated_power = self._safe_float(record.get("rated_power_kw"), 0.0)
-            rated_energy = self._safe_float(record.get("rated_energy_kwh"), 0.0)
-            duration = self._safe_float(record.get("duration_hour"), 0.0)
-            if duration <= 0 and rated_power > 0 and rated_energy > 0:
-                duration = rated_energy / rated_power
-            ws.append(
-                [
-                    1 if self._safe_bool(record.get("enabled"), True) else 0,
-                    str(record.get("vendor") or "default_vendor"),
-                    str(record.get("model") or f"storage_model_{idx}"),
-                    rated_power or 100.0,
-                    rated_energy or (rated_power or 100.0) * (duration or 2.0),
-                    duration or 2.0,
-                    str(record.get("battery_chemistry") or "LFP"),
-                    str(record.get("manual_safety_grade") or record.get("safety_level") or "medium"),
-                    self._safe_float(record.get("efficiency_pct"), 90.0),
-                    self._safe_float(record.get("energy_unit_price_yuan_per_kwh"), 1000.0),
-                    self._safe_float(record.get("power_related_capex_yuan_per_kw"), 0.0),
-                    0.02,
-                    self._safe_float(record.get("soc_min"), 0.10),
-                    self._safe_float(record.get("soc_max"), 0.90),
-                    self._safe_int(record.get("cycle_life"), 6000),
-                    1 if self._safe_bool(record.get("is_default_candidate"), True) else 0,
-                    str(record.get("ems_package_name") or record.get("ems_package") or ""),
-                ]
-            )
-
-        ems = wb.create_sheet("EMS控制包库")
-        ems.append(["ems_package_name", "capex_addon_yuan", "annual_maintenance_yuan"])
-        ems.append(["EMS包名称", "一次性附加投资", "年度维护费用"])
         wb.save(path)
 
     def _build_solver_command(
@@ -856,6 +801,29 @@ class BuildExportService:
             return None
         path = Path(str(stored_path))
         return path if path.exists() else None
+
+    def _strategy_library_has_v2_schema(self, path: Path) -> bool:
+        try:
+            wb = load_workbook(path, read_only=True, data_only=True)
+        except Exception:
+            return False
+        if "元数据" not in wb.sheetnames or "设备库" not in wb.sheetnames:
+            return False
+        rows = list(wb["元数据"].iter_rows(values_only=True))
+        if not rows:
+            return False
+        headers = [str(cell).strip() if cell is not None else "" for cell in rows[0]]
+        try:
+            key_idx = headers.index("key")
+            value_idx = headers.index("value")
+        except ValueError:
+            return False
+        for row in rows[1:]:
+            key = str(row[key_idx] if key_idx < len(row) else "").strip()
+            value = str(row[value_idx] if value_idx < len(row) else "").strip()
+            if key == "schema_version":
+                return value == "device_library_v2"
+        return False
 
     def _safe_name(self, value: str) -> str:
         return self._path_segment(value)
@@ -945,6 +913,23 @@ class BuildExportService:
             params.get("is_distribution_transformer"),
             False,
         )
+
+    @staticmethod
+    def _is_low_side_resource_node(node: dict[str, Any]) -> bool:
+        return str(node.get("type") or "").strip().lower() in {"load", "storage", "pv", "wind", "capacitor"}
+
+    def _is_transformer_connection_edge(self, from_node: dict[str, Any], to_node: dict[str, Any]) -> bool:
+        from_type = str(from_node.get("type") or "").strip().lower()
+        to_type = str(to_node.get("type") or "").strip().lower()
+        if from_type in {"grid", "source"} and to_type in {"transformer", "distribution_transformer"}:
+            return True
+        if to_type in {"grid", "source"} and from_type in {"transformer", "distribution_transformer"}:
+            return True
+        if self._is_distribution_transformer_node(to_node) and not self._is_low_side_resource_node(from_node):
+            return True
+        if self._is_distribution_transformer_node(from_node) and not self._is_low_side_resource_node(to_node):
+            return True
+        return False
 
     def _economic_param(
         self,
@@ -1090,7 +1075,6 @@ class BuildExportService:
 
         active_adjacency: dict[str, set[str]] = {node_id: set() for node_id in node_ids}
         active_edge_count = 0
-        supported_linecodes = set(self.dss_builder.LINE_CODES.keys())
         for edge in edges:
             edge_id = str(edge.get("id") or "")
             from_node_id = str(edge.get("from_node_id", "")).strip()
@@ -1106,28 +1090,44 @@ class BuildExportService:
             linecode = str(params.get("linecode") or params.get("line_code") or "").strip()
             from_node = node_map.get(from_node_id, {})
             to_node = node_map.get(to_node_id, {})
-            is_service_line = (
-                self._is_distribution_transformer_node(from_node) or 
-                self._is_distribution_transformer_node(to_node)
-            )
-            if not linecode and not is_service_line:
-                warnings.append(f"线路 {edge_id} 未选择 linecode，Build 将使用默认值 LC_MAIN。")
-            elif linecode and linecode not in supported_linecodes:
-                errors.append(f"线路 {edge_id} 使用了未定义的 linecode={linecode}。")
+            is_transformer_connection = self._is_transformer_connection_edge(from_node, to_node)
+            if not is_transformer_connection:
+                has_explicit_rx = bool(params.get("r_ohm_per_km") not in (None, "") and params.get("x_ohm_per_km") not in (None, ""))
+                has_geometry = bool(params.get("geometry") or params.get("line_geometry"))
+                if not (linecode or has_explicit_rx or has_geometry):
+                    errors.append(f"线路 {edge_id} 缺少 LineCode、显式阻抗或 Geometry/WireData，不能使用后端默认线路模板。")
+                if linecode:
+                    missing_linecode_fields = [
+                        field
+                        for field in ("r_ohm_per_km", "x_ohm_per_km", "r0_ohm_per_km", "x0_ohm_per_km", "c1_nf_per_km", "c0_nf_per_km")
+                        if params.get(field) in (None, "") and not self.dss_builder._linecode_library_has(linecode, field)
+                    ]
+                    if missing_linecode_fields:
+                        errors.append(f"线路 {edge_id} 的 LineCode 参数不完整：{', '.join(missing_linecode_fields)}。")
+                elif has_explicit_rx:
+                    missing_sequence_fields = [field for field in ("r0_ohm_per_km", "x0_ohm_per_km") if params.get(field) in (None, "")]
+                    if missing_sequence_fields:
+                        errors.append(f"线路 {edge_id} 显式阻抗缺少零序参数：{', '.join(missing_sequence_fields)}。")
 
-            phases = self._safe_int(params.get("phases"), 0)
-            if phases != 3:
-                legacy_phase_seen = True
+                phases = self._safe_int(params.get("phases"), 0)
+                if phases not in {1, 2, 3}:
+                    errors.append(f"线路 {edge_id} 缺少有效相数 phases。")
+                elif phases != 3:
+                    legacy_phase_seen = True
 
-            if self._safe_float(params.get("length_km"), 0.0) <= 0:
-                errors.append(f"线路 {edge_id} 长度 length_km 必须大于 0。")
-            if self._safe_float(params.get("rated_current_a"), 0.0) <= 0:
-                warnings.append(f"线路 {edge_id} 额定电流 rated_current_a 未设置或为 0。")
+                if self._safe_float(params.get("length_km"), 0.0) <= 0:
+                    errors.append(f"线路 {edge_id} 长度 length_km 必须大于 0。")
+                if not self.dss_builder._line_length_unit_is_explicit(params):
+                    errors.append(f"线路 {edge_id} 缺少长度单位 units。")
+                if self._safe_float(params.get("rated_current_a") or params.get("normamps"), 0.0) <= 0:
+                    errors.append(f"线路 {edge_id} 缺少额定电流 rated_current_a/normamps。")
+                if self._safe_float(params.get("emerg_current_a") or params.get("emergamps"), 0.0) <= 0:
+                    errors.append(f"线路 {edge_id} 缺少应急电流 emerg_current_a/emergamps。")
 
-            from_phases = self._safe_int((node_map[from_node_id].get("params") or {}).get("phases") if isinstance(node_map[from_node_id].get("params"), dict) else None, 3)
-            to_phases = self._safe_int((node_map[to_node_id].get("params") or {}).get("phases") if isinstance(node_map[to_node_id].get("params"), dict) else None, 3)
-            if phases in {1, 3} and (from_phases in {1, 3} and to_phases in {1, 3}) and (phases != from_phases or phases != to_phases):
-                warnings.append(f"线路 {edge_id} 相数与端点节点相数不一致。")
+                from_phases = self._safe_int((node_map[from_node_id].get("params") or {}).get("phases") if isinstance(node_map[from_node_id].get("params"), dict) else None, 3)
+                to_phases = self._safe_int((node_map[to_node_id].get("params") or {}).get("phases") if isinstance(node_map[to_node_id].get("params"), dict) else None, 3)
+                if phases in {1, 3} and (from_phases in {1, 3} and to_phases in {1, 3}) and (phases != from_phases or phases != to_phases):
+                    warnings.append(f"线路 {edge_id} 相数与端点节点相数不一致。")
 
             active = self._safe_bool(params.get("enabled"), True) and not self._safe_bool(params.get("normally_open"), False)
             if active:
@@ -1136,7 +1136,7 @@ class BuildExportService:
                 active_adjacency[to_node_id].add(from_node_id)
 
         if legacy_phase_seen:
-            warnings.append("检测到旧拓扑中存在非三相相数设置；Build 将统一按三相平衡 OpenDSS 模型构建。")
+            warnings.append("检测到拓扑中存在非三相相数设置，请确认相别、相序与端点节点一致。")
 
         roots = {str(node.get("id")) for node in [*grid_nodes, *transformer_nodes] if node.get("id") is not None}
         visited = self._walk_graph(active_adjacency, roots)

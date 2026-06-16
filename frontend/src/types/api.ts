@@ -141,10 +141,19 @@ export type EngineDiagnosticsScenario = {
   };
   population_history?: Array<{
     generation?: number;
+    global_generation?: number;
+    local_generation?: number;
+    local_generations?: number;
+    strategy_id?: string | null;
+    strategy_index?: number | null;
+    strategy_ordinal?: number | null;
+    strategy_total?: number | null;
     population_size?: number;
     feasible_count?: number;
     archive_size?: number;
     best_npv_yuan?: number | null;
+    generation_wall_time_s?: number | null;
+    evaluator_eval_count?: number | null;
   }>;
 };
 

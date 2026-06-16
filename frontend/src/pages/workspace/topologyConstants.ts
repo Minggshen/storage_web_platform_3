@@ -107,7 +107,7 @@ export const NODE_HIDDEN_PERSISTED_PARAM_KEYS: Record<string, readonly string[]>
 };
 
 export const EDGE_ADVANCED_PARAM_KEYS = [
-  'linecode', 'phases', 'enabled', 'normally_open', 'length_km',
+  'linecode', 'phases', 'enabled', 'normally_open', 'length_km', 'units',
   'r_ohm_per_km', 'x_ohm_per_km', 'r0_ohm_per_km', 'x0_ohm_per_km',
   'c1_nf_per_km', 'c0_nf_per_km', 'rated_current_a', 'emerg_current_a',
 ] as const;
@@ -137,28 +137,31 @@ export const ECONOMIC_DEFAULT_PARAMS: Record<string, unknown> = {
   discount_rate: 0.06,
   annual_revenue_growth_rate: 0,
   annual_om_growth_rate: 0.02,
-  power_related_capex_yuan_per_kw: 300,
   integration_markup_ratio: 0.15,
   safety_markup_ratio: 0.02,
   other_capex_yuan: 0,
-  degradation_cost_yuan_per_kwh_throughput: 0.03,
   battery_capex_share: 0.6,
-  cycle_life_efc: 8000,
-  annual_cycle_limit: 0,
   calendar_life_years: 20,
   calendar_fade_share: 0.15,
   replacement_cost_ratio: 0.6,
   replacement_year_override: 0,
   replacement_trigger_soh: 0.7,
   replacement_reset_soh: 0.95,
-  annual_fixed_om_yuan_per_kw_year: 18,
-  annual_variable_om_yuan_per_kwh: 0.004,
   demand_charge_yuan_per_kw_month: 48,
   daily_demand_shadow_yuan_per_kw: 48,
   voltage_penalty_coeff_yuan: 0,
 };
 
 export const ECONOMIC_PARAM_KEYS = new Set(Object.keys(ECONOMIC_DEFAULT_PARAMS));
+
+export const DEPRECATED_DEVICE_ECONOMIC_PARAM_KEYS = new Set([
+  'power_related_capex_yuan_per_kw',
+  'degradation_cost_yuan_per_kwh_throughput',
+  'cycle_life_efc',
+  'annual_cycle_limit',
+  'annual_fixed_om_yuan_per_kw_year',
+  'annual_variable_om_yuan_per_kwh',
+]);
 
 export const LINE_CODE_OPTIONS = [
   {

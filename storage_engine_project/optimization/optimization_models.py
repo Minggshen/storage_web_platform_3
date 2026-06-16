@@ -202,6 +202,19 @@ class FitnessEvaluationResult:
             "notes": list(self.notes),
         }
 
+        if isinstance(self.metadata, dict):
+            for key in (
+                "device_safety_available",
+                "device_safety_cost",
+                "device_safety_score_pct",
+                "device_safety_weighted_score",
+                "device_safety_sub_scores",
+                "device_safety_trace",
+                "device_safety_data_quality_flags",
+            ):
+                if key in self.metadata:
+                    base[key] = self.metadata[key]
+
         if self.lifecycle_financial_result is not None:
             fin = self.lifecycle_financial_result.summary_dict()
             base.update(

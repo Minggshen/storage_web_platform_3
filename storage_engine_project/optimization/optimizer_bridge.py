@@ -41,45 +41,36 @@ class OptimizerBridge:
     def __init__(
         self,
         evaluator: StorageFitnessEvaluator,
-        strategy_ids: list[str],
-        search_spaces: dict[str, SearchSpaceConfig],
+        fixed_strategy_id: str,
+        search_space_config: SearchSpaceConfig,
     ) -> None:
-        if not strategy_ids:
-            raise ValueError("strategy_ids 不能为空。")
+        if not str(fixed_strategy_id).strip():
+            raise ValueError("fixed_strategy_id 不能为空。")
         self.evaluator = evaluator
-        self.strategy_ids = list(strategy_ids)
-        self.search_spaces = dict(search_spaces)
+        self.fixed_strategy_id = str(fixed_strategy_id)
+        self.search_space_config = search_space_config
         self.last_population_evaluation_count = 0
-
-        for sid in self.strategy_ids:
-            if sid not in self.search_spaces:
-                raise KeyError(f"策略 {sid} 未提供 SearchSpaceConfig。")
 
     def vector_to_decision(self, x: np.ndarray | list[float]) -> StorageDecision:
         arr = np.asarray(x, dtype=float).reshape(-1)
-        if arr.shape[0] < 3:
-            raise ValueError("候选向量长度至少应为 3：[strategy_selector, power_kw, duration_h]")
+        if arr.shape[0] < 2:
+            raise ValueError("候选向量长度至少应为 2：[power_kw, duration_h]")
 
-        strategy_index = int(np.clip(round(arr[0]), 0, len(self.strategy_ids) - 1))
-        strategy_id = self.strategy_ids[strategy_index]
-
-        power_kw = float(arr[1])
-        duration_h = float(arr[2])
+        power_kw = float(arr[0])
+        duration_h = float(arr[1])
         energy_kwh = power_kw * duration_h
 
         return StorageDecision(
-            strategy_id=strategy_id,
+            strategy_id=self.fixed_strategy_id,
             rated_power_kw=power_kw,
             rated_energy_kwh=energy_kwh,
         )
 
     def decision_to_vector(self, decision: StorageDecision) -> np.ndarray:
-        if decision.strategy_id not in self.strategy_ids:
+        if decision.strategy_id != self.fixed_strategy_id:
             raise KeyError(f"未知策略：{decision.strategy_id}")
-        strategy_index = float(self.strategy_ids.index(decision.strategy_id))
         return np.array(
             [
-                strategy_index,
                 float(decision.rated_power_kw),
                 float(decision.duration_h()),
             ],
@@ -87,14 +78,10 @@ class OptimizerBridge:
         )
 
     def get_global_bounds(self) -> tuple[np.ndarray, np.ndarray]:
-        power_lows = [self.search_spaces[sid].power_min_kw for sid in self.strategy_ids]
-        power_highs = [self.search_spaces[sid].power_max_kw for sid in self.strategy_ids]
-        dur_lows = [self.search_spaces[sid].duration_min_h for sid in self.strategy_ids]
-        dur_highs = [self.search_spaces[sid].duration_max_h for sid in self.strategy_ids]
-
-        lb = np.array([0.0, float(min(power_lows)), float(min(dur_lows))], dtype=float)
+        ss = self.search_space_config
+        lb = np.array([float(ss.power_min_kw), float(ss.duration_min_h)], dtype=float)
         ub = np.array(
-            [float(len(self.strategy_ids) - 1), float(max(power_highs)), float(max(dur_highs))],
+            [float(ss.power_max_kw), float(ss.duration_max_h)],
             dtype=float,
         )
         return lb, ub
@@ -102,26 +89,22 @@ class OptimizerBridge:
     def clip_vector_to_bounds(self, x: np.ndarray | list[float]) -> np.ndarray:
         x = np.asarray(x, dtype=float).reshape(-1)
         lb, ub = self.get_global_bounds()
-        if x.shape[0] < 3:
-            raise ValueError("向量长度至少为 3。")
+        if x.shape[0] < 2:
+            raise ValueError("向量长度至少为 2。")
 
         x_clip = x.copy()
-        x_clip[:3] = np.clip(x_clip[:3], lb, ub)
-
-        decision = self.vector_to_decision(x_clip)
-        ss = self.search_spaces[decision.strategy_id]
-        x_clip[1] = np.clip(x_clip[1], ss.power_min_kw, ss.power_max_kw)
-        x_clip[2] = np.clip(x_clip[2], ss.duration_min_h, ss.duration_max_h)
+        x_clip[:2] = np.clip(x_clip[:2], lb, ub)
+        ss = self.search_space_config
 
         # 量化功率和时长以提升缓存命中率与结果稳定性
         if POWER_QUANTUM_KW > 0:
-            x_clip[1] = round(float(x_clip[1]) / POWER_QUANTUM_KW) * POWER_QUANTUM_KW
+            x_clip[0] = round(float(x_clip[0]) / POWER_QUANTUM_KW) * POWER_QUANTUM_KW
         if DURATION_QUANTUM_H > 0:
-            x_clip[2] = round(float(x_clip[2]) / DURATION_QUANTUM_H) * DURATION_QUANTUM_H
+            x_clip[1] = round(float(x_clip[1]) / DURATION_QUANTUM_H) * DURATION_QUANTUM_H
 
         # 量化后重新裁剪到策略边界
-        x_clip[1] = np.clip(x_clip[1], ss.power_min_kw, ss.power_max_kw)
-        x_clip[2] = np.clip(x_clip[2], ss.duration_min_h, ss.duration_max_h)
+        x_clip[0] = np.clip(x_clip[0], ss.power_min_kw, ss.power_max_kw)
+        x_clip[1] = np.clip(x_clip[1], ss.duration_min_h, ss.duration_max_h)
         return x_clip
 
     @staticmethod

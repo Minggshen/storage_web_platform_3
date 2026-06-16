@@ -225,10 +225,6 @@ class LifecycleFinancialEvaluator:
         energy_capex = rated_energy_kwh * float(strategy.capex_energy_yuan_per_kwh)
         power_capex = rated_power_kw * float(strategy.capex_power_yuan_per_kw)
 
-        power_related_override = _meta_float(meta, "power_related_capex_yuan_per_kw", 0.0)
-        if power_related_override > 0 and power_capex <= 0:
-            power_capex = rated_power_kw * power_related_override
-
         base_capex = energy_capex + power_capex
 
         if cfg.use_strategy_metadata_overrides:
@@ -538,11 +534,8 @@ class LifecycleFinancialEvaluator:
         return max(1, years)
 
     def _resolve_cycle_life_efc(self, strategy, ctx: AnnualOperationContext) -> float:
-        meta = dict(ctx.meta)
         strategy_meta = getattr(strategy, "metadata", {}) if isinstance(getattr(strategy, "metadata", {}), dict) else {}
         values = (
-            meta.get("cycle_life_efc"),
-            meta.get("cycle_life"),
             getattr(strategy, "cycle_life_efc", None),
             strategy_meta.get("cycle_life_efc"),
             self.config.default_cycle_life_efc,

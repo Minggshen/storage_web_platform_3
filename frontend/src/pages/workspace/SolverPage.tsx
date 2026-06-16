@@ -26,6 +26,47 @@ type ProgressSnapshot = ProgressInfo & {
   taskId: string;
 };
 
+type DeviceSafetyWeightKey =
+  | 'cell'
+  | 'capacity'
+  | 'thermal'
+  | 'tempRange'
+  | 'detection'
+  | 'fireSuppression'
+  | 'explosion'
+  | 'bms'
+  | 'propagation'
+  | 'ip'
+  | 'corrosion'
+  | 'certification';
+
+type TerminalSocMode = 'weekly_anchor' | 'fixed' | 'free';
+
+const DEVICE_SAFETY_WEIGHT_FIELDS: Array<{
+  key: DeviceSafetyWeightKey;
+  requestKey: string;
+  label: string;
+  defaultValue: number;
+}> = [
+  { key: 'cell', requestKey: 'device_safety_weight_cell', label: '电芯安全', defaultValue: 12 },
+  { key: 'capacity', requestKey: 'device_safety_weight_capacity', label: '容量/倍率适配', defaultValue: 5 },
+  { key: 'thermal', requestKey: 'device_safety_weight_thermal', label: '热管理', defaultValue: 14 },
+  { key: 'tempRange', requestKey: 'device_safety_weight_temp_range', label: '温度范围', defaultValue: 4 },
+  { key: 'detection', requestKey: 'device_safety_weight_detection', label: '探测预警', defaultValue: 10 },
+  { key: 'fireSuppression', requestKey: 'device_safety_weight_fire_suppression', label: '消防抑制', defaultValue: 12 },
+  { key: 'explosion', requestKey: 'device_safety_weight_explosion', label: '泄爆/防爆', defaultValue: 10 },
+  { key: 'bms', requestKey: 'device_safety_weight_bms', label: 'BMS', defaultValue: 12 },
+  { key: 'propagation', requestKey: 'device_safety_weight_propagation', label: '热蔓延防护', defaultValue: 8 },
+  { key: 'ip', requestKey: 'device_safety_weight_ip', label: 'IP 防护', defaultValue: 5 },
+  { key: 'corrosion', requestKey: 'device_safety_weight_corrosion', label: '防腐等级', defaultValue: 3 },
+  { key: 'certification', requestKey: 'device_safety_weight_certification', label: '认证', defaultValue: 5 },
+];
+
+const DEFAULT_DEVICE_SAFETY_WEIGHTS = DEVICE_SAFETY_WEIGHT_FIELDS.reduce(
+  (acc, item) => ({ ...acc, [item.key]: item.defaultValue }),
+  {} as Record<DeviceSafetyWeightKey, number>,
+);
+
 function formatDurationSeconds(task: SolverTask | null): string {
   if (!task?.started_at || !task?.completed_at) return '--';
   const start = new Date(task.started_at).getTime();
@@ -51,8 +92,8 @@ function WeightField(props: {
   onChange: (value: number) => void;
 }) {
   return (
-    <label htmlFor={props.id} className="grid gap-1.5">
-      <span className="text-xs font-semibold text-muted-foreground">{props.label}</span>
+    <label htmlFor={props.id} className="grid grid-cols-[minmax(0,1fr)_76px] items-center gap-2">
+      <span className="min-w-0 text-xs font-semibold leading-snug text-muted-foreground">{props.label}</span>
       <input
         id={props.id}
         type="number"
@@ -62,10 +103,17 @@ function WeightField(props: {
         value={Number.isFinite(props.value) ? props.value : 0}
         disabled={props.disabled}
         onChange={(event) => props.onChange(Math.max(0, Number(event.target.value) || 0))}
-        className={`h-9 rounded-lg border px-2.5 text-sm ${props.disabled ? 'border-border bg-muted/50 text-muted-foreground' : 'border-border bg-card'}`}
+        className={`h-8 w-[76px] rounded-md border px-2 text-right text-sm ${props.disabled ? 'border-border bg-muted/50 text-muted-foreground' : 'border-border bg-card'}`}
       />
     </label>
   );
+}
+
+function normalizeTerminalSocMode(value: unknown): TerminalSocMode {
+  const raw = String(value ?? '').trim();
+  if (raw === 'fixed' || raw === 'free' || raw === 'weekly_anchor') return raw;
+  if (raw === 'carry') return 'free';
+  return 'weekly_anchor';
 }
 
 export default function SolverPage() {
@@ -81,9 +129,15 @@ export default function SolverPage() {
   const [solverTier, setSolverTier] = useState<'fast' | 'standard' | 'delivery' | 'custom'>('standard');
   const [targetId, setTargetId] = useState('');
   const [initialSoc, setInitialSoc] = useState('0.25');
+  const [terminalSocMode, setTerminalSocMode] = useState<TerminalSocMode>('weekly_anchor');
+  const [fixedTerminalSocTarget, setFixedTerminalSocTarget] = useState('0.50');
+  const [dailyTerminalSocTolerance, setDailyTerminalSocTolerance] = useState('0.02');
   const [safetyTradeoff, setSafetyTradeoff] = useState(50);
   const [economicWeights, setEconomicWeights] = useState({ npv: 45, irr: 20, payback: 25, investment: 10 });
   const [safetyWeights, setSafetyWeights] = useState({ transformer: 25, voltage: 25, line: 25, cycle: 25 });
+  const [deviceSafetyWeights, setDeviceSafetyWeights] = useState<Record<DeviceSafetyWeightKey, number>>(
+    DEFAULT_DEVICE_SAFETY_WEIGHTS,
+  );
   const [targetOptions, setTargetOptions] = useState<TargetOption[]>([]);
   const [lastUpdatedAt, setLastUpdatedAt] = useState<Date | null>(null);
   const [displayProgress, setDisplayProgress] = useState<ProgressSnapshot>({
@@ -169,6 +223,9 @@ export default function SolverPage() {
         target_id: targetId.trim() || undefined,
         output_subdir_name: 'integrated_optimization',
         initial_soc: clampInputNumber(initialSoc, 0, 1, 0.25),
+        terminal_soc_mode: terminalSocMode,
+        fixed_terminal_soc_target: clampInputNumber(fixedTerminalSocTarget, 0, 1, 0.5),
+        daily_terminal_soc_tolerance: clampInputNumber(dailyTerminalSocTolerance, 0, 0.2, 0.02),
         safety_economy_tradeoff: safetyTradeoff / 100,
         economic_weight_npv: Math.max(economicWeights.npv, 0) / 100,
         economic_weight_irr: Math.max(economicWeights.irr, 0) / 100,
@@ -178,6 +235,18 @@ export default function SolverPage() {
         safety_weight_voltage: Math.max(safetyWeights.voltage, 0) / 100,
         safety_weight_line: Math.max(safetyWeights.line, 0) / 100,
         safety_weight_cycle: Math.max(safetyWeights.cycle, 0) / 100,
+        device_safety_weight_cell: Math.max(deviceSafetyWeights.cell, 0) / 100,
+        device_safety_weight_capacity: Math.max(deviceSafetyWeights.capacity, 0) / 100,
+        device_safety_weight_thermal: Math.max(deviceSafetyWeights.thermal, 0) / 100,
+        device_safety_weight_temp_range: Math.max(deviceSafetyWeights.tempRange, 0) / 100,
+        device_safety_weight_detection: Math.max(deviceSafetyWeights.detection, 0) / 100,
+        device_safety_weight_fire_suppression: Math.max(deviceSafetyWeights.fireSuppression, 0) / 100,
+        device_safety_weight_explosion: Math.max(deviceSafetyWeights.explosion, 0) / 100,
+        device_safety_weight_bms: Math.max(deviceSafetyWeights.bms, 0) / 100,
+        device_safety_weight_propagation: Math.max(deviceSafetyWeights.propagation, 0) / 100,
+        device_safety_weight_ip: Math.max(deviceSafetyWeights.ip, 0) / 100,
+        device_safety_weight_corrosion: Math.max(deviceSafetyWeights.corrosion, 0) / 100,
+        device_safety_weight_certification: Math.max(deviceSafetyWeights.certification, 0) / 100,
       });
       await refreshTask(true);
       // 重新执行后恢复轮询（此前可能因上一任务终态已停止）
@@ -215,8 +284,10 @@ export default function SolverPage() {
   const rawProgress = useMemo(() => {
     const hinted = normalizeProgressHint(logsTask?.progress_hint ?? latestTask?.progress_hint);
     if (hinted) return hinted;
-    return estimateSolverProgress(latestTask, stdoutText, Math.max(Number(generations) || 0, 0));
-  }, [latestTask, logsTask?.progress_hint, stdoutText, generations]);
+    const runRequest = toRecord(logsTask?.metadata?.run_request ?? latestTask?.metadata?.run_request);
+    const requestedGenerations = Number(runRequest?.generations ?? generations);
+    return estimateSolverProgress(latestTask, stdoutText, Math.max(requestedGenerations || 0, 0));
+  }, [latestTask, logsTask?.progress_hint, logsTask?.metadata, stdoutText, generations]);
   const mustChooseTarget = targetOptions.length > 1 && !targetId;
   const hasNoTargetOptions = targetOptions.length === 0;
   const pollingRef = useRef<number | null>(null);
@@ -268,6 +339,29 @@ export default function SolverPage() {
     delivery: { pop: '16', gen: '8' },
     custom: { pop: populationSize, gen: generations },
   };
+  const TIER_DESCRIPTIONS: Record<string, string> = {
+    fast: '快速预览：每个设备型号独立搜索 3 代，适合先检查数据链路。',
+    standard: '标准求解：每个设备型号独立搜索 5 代，适合常规方案比较。',
+    delivery: '交付求解：每个设备型号独立搜索 8 代，最终跨型号统一评分推荐。',
+    custom: '自定义参数：下面两个数值均按“每个设备型号”生效。',
+  };
+  const TERMINAL_SOC_MODE_INFO: Record<TerminalSocMode, { title: string; body: string; targetHint: string }> = {
+    weekly_anchor: {
+      title: '周锚定：适合全年连续仿真',
+      body: '每天 SOC 允许自然承接前一天结果，但会按周回到锚定水平，避免全年 SOC 长期漂移。',
+      targetHint: '日末目标 SOC 和容差用于锚定校正。',
+    },
+    fixed: {
+      title: '每日固定目标：适合强约束运营',
+      body: '每天结束时都尽量回到指定 SOC，结果更规整，但可能牺牲部分套利收益。',
+      targetHint: '日末目标 SOC 和容差会每天生效。',
+    },
+    free: {
+      title: '不强制日末：适合观察自然调度',
+      body: '日末 SOC 不强制回到指定水平，次日直接继承前一日末 SOC；收益空间更自由，但长期 SOC 可能漂移。',
+      targetHint: '该模式不使用日末目标 SOC 和容差。',
+    },
+  };
 
   const effectiveSolverTier: 'fast' | 'standard' | 'delivery' | 'custom' = freezeInputs
     ? (latestRunRequest?.solver_tier
@@ -283,12 +377,25 @@ export default function SolverPage() {
   const effectiveGenerations = freezeInputs
     ? String(latestRunRequest?.generations ?? (tierIsPreset ? TIER_DEFAULTS[effectiveSolverTier].gen : generations))
     : (tierIsPreset ? TIER_DEFAULTS[effectiveSolverTier].gen : generations);
+  const perModelPopulationSize = Math.max(Number(effectivePopulationSize) || 0, 0);
+  const perModelGenerations = Math.max(Number(effectiveGenerations) || 0, 0);
   const effectiveTargetId = freezeInputs
     ? String(latestRunRequest?.target_id ?? targetId)
     : targetId;
   const effectiveInitialSoc = freezeInputs
     ? String(latestRunRequest?.initial_soc ?? initialSoc)
     : initialSoc;
+  const effectiveTerminalSocMode = normalizeTerminalSocMode(
+    freezeInputs ? latestRunRequest?.terminal_soc_mode ?? terminalSocMode : terminalSocMode,
+  );
+  const effectiveFixedTerminalSocTarget = freezeInputs
+    ? String(latestRunRequest?.fixed_terminal_soc_target ?? fixedTerminalSocTarget)
+    : fixedTerminalSocTarget;
+  const effectiveDailyTerminalSocTolerance = freezeInputs
+    ? String(latestRunRequest?.daily_terminal_soc_tolerance ?? dailyTerminalSocTolerance)
+    : dailyTerminalSocTolerance;
+  const terminalSocInfo = TERMINAL_SOC_MODE_INFO[effectiveTerminalSocMode] ?? TERMINAL_SOC_MODE_INFO.weekly_anchor;
+  const terminalSocFieldsDisabled = freezeInputs || effectiveTerminalSocMode === 'free';
   const effectiveSafetyTradeoff = freezeInputs
     ? Math.round(Number(latestRunRequest?.safety_economy_tradeoff ?? 0.5) * 100)
     : safetyTradeoff;
@@ -308,6 +415,13 @@ export default function SolverPage() {
         cycle: Math.round(Number(latestRunRequest?.safety_weight_cycle ?? 0.25) * 100),
       }
     : safetyWeights;
+  const effectiveDeviceSafetyWeights = freezeInputs
+    ? DEVICE_SAFETY_WEIGHT_FIELDS.reduce((acc, item) => {
+        const raw = latestRunRequest?.[item.requestKey];
+        acc[item.key] = Math.round(Number(raw ?? item.defaultValue / 100) * 100);
+        return acc;
+      }, {} as Record<DeviceSafetyWeightKey, number>)
+    : deviceSafetyWeights;
 
   function tradeoffLabel(value: number): string {
     if (value <= 10) return '纯经济最优';
@@ -350,7 +464,7 @@ export default function SolverPage() {
               任务运行中，参数已锁定为本次运行的实际设置。
             </div>
           )}
-          <div className="grid gap-3" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 240px))' }}>
+          <div className="grid gap-4 lg:grid-cols-2 xl:grid-cols-4">
             <label htmlFor="solver-tier" className="grid gap-1.5">
               <span className="text-[13px] font-bold text-foreground/70">求解精度</span>
               <select
@@ -374,7 +488,7 @@ export default function SolverPage() {
               </select>
             </label>
             <label htmlFor="solver-population-size" className="grid gap-1.5">
-              <span className="text-[13px] font-bold text-foreground/70">population_size</span>
+              <span className="text-[13px] font-bold text-foreground/70">每型号种群规模</span>
               <input
                 id="solver-population-size"
                 type="number" min={1} step={1}
@@ -385,7 +499,7 @@ export default function SolverPage() {
               />
             </label>
             <label htmlFor="solver-generations" className="grid gap-1.5">
-              <span className="text-[13px] font-bold text-foreground/70">generations</span>
+              <span className="text-[13px] font-bold text-foreground/70">每型号迭代代数</span>
               <input
                 id="solver-generations"
                 type="number" min={1} step={1}
@@ -423,108 +537,194 @@ export default function SolverPage() {
                 className={`h-10 rounded-xl border px-2.5 text-sm ${freezeInputs ? 'border-border bg-muted/50 text-muted-foreground' : 'border-border bg-card'}`}
               />
             </label>
+            <label htmlFor="solver-terminal-soc-mode" className="grid gap-1.5">
+              <span className="text-[13px] font-bold text-foreground/70">日末 SOC 模式</span>
+              <select
+                id="solver-terminal-soc-mode"
+                value={effectiveTerminalSocMode}
+                onChange={(e) => {
+                  if (!freezeInputs) setTerminalSocMode(e.target.value as TerminalSocMode);
+                }}
+                disabled={freezeInputs}
+                className="h-10 rounded-xl border border-border bg-card px-2.5 text-sm"
+              >
+                <option value="weekly_anchor">周锚定</option>
+                <option value="fixed">每日固定目标</option>
+                <option value="free">不强制日末</option>
+              </select>
+            </label>
+            <label htmlFor="solver-terminal-soc-target" className="grid gap-1.5">
+              <span className="text-[13px] font-bold text-foreground/70">日末目标 SOC</span>
+              <input
+                id="solver-terminal-soc-target"
+                type="number" min={0} max={1} step={0.01}
+                value={effectiveFixedTerminalSocTarget}
+                onChange={(e) => { if (!terminalSocFieldsDisabled) setFixedTerminalSocTarget(e.target.value); }}
+                disabled={terminalSocFieldsDisabled}
+                className={`h-10 rounded-xl border px-2.5 text-sm ${terminalSocFieldsDisabled ? 'border-border bg-muted/50 text-muted-foreground' : 'border-border bg-card'}`}
+              />
+            </label>
+            <label htmlFor="solver-terminal-soc-tolerance" className="grid gap-1.5">
+              <span className="text-[13px] font-bold text-foreground/70">日末 SOC 容差</span>
+              <input
+                id="solver-terminal-soc-tolerance"
+                type="number" min={0} max={0.2} step={0.01}
+                value={effectiveDailyTerminalSocTolerance}
+                onChange={(e) => { if (!terminalSocFieldsDisabled) setDailyTerminalSocTolerance(e.target.value); }}
+                disabled={terminalSocFieldsDisabled}
+                className={`h-10 rounded-xl border px-2.5 text-sm ${terminalSocFieldsDisabled ? 'border-border bg-muted/50 text-muted-foreground' : 'border-border bg-card'}`}
+              />
+            </label>
           </div>
 
-          {/* Safety-Economy Tradeoff Slider */}
-          <div className="mt-4 rounded-xl border border-border bg-card p-4">
-            <div className="mb-2 flex items-center justify-between gap-3">
-              <span className="text-[13px] font-bold text-foreground/70">最终方案选取倾向</span>
-              <span className="rounded-full bg-primary/10 px-3 py-0.5 text-xs font-bold text-primary">
-                {tradeoffLabel(effectiveSafetyTradeoff)}
+          <div className="mt-3 grid gap-3 lg:grid-cols-2">
+            <div className="rounded-xl border border-border bg-muted/20 px-3.5 py-3 text-[13px] text-muted-foreground">
+              <div className="font-semibold text-foreground/80">{TIER_DESCRIPTIONS[effectiveSolverTier]}</div>
+              <div className="mt-1">
+                GA 候选搜索量约等于：策略库候选设备型号数 × {perModelPopulationSize || '--'} × {perModelGenerations || '--'}。
+                设备型号数由当前 Solver Workspace 中的策略库决定；型号越多，总搜索时间越长。
+              </div>
+            </div>
+            <div className="rounded-xl border border-border bg-muted/20 px-3.5 py-3 text-[13px] text-muted-foreground">
+              <div className="font-semibold text-foreground/80">{terminalSocInfo.title}</div>
+              <div className="mt-1">{terminalSocInfo.body}</div>
+              <div className="mt-1 font-medium text-foreground/70">{terminalSocInfo.targetHint}</div>
+            </div>
+          </div>
+
+          <div className="mt-5 rounded-2xl border border-border bg-muted/20 p-4">
+            <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <h2 className="m-0 text-base font-bold text-foreground">目标函数权重设置</h2>
+                <p className="mt-1 text-[12px] text-muted-foreground">
+                  先设置一级目标，再设置各分支内的指标权重；运行安全与设备自身安全在综合安全性中固定各占一半。
+                </p>
+              </div>
+              <span className="rounded-full border border-border bg-card px-3 py-1 text-xs font-semibold text-muted-foreground">
+                综合适应度：分数越高越好
               </span>
             </div>
-            <div className="mb-2 flex items-center justify-center gap-6 text-xs font-bold">
-              <span className="text-red-600 dark:text-red-400">经济性 {100 - effectiveSafetyTradeoff}%</span>
-              <span className="text-emerald-600 dark:text-emerald-400">安全性 {effectiveSafetyTradeoff}%</span>
-            </div>
-            <div className="flex items-center gap-3">
-              <span className="text-xs font-semibold text-red-600 dark:text-red-400 whitespace-nowrap">经济性</span>
-              <input
-                type="range"
-                min={0}
-                max={100}
-                step={1}
-                value={effectiveSafetyTradeoff}
-                onChange={(e) => { if (!freezeInputs) setSafetyTradeoff(Number(e.target.value)); }}
-                disabled={freezeInputs}
-                className="h-2 w-full cursor-pointer appearance-none rounded-full bg-gradient-to-r from-red-400 via-amber-400 to-emerald-400 accent-primary"
-              />
-              <span className="text-xs font-semibold text-emerald-600 dark:text-emerald-400 whitespace-nowrap">安全性</span>
-            </div>
-            <div className="mt-1.5 text-[12px] text-muted-foreground">
-              控制最终储能方案选取时经济指标（NPV、回收期）与安全性指标（变压器越限、电压越限、线路过载）的相对权重。中间位置为经济与安全并重。
-            </div>
-          </div>
-
-          <div className="mt-4 grid gap-3 lg:grid-cols-2">
-            <div className="rounded-xl border border-border bg-card p-4">
-              <div className="mb-3 text-[13px] font-bold text-foreground/70">经济性子指标权重</div>
-              <div className="grid gap-3 sm:grid-cols-2">
-                <WeightField
-                  id="economic-weight-npv"
-                  label="NPV"
-                  value={effectiveEconomicWeights.npv}
-                  disabled={freezeInputs}
-                  onChange={(value) => setEconomicWeights((current) => ({ ...current, npv: value }))}
-                />
-                <WeightField
-                  id="economic-weight-irr"
-                  label="IRR"
-                  value={effectiveEconomicWeights.irr}
-                  disabled={freezeInputs}
-                  onChange={(value) => setEconomicWeights((current) => ({ ...current, irr: value }))}
-                />
-                <WeightField
-                  id="economic-weight-payback"
-                  label="回收期"
-                  value={effectiveEconomicWeights.payback}
-                  disabled={freezeInputs}
-                  onChange={(value) => setEconomicWeights((current) => ({ ...current, payback: value }))}
-                />
-                <WeightField
-                  id="economic-weight-investment"
-                  label="初始投资"
-                  value={effectiveEconomicWeights.investment}
-                  disabled={freezeInputs}
-                  onChange={(value) => setEconomicWeights((current) => ({ ...current, investment: value }))}
-                />
-              </div>
-              <div className="mt-2 text-[12px] text-muted-foreground">权重会自动归一化；NPV、IRR 越高越好，回收期和初始投资越低越好。</div>
-            </div>
 
             <div className="rounded-xl border border-border bg-card p-4">
-              <div className="mb-3 text-[13px] font-bold text-foreground/70">安全性子指标权重</div>
-              <div className="grid gap-3 sm:grid-cols-2">
-                <WeightField
-                  id="safety-weight-transformer"
-                  label="变压器越限"
-                  value={effectiveSafetyWeights.transformer}
-                  disabled={freezeInputs}
-                  onChange={(value) => setSafetyWeights((current) => ({ ...current, transformer: value }))}
-                />
-                <WeightField
-                  id="safety-weight-voltage"
-                  label="电压越限"
-                  value={effectiveSafetyWeights.voltage}
-                  disabled={freezeInputs}
-                  onChange={(value) => setSafetyWeights((current) => ({ ...current, voltage: value }))}
-                />
-                <WeightField
-                  id="safety-weight-line"
-                  label="线路过载"
-                  value={effectiveSafetyWeights.line}
-                  disabled={freezeInputs}
-                  onChange={(value) => setSafetyWeights((current) => ({ ...current, line: value }))}
-                />
-                <WeightField
-                  id="safety-weight-cycle"
-                  label="设备策略约束"
-                  value={effectiveSafetyWeights.cycle}
-                  disabled={freezeInputs}
-                  onChange={(value) => setSafetyWeights((current) => ({ ...current, cycle: value }))}
-                />
+              <div className="mb-2 flex items-center justify-between gap-3">
+                <span className="text-[13px] font-bold text-foreground/70">一级目标权重：经济性 / 安全性</span>
+                <span className="rounded-full bg-primary/10 px-3 py-0.5 text-xs font-bold text-primary">
+                  {tradeoffLabel(effectiveSafetyTradeoff)}
+                </span>
               </div>
-              <div className="mt-2 text-[12px] text-muted-foreground">设备策略约束使用策略库的年循环上限、时长边界等约束生成违反量；其他指标来自 OpenDSS 或代理潮流约束。</div>
+              <div className="mb-2 flex items-center justify-center gap-6 text-xs font-bold">
+                <span className="text-red-600 dark:text-red-400">经济性 {100 - effectiveSafetyTradeoff}%</span>
+                <span className="text-emerald-600 dark:text-emerald-400">安全性 {effectiveSafetyTradeoff}%</span>
+              </div>
+              <div className="flex items-center gap-3">
+                <span className="whitespace-nowrap text-xs font-semibold text-red-600 dark:text-red-400">经济性</span>
+                <input
+                  type="range"
+                  min={0}
+                  max={100}
+                  step={1}
+                  value={effectiveSafetyTradeoff}
+                  onChange={(e) => { if (!freezeInputs) setSafetyTradeoff(Number(e.target.value)); }}
+                  disabled={freezeInputs}
+                  className="h-2 w-full cursor-pointer appearance-none rounded-full bg-gradient-to-r from-red-400 via-amber-400 to-emerald-400 accent-primary"
+                />
+                <span className="whitespace-nowrap text-xs font-semibold text-emerald-600 dark:text-emerald-400">安全性</span>
+              </div>
+              <div className="mt-2 rounded-lg bg-muted/40 px-3 py-2 text-[12px] text-muted-foreground">
+                综合目标 = 经济性 {100 - effectiveSafetyTradeoff}% + 安全性 {effectiveSafetyTradeoff}%。
+              </div>
+            </div>
+
+            <div className="mt-3 grid items-stretch gap-3 lg:grid-cols-3">
+              <div className="flex h-full flex-col rounded-xl border border-border bg-card p-4">
+                <div className="mb-1 text-[13px] font-bold text-foreground/70">经济性指标权重设置</div>
+                <div className="mb-3 text-[12px] text-muted-foreground">NPV、IRR 越高越好；回收期和初始投资越低越好。</div>
+                <div className="grid gap-2">
+                  <WeightField
+                    id="economic-weight-npv"
+                    label="NPV"
+                    value={effectiveEconomicWeights.npv}
+                    disabled={freezeInputs}
+                    onChange={(value) => setEconomicWeights((current) => ({ ...current, npv: value }))}
+                  />
+                  <WeightField
+                    id="economic-weight-irr"
+                    label="IRR"
+                    value={effectiveEconomicWeights.irr}
+                    disabled={freezeInputs}
+                    onChange={(value) => setEconomicWeights((current) => ({ ...current, irr: value }))}
+                  />
+                  <WeightField
+                    id="economic-weight-payback"
+                    label="回收期"
+                    value={effectiveEconomicWeights.payback}
+                    disabled={freezeInputs}
+                    onChange={(value) => setEconomicWeights((current) => ({ ...current, payback: value }))}
+                  />
+                  <WeightField
+                    id="economic-weight-investment"
+                    label="初始投资"
+                    value={effectiveEconomicWeights.investment}
+                    disabled={freezeInputs}
+                    onChange={(value) => setEconomicWeights((current) => ({ ...current, investment: value }))}
+                  />
+                </div>
+                <div className="mt-auto pt-3 text-[12px] text-muted-foreground">只影响经济性分支。</div>
+              </div>
+
+              <div className="flex h-full flex-col rounded-xl border border-border bg-card p-4">
+                <div className="mb-1 text-[13px] font-bold text-foreground/70">运行安全性指标权重设置</div>
+                <div className="mb-3 text-[12px] text-muted-foreground">来自 OpenDSS/代理潮流约束和策略库运行边界。</div>
+                <div className="grid gap-2">
+                  <WeightField
+                    id="safety-weight-transformer"
+                    label="变压器越限"
+                    value={effectiveSafetyWeights.transformer}
+                    disabled={freezeInputs}
+                    onChange={(value) => setSafetyWeights((current) => ({ ...current, transformer: value }))}
+                  />
+                  <WeightField
+                    id="safety-weight-voltage"
+                    label="电压越限"
+                    value={effectiveSafetyWeights.voltage}
+                    disabled={freezeInputs}
+                    onChange={(value) => setSafetyWeights((current) => ({ ...current, voltage: value }))}
+                  />
+                  <WeightField
+                    id="safety-weight-line"
+                    label="线路过载"
+                    value={effectiveSafetyWeights.line}
+                    disabled={freezeInputs}
+                    onChange={(value) => setSafetyWeights((current) => ({ ...current, line: value }))}
+                  />
+                  <WeightField
+                    id="safety-weight-cycle"
+                    label="运行循环/策略约束"
+                    value={effectiveSafetyWeights.cycle}
+                    disabled={freezeInputs}
+                    onChange={(value) => setSafetyWeights((current) => ({ ...current, cycle: value }))}
+                  />
+                </div>
+                <div className="mt-auto pt-3 text-[12px] text-muted-foreground">只影响运行安全分支。</div>
+              </div>
+
+              <div className="flex h-full flex-col rounded-xl border border-border bg-card p-4">
+                <div className="mb-1 text-[13px] font-bold text-foreground/70">设备自身安全性指标权重设置</div>
+                <div className="mb-3 text-[12px] text-muted-foreground">来自设备策略库的电芯、热管理、消防、BMS、防护等级和认证等数据。</div>
+                <div className="grid gap-2 xl:grid-cols-2">
+                  {DEVICE_SAFETY_WEIGHT_FIELDS.map((item) => (
+                    <WeightField
+                      key={item.key}
+                      id={`device-safety-weight-${item.key}`}
+                      label={item.label}
+                      value={effectiveDeviceSafetyWeights[item.key]}
+                      disabled={freezeInputs}
+                      onChange={(value) => setDeviceSafetyWeights((current) => ({ ...current, [item.key]: value }))}
+                    />
+                  ))}
+                </div>
+                <div className="mt-auto pt-3 text-[12px] text-muted-foreground">只影响设备自身安全分支。</div>
+              </div>
             </div>
           </div>
 
@@ -552,13 +752,11 @@ export default function SolverPage() {
           ) : null}
 
           <div className="mt-3 text-[13px] text-muted-foreground">
-            {tierIsPreset && effectiveSolverTier !== 'delivery'
-              ? 'GA 搜索阶段使用轻量代理约束，求解完成后对 Top 候选执行 OpenDSS 全年重校核。'
-              : '优化阶段与重校核均启用 OpenDSS 全负荷潮流。'}
+            GA 搜索阶段使用快速代理评估；所有设备型号搜索完成后，会构建最终候选池并执行 OpenDSS 全年重校核。
             页面会自动刷新任务状态和日志。
           </div>
           <div className="mt-2.5 text-[13px] text-muted-foreground">
-            年度初始 SOC 只用于首日开局；进入全年逐日重校核后，次日初始 SOC 会自动继承前一日末 SOC，不再强制要求单日首尾回到固定值。
+            年度初始 SOC 只用于首日开局；日末 SOC 模式控制逐日调度是否回到锚定目标，次日初始 SOC 会继承前一日末 SOC。
           </div>
         </section>
 
@@ -674,7 +872,8 @@ function parseStdoutProgress(stdoutText: string, requestedGenerations: number): 
   const totalCases = lastNumber(stdoutText, /共加载\s+(\d+)\s+个待优化场景/g);
   const caseMatch = lastMatch(stdoutText, /开始场景优化\s+\[(\d+)\/(\d+)\]/g);
   const completedCases = countMatches(stdoutText, /场景完成：/g);
-  const generationsFromLog = lastNumber(stdoutText, /优化参数：总代数=(\d+)/g);
+  const generationsFromLog = lastNumber(stdoutText, /优化参数：每型号代数=(\d+)/g)
+    || lastNumber(stdoutText, /优化参数：总代数=(\d+)/g);
   const generations = Math.max(generationsFromLog || requestedGenerations || 0, 1);
   const iteration = Math.min(lastNumber(stdoutText, /优化迭代\s+(\d+)/g) || 0, generations);
   const annualMatch = lastMatch(stdoutText, /年度运行[^\n]*进度\s+(\d+)\/365/g);
@@ -692,6 +891,18 @@ function parseStdoutProgress(stdoutText: string, requestedGenerations: number): 
   const caseEndPercent = total && current ? 8 + (Math.min(current, total) / total) * 88 : 96;
   const casePercent = (relative: number) => clampProgress(caseStartPercent + (caseEndPercent - caseStartPercent) * Math.max(0, Math.min(relative, 1)));
 
+  const strategyMatch = lastMatch(stdoutText, /设备型号\s+(\d+)\/(\d+)/g);
+  if (strategyMatch && total && current && !inFullRecheck && !inFinalRecheck) {
+    const strategyIndex = Math.max(Number(strategyMatch[1]) || 1, 1);
+    const strategyTotal = Math.max(Number(strategyMatch[2]) || 1, 1);
+    const strategyFraction = Math.max(0, Math.min((strategyIndex - 1) / strategyTotal, 1));
+    return {
+      percent: casePercent(0.04 + strategyFraction * 0.36),
+      label: '按设备型号搜索',
+      detail: `第 ${current}/${total} 个场景，正在优化设备型号 ${strategyIndex}/${strategyTotal}。`,
+    };
+  }
+
   if (inExport && total && completedCases >= total) {
     return { percent: 97, label: '正在导出结果', detail: `全部 ${total} 个场景已完成，正在写入结果文件。` };
   }
@@ -705,7 +916,7 @@ function parseStdoutProgress(stdoutText: string, requestedGenerations: number): 
     return {
       percent: casePercent(0.40),
       label: 'GA 搜索已完成',
-      detail: `GA 迭代已完成 ${generations} 代，正在准备全年重校核或结果导出。`,
+      detail: `GA 每型号 ${generations} 代搜索已完成，正在准备全年重校核或结果导出。`,
     };
   }
   if (total && current) {
@@ -716,12 +927,12 @@ function parseStdoutProgress(stdoutText: string, requestedGenerations: number): 
     const percent = casePercent(0.04 + inCaseFraction * 0.36);
     let detail: string;
     if (proxyCurrent > 0 && proxyTotal > 0 && iteration > 0) detail = `第 ${current}/${total} 个场景，迭代 ${iteration}/${generations}，代表日 ${proxyCurrent}/${proxyTotal}。`;
-    else if (iteration > 0) detail = `第 ${current}/${total} 个场景，优化迭代 ${iteration}/${generations}。`;
+    else if (iteration > 0) detail = `第 ${current}/${total} 个场景，迭代 ${iteration}/${generations}。`;
     else detail = `第 ${current}/${total} 个场景正在初始化。`;
     return { percent, label: '正在运行 GA 优化', detail };
   }
   if (iteration > 0) {
-    return { percent: casePercent(0.04 + (iteration / generations) * 0.36), label: '正在运行 GA 优化', detail: `优化迭代 ${iteration}/${generations}。` };
+    return { percent: casePercent(0.04 + (iteration / generations) * 0.36), label: '正在运行 GA 优化', detail: `迭代 ${iteration}/${generations}。` };
   }
   return { percent: 5, label: '求解器已启动', detail: '已捕获 stdout 日志，正在解析后续进度。' };
 }

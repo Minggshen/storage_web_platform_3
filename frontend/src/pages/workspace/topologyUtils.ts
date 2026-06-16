@@ -11,7 +11,9 @@ import {
   BUS_EQUIPMENT_NODE_TYPES,
   CANVAS_HEIGHT,
   CANVAS_WIDTH,
+  DEFAULT_LINE_CODE,
   DEFAULT_LINE_TYPE,
+  DEPRECATED_DEVICE_ECONOMIC_PARAM_KEYS,
   ECONOMIC_DEFAULT_PARAMS,
   ECONOMIC_PARAM_KEYS,
   EDGE_ADVANCED_PARAM_KEYS,
@@ -215,6 +217,18 @@ export function pickParamKeys(
   return next;
 }
 
+function mergeParamDefaults(
+  defaults: Record<string, unknown>,
+  params: Record<string, unknown>,
+) {
+  const next: Record<string, unknown> = { ...defaults };
+  for (const [key, value] of Object.entries(params)) {
+    if (value === undefined || value === null || value === '') continue;
+    next[key] = value;
+  }
+  return next;
+}
+
 // ── Node helper: display type ──
 
 export function getDisplayNodeType(node: Pick<TopologyNode, 'type' | 'params'>) {
@@ -277,6 +291,9 @@ export function stripEconomicParams(params: Record<string, unknown>) {
   ECONOMIC_PARAM_KEYS.forEach((key) => {
     delete next[key];
   });
+  DEPRECATED_DEVICE_ECONOMIC_PARAM_KEYS.forEach((key) => {
+    delete next[key];
+  });
   return next;
 }
 
@@ -303,16 +320,22 @@ export function extractLegacyEconomicParams(nodes: Partial<TopologyNode>[]) {
 
 export function normalizeEconomicParams(input: unknown, legacy: Record<string, unknown> = {}) {
   const current = isRecord(input) ? input : {};
+  const allowedCurrent: Record<string, unknown> = {};
+  const allowedLegacy: Record<string, unknown> = {};
+  ECONOMIC_PARAM_KEYS.forEach((key) => {
+    if (current[key] !== undefined) allowedCurrent[key] = current[key];
+    if (legacy[key] !== undefined) allowedLegacy[key] = legacy[key];
+  });
   const demandCharge =
-    current.demand_charge_yuan_per_kw_month ??
-    current.daily_demand_shadow_yuan_per_kw ??
-    legacy.demand_charge_yuan_per_kw_month ??
-    legacy.daily_demand_shadow_yuan_per_kw ??
+    allowedCurrent.demand_charge_yuan_per_kw_month ??
+    allowedCurrent.daily_demand_shadow_yuan_per_kw ??
+    allowedLegacy.demand_charge_yuan_per_kw_month ??
+    allowedLegacy.daily_demand_shadow_yuan_per_kw ??
     ECONOMIC_DEFAULT_PARAMS.demand_charge_yuan_per_kw_month;
   const merged = {
     ...ECONOMIC_DEFAULT_PARAMS,
-    ...legacy,
-    ...current,
+    ...allowedLegacy,
+    ...allowedCurrent,
   };
   return {
     ...merged,
@@ -333,8 +356,8 @@ export function normalizeNode(node: Partial<TopologyNode>, index: number): Topol
   const rawParams = typeof node.params === 'object' && node.params !== null ? { ...node.params } : {};
   const type = String(node.type ?? 'load');
   const strippedParams = stripEconomicParams(rawParams);
-  const params = type === 'load' ? cleanLoadPanelParams(strippedParams) : strippedParams;
-  params.phases = 3;
+  const withDefaults = mergeParamDefaults(buildNodeDefaultParams(type as NodeKind), strippedParams);
+  const params = type === 'load' ? cleanLoadPanelParams(withDefaults) : withDefaults;
   if ((type === 'grid' || type === 'source') && Math.abs(Number(params.base_kv) - 110 / Math.sqrt(3)) <= 0.5) {
     params.base_kv = 110;
   }
@@ -361,10 +384,65 @@ export function normalizeNode(node: Partial<TopologyNode>, index: number): Topol
   };
 }
 
-export function normalizeEdge(edge: Partial<TopologyEdge>, index: number): TopologyEdge {
-  const params = typeof edge.params === 'object' && edge.params !== null ? { ...edge.params } : {};
-  params.phases = 3;
+function hasExplicitLineImpedance(params: Record<string, unknown>) {
+  return Number.isFinite(Number(params.r_ohm_per_km)) && Number.isFinite(Number(params.x_ohm_per_km));
+}
+
+function normalizeEdgeParams(
+  params: Record<string, unknown>,
+  inferredParams: Record<string, unknown>,
+) {
+  const rawLinecode = params.linecode ?? params.line_code;
+  const linecodeText = typeof rawLinecode === 'string' ? rawLinecode.trim() : String(rawLinecode ?? '').trim();
+  const explicitImpedance = hasExplicitLineImpedance(params);
+  const hasRawLinecode = Object.prototype.hasOwnProperty.call(params, 'linecode')
+    || Object.prototype.hasOwnProperty.call(params, 'line_code');
+  const hasInferredLinecode = Object.prototype.hasOwnProperty.call(inferredParams, 'linecode');
+  const inferredLinecode = typeof inferredParams.linecode === 'string'
+    ? inferredParams.linecode.trim()
+    : String(inferredParams.linecode ?? '').trim();
+  const selectedLinecode = hasRawLinecode
+    ? linecodeText
+    : (hasInferredLinecode ? inferredLinecode : DEFAULT_LINE_CODE);
+  const codeDefaults = selectedLinecode ? lineCodeDefaults(selectedLinecode) : lineCodeDefaults(DEFAULT_LINE_CODE);
+  const shouldUseInferredElectrical = !hasRawLinecode;
+  const baseDefaults: Record<string, unknown> = {
+    phases: 3,
+    enabled: true,
+    normally_open: false,
+    length_km: 0.5,
+    units: 'km',
+    linecode: selectedLinecode,
+    r_ohm_per_km: codeDefaults.r_ohm_per_km,
+    x_ohm_per_km: codeDefaults.x_ohm_per_km,
+    r0_ohm_per_km: codeDefaults.r0_ohm_per_km,
+    x0_ohm_per_km: codeDefaults.x0_ohm_per_km,
+    c1_nf_per_km: codeDefaults.c1_nf_per_km,
+    c0_nf_per_km: codeDefaults.c0_nf_per_km,
+    rated_current_a: codeDefaults.rated_current_a,
+    emerg_current_a: codeDefaults.emerg_current_a,
+    ...(shouldUseInferredElectrical ? inferredParams : {}),
+  };
+  const next = mergeParamDefaults(baseDefaults, params);
+  if (linecodeText === '' && explicitImpedance) {
+    next.linecode = '';
+    next.r0_ohm_per_km = Number.isFinite(Number(next.r0_ohm_per_km)) ? next.r0_ohm_per_km : next.r_ohm_per_km;
+    next.x0_ohm_per_km = Number.isFinite(Number(next.x0_ohm_per_km)) ? next.x0_ohm_per_km : next.x_ohm_per_km;
+    next.c1_nf_per_km = Number.isFinite(Number(next.c1_nf_per_km)) ? next.c1_nf_per_km : 0;
+    next.c0_nf_per_km = Number.isFinite(Number(next.c0_nf_per_km)) ? next.c0_nf_per_km : 0;
+  }
+  return next;
+}
+
+export function normalizeEdge(edge: Partial<TopologyEdge>, index: number, nodeMap?: Map<string, TopologyNode>): TopologyEdge {
+  const rawParams = typeof edge.params === 'object' && edge.params !== null ? { ...edge.params } : {};
   const rawType = String(edge.type ?? DEFAULT_LINE_TYPE);
+  const fromNodeId = String(edge.from_node_id ?? '');
+  const toNodeId = String(edge.to_node_id ?? '');
+  const fromNode = nodeMap?.get(fromNodeId);
+  const toNode = nodeMap?.get(toNodeId);
+  const inferred = inferAutoEdgeParams(fromNode, toNode);
+  const params = normalizeEdgeParams(rawParams, inferred.params);
   return {
     id: String(edge.id ?? `line_${index + 1}`),
     type: rawType === 'line' ? DEFAULT_LINE_TYPE : rawType,
@@ -372,8 +450,8 @@ export function normalizeEdge(edge: Partial<TopologyEdge>, index: number): Topol
       typeof edge.name === 'string' && edge.name.trim()
         ? edge.name
         : String(edge.id ?? `line_${index + 1}`),
-    from_node_id: String(edge.from_node_id ?? ''),
-    to_node_id: String(edge.to_node_id ?? ''),
+    from_node_id: fromNodeId,
+    to_node_id: toNodeId,
     params,
   };
 }
@@ -383,9 +461,11 @@ export function normalizeTopology(input: unknown): TopologyData {
   const rawNodes = Array.isArray(obj.nodes) ? (obj.nodes as Partial<TopologyNode>[]) : [];
   const rawEdges = Array.isArray(obj.edges) ? (obj.edges as Partial<TopologyEdge>[]) : [];
   const legacyEconomicParams = extractLegacyEconomicParams(rawNodes);
+  const nodes = rawNodes.map(normalizeNode);
+  const nodeMap = new Map(nodes.map((node) => [node.id, node]));
   return {
-    nodes: rawNodes.map(normalizeNode),
-    edges: rawEdges.map(normalizeEdge),
+    nodes,
+    edges: rawEdges.map((edge, index) => normalizeEdge(edge, index, nodeMap)),
     economic_parameters: normalizeEconomicParams(obj.economic_parameters, legacyEconomicParams),
   };
 }
@@ -696,7 +776,7 @@ export function buildNodeDefaultParams(type: NodeKind) {
     case 'storage':
       return { enabled: true, dss_bus_name: '', dss_name: '', voltage_level_kv: 0.4, rated_kw: 100, rated_kwh: 215, initial_soc_pct: 50, reserve_soc_pct: 10, phases: 3 };
     case 'load':
-      return { enabled: true, node_id: null, dss_bus_name: '', dss_load_name: '', target_kv_ln: null, phases: 3, category: 'industrial', remarks: '', model_year: 2025, q_to_p_ratio: 0.25, pf: 0.95, optimize_storage: true, allow_grid_export: false, transformer_capacity_kva: 1000, transformer_pf_limit: 0.95, transformer_reserve_ratio: 0.15, dispatch_mode: 'hybrid', run_mode: 'single_user' };
+      return { enabled: true, node_id: null, dss_bus_name: '', dss_load_name: '', target_kv_ln: null, phases: 3, category: 'industrial', remarks: '', model_year: 2025, q_to_p_ratio: 0.25, pf: 0.95, connection: 'wye', model: 1, optimize_storage: true, allow_grid_export: false, transformer_capacity_kva: 1000, transformer_pf_limit: 0.95, transformer_reserve_ratio: 0.15, dispatch_mode: 'hybrid', run_mode: 'single_user' };
     default:
       return {};
   }
@@ -894,6 +974,7 @@ export function inferAutoEdgeParams(
       return {
         params: {
           length_km: SERVICE_LINE_DEFAULT_LENGTH_KM,
+          units: 'km',
           linecode: '',
           r_ohm_per_km: r1, x_ohm_per_km: x1,
           r0_ohm_per_km: r1, x0_ohm_per_km: x1,
@@ -908,6 +989,7 @@ export function inferAutoEdgeParams(
     return {
       params: {
         length_km: SERVICE_LINE_DEFAULT_LENGTH_KM,
+        units: 'km',
         linecode: SERVICE_LINE_LINECODE,
         r_ohm_per_km: lineCodeDefaults(SERVICE_LINE_LINECODE).r_ohm_per_km,
         x_ohm_per_km: lineCodeDefaults(SERVICE_LINE_LINECODE).x_ohm_per_km,
@@ -924,6 +1006,7 @@ export function inferAutoEdgeParams(
   return {
     params: {
       length_km: 0.5,
+      units: 'km',
       linecode: autoLinecode,
       r_ohm_per_km: selected.r_ohm_per_km, x_ohm_per_km: selected.x_ohm_per_km,
       r0_ohm_per_km: selected.r0_ohm_per_km, x0_ohm_per_km: selected.x0_ohm_per_km,

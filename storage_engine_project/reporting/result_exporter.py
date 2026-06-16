@@ -87,6 +87,7 @@ def export_optimization_run(
     safety_economy_tradeoff = float(kwargs.get("safety_economy_tradeoff", 0.5))
     economic_metric_weights = kwargs.get("economic_metric_weights")
     safety_metric_weights = kwargs.get("safety_metric_weights")
+    device_safety_beta = float(kwargs.get("device_safety_beta", 0.5))
 
     archive_df = OptimizerBridge.results_to_dataframe(run_result.archive_results)
     pop_df = OptimizerBridge.results_to_dataframe(run_result.population_results)
@@ -97,12 +98,14 @@ def export_optimization_run(
         safety_economy_tradeoff=safety_economy_tradeoff,
         economic_metric_weights=economic_metric_weights,
         safety_metric_weights=safety_metric_weights,
+        device_safety_beta=device_safety_beta,
     )
     pop_df = annotate_dataframe_scores(
         pop_df,
         safety_economy_tradeoff=safety_economy_tradeoff,
         economic_metric_weights=economic_metric_weights,
         safety_metric_weights=safety_metric_weights,
+        device_safety_beta=device_safety_beta,
     )
 
     archive_path = out_dir / "archive_results.csv"

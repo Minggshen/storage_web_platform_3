@@ -26,6 +26,47 @@ class ParsedTable:
     rows: List[Dict[str, Any]]
 
 
+DEVICE_LIBRARY_SCHEMA_VERSION = "device_library_v2"
+V2_DEVICE_LIBRARY_COLUMNS = [
+    "enabled",
+    "manufacturer",
+    "device_model",
+    "rated_power_kw",
+    "rated_energy_kwh",
+    "duration_hour",
+    "battery_chemistry",
+    "cooling_class",
+    "cooling_note",
+    "ip_system",
+    "ip_pack",
+    "ip_pcs",
+    "corrosion_grade",
+    "corrosion_optional_grade",
+    "manual_safety_grade",
+    "round_trip_efficiency",
+    "c_rate_charge_max",
+    "c_rate_discharge_max",
+    "energy_unit_price_yuan_per_kwh",
+    "power_related_capex_yuan_per_kw",
+    "annual_om_ratio",
+    "soc_min",
+    "soc_max",
+    "operating_temp_min_c",
+    "operating_temp_max_c",
+    "cycle_life",
+    "fire_detection_class",
+    "fire_suppression_class",
+    "explosion_protection_class",
+    "propagation_protection_class",
+    "ems_model",
+    "certification_tokens",
+    "weight_kg",
+    "dimensions_mm",
+    "is_default_candidate",
+    "ems_package_name",
+]
+
+
 class AssetBindingService:
     def __init__(self, project_service: ProjectModelService | None = None) -> None:
         self.project_service = project_service or ProjectModelService()
@@ -256,11 +297,23 @@ class AssetBindingService:
         return report
 
     def validate_device_library_file(self, file_path: str | Path) -> tuple[AssetValidationReport, List[DeviceRecord]]:
-        table = self._read_table(file_path)
         report = self._new_report("device_library")
+        schema_version = self._read_device_library_schema_version(file_path)
+        if schema_version != DEVICE_LIBRARY_SCHEMA_VERSION:
+            self._push_message(
+                report,
+                ValidationStatus.ERROR,
+                "模板版本",
+                f"设备策略库必须使用 v2 模板，元数据 schema_version 应为 {DEVICE_LIBRARY_SCHEMA_VERSION}",
+                detail=f"当前 schema_version：{schema_version or '未找到'}",
+            )
+            self._finalize_report(report)
+            return report, []
+        self._push_message(report, ValidationStatus.PASS, "模板版本", "已识别 device_library_v2 模板")
+
+        table = self._read_device_library_table(file_path)
         header_map = self._normalize_header_map(table.headers)
-        required = ["vendor", "model"]
-        missing = [field for field in required if field not in header_map]
+        missing = [field for field in V2_DEVICE_LIBRARY_COLUMNS if field not in table.headers]
         if missing:
             for field in missing:
                 self._push_message(report, ValidationStatus.ERROR, "字段完整性", f"缺少字段：{field}")
@@ -271,44 +324,53 @@ class AssetBindingService:
         records: List[DeviceRecord] = []
         enabled_count = 0
         for idx, row in enumerate(table.rows, start=2):
+            if self._looks_like_device_description_row(row, header_map):
+                continue
             vendor = str(row.get(header_map["vendor"], "")).strip()
             model = str(row.get(header_map["model"], "")).strip()
             if not vendor or not model:
                 self._push_message(report, ValidationStatus.ERROR, "记录合法性", "存在空厂家或型号", detail=f"第 {idx} 行")
                 continue
 
-            duration = self._value_by_alias(row, header_map, ["duration_hour", "duration_h", "时长_h", "时长"])
-            rated_power = self._value_by_alias(row, header_map, ["rated_power_kw", "额定功率_kw", "功率_kw"])
-            rated_energy = self._value_by_alias(row, header_map, ["rated_energy_kwh", "额定容量_kwh", "容量_kwh"])
+            duration = self._value_by_alias(row, header_map, ["duration_hour"])
+            rated_power = self._value_by_alias(row, header_map, ["rated_power_kw"])
+            rated_energy = self._value_by_alias(row, header_map, ["rated_energy_kwh"])
             if duration is None and rated_power and rated_energy and rated_power > 0:
                 duration = round(rated_energy / rated_power, 4)
 
             energy_unit_price = self._value_by_alias(
-                row, header_map,
-                ["energy_unit_price_yuan_per_kwh", "energy_unit_price", "价格_元每kwh", "energy_price_yuan_per_kwh"]
+                row,
+                header_map,
+                ["energy_unit_price_yuan_per_kwh"],
             )
-            price_yuan_per_wh = self._value_by_alias(
-                row, header_map, ["price_yuan_per_wh", "价格_元每wh", "价格元每wh"]
-            )
-            if price_yuan_per_wh is None and energy_unit_price is not None:
-                price_yuan_per_wh = round(float(energy_unit_price) / 1000.0, 6)
+            price_yuan_per_wh = round(float(energy_unit_price) / 1000.0, 6) if energy_unit_price is not None else None
 
-            safety_level = self._string_by_alias(row, header_map, ["safety_level", "manual_safety_grade", "安全等级", "manual_safety_grade"])
-            ems_package = self._string_by_alias(row, header_map, ["ems_package", "ems_package_name", "ems包", "ems_package_name"])
+            safety_level = self._string_by_alias(row, header_map, ["manual_safety_grade"])
+            ems_package = self._string_by_alias(row, header_map, ["ems_package_name"])
 
             core_keys = {
-                "enabled","vendor","series_name","model","device_family","system_topology_type","application_scene",
-                "cni_fit_level","is_default_candidate","ems_package_name","has_builtin_ems","requires_external_pcs",
-                "supports_black_start","supports_offgrid_microgrid","battery_chemistry","rated_power_kw","rated_energy_kwh",
-                "usable_energy_kwh_at_fat","duration_h","duration_hour","dc_voltage_range_v","ac_grid_voltage_v","battery_config",
-                "cooling_type","fire_detection","fire_suppression","backup_system","accident_ventilation",
-                "pack_level_firefighting_optional","explosion_relief_optional","msd_required","communication_protocol",
-                "manual_safety_grade","manual_safety_notes","efficiency_pct","ip_system","corrosion_grade","install_mode",
-                "aux_power_interface","dimension_w_mm","dimension_d_mm","dimension_h_mm","weight_kg","price_yuan_per_wh",
-                "energy_unit_price_yuan_per_kwh","power_related_capex_yuan_per_kw","station_integration_capex_ratio",
-                "fire_protection_capex_ratio","annual_insurance_rate_on_capex","annual_safety_maintenance_rate_on_capex",
-                "annual_fire_system_inspection_rate_on_capex","price_status","quote_source","source_files",
-                "cycle_life","soc_min","soc_max","safety_level","ems_package"
+                "enabled",
+                "vendor",
+                "model",
+                "manufacturer",
+                "device_model",
+                "is_default_candidate",
+                "ems_package_name",
+                "battery_chemistry",
+                "rated_power_kw",
+                "rated_energy_kwh",
+                "duration_hour",
+                "cooling_class",
+                "manual_safety_grade",
+                "round_trip_efficiency",
+                "ip_system",
+                "corrosion_grade",
+                "weight_kg",
+                "energy_unit_price_yuan_per_kwh",
+                "power_related_capex_yuan_per_kw",
+                "cycle_life",
+                "soc_min",
+                "soc_max",
             }
             extra: Dict[str, Any] = {}
             for norm_key, original in header_map.items():
@@ -340,9 +402,9 @@ class AssetBindingService:
                 dc_voltage_range_v=self._string_by_alias(row, header_map, ["dc_voltage_range_v"]),
                 ac_grid_voltage_v=self._string_by_alias(row, header_map, ["ac_grid_voltage_v"]),
                 battery_config=self._string_by_alias(row, header_map, ["battery_config"]),
-                cooling_type=self._string_by_alias(row, header_map, ["cooling_type"]),
-                fire_detection=self._string_by_alias(row, header_map, ["fire_detection"]),
-                fire_suppression=self._string_by_alias(row, header_map, ["fire_suppression"]),
+                cooling_type=self._string_by_alias(row, header_map, ["cooling_class"]),
+                fire_detection=self._string_by_alias(row, header_map, ["fire_detection_class"]),
+                fire_suppression=self._string_by_alias(row, header_map, ["fire_suppression_class"]),
                 backup_system=self._string_by_alias(row, header_map, ["backup_system"]),
                 accident_ventilation=self._bool_by_alias(row, header_map, ["accident_ventilation"], default=False) if "accident_ventilation" in header_map else None,
                 pack_level_firefighting_optional=self._bool_by_alias(row, header_map, ["pack_level_firefighting_optional"], default=False) if "pack_level_firefighting_optional" in header_map else None,
@@ -352,10 +414,10 @@ class AssetBindingService:
                 safety_level=safety_level,
                 manual_safety_grade=self._string_by_alias(row, header_map, ["manual_safety_grade"]),
                 manual_safety_notes=self._string_by_alias(row, header_map, ["manual_safety_notes"]),
-                cycle_life=self._int_by_alias(row, header_map, ["cycle_life", "循环寿命"]),
-                soc_min=self._value_by_alias(row, header_map, ["soc_min", "soc下限"]),
-                soc_max=self._value_by_alias(row, header_map, ["soc_max", "soc上限"]),
-                efficiency_pct=self._value_by_alias(row, header_map, ["efficiency_pct"]),
+                cycle_life=self._int_by_alias(row, header_map, ["cycle_life"]),
+                soc_min=self._value_by_alias(row, header_map, ["soc_min"]),
+                soc_max=self._value_by_alias(row, header_map, ["soc_max"]),
+                efficiency_pct=self._value_by_alias(row, header_map, ["round_trip_efficiency"]),
                 ip_system=self._string_by_alias(row, header_map, ["ip_system"]),
                 corrosion_grade=self._string_by_alias(row, header_map, ["corrosion_grade"]),
                 install_mode=self._string_by_alias(row, header_map, ["install_mode"]),
@@ -420,6 +482,9 @@ class AssetBindingService:
             record.rated_power_kw = round(float(record.rated_energy_kwh) / float(record.duration_hour), 4)
         if record.rated_energy_kwh is None and record.rated_power_kw is not None and record.duration_hour not in (None, 0):
             record.rated_energy_kwh = round(float(record.rated_power_kw) * float(record.duration_hour), 4)
+
+        if record.efficiency_pct is not None and 0 < float(record.efficiency_pct) <= 1.5:
+            record.efficiency_pct = round(float(record.efficiency_pct) * 100.0, 4)
 
         # Conservative topology-based fallback when only energy is known.
         if record.rated_power_kw is None and record.rated_energy_kwh is not None:
@@ -508,6 +573,13 @@ class AssetBindingService:
             return self._read_xlsx(path)
         raise ValueError(f"暂不支持的文件格式：{path.suffix}")
 
+    def _read_device_library_table(self, file_path: str | Path) -> ParsedTable:
+        path = Path(file_path)
+        suffix = path.suffix.lower()
+        if suffix in {".xlsx", ".xlsm"}:
+            return self._read_xlsx(path, preferred_sheets=("设备库",))
+        raise ValueError("设备策略库必须使用 v2 模板 .xlsx/.xlsm 文件")
+
     def _read_csv(self, path: Path) -> ParsedTable:
         with path.open("r", encoding="utf-8-sig", newline="") as f:
             reader = csv.DictReader(f)
@@ -515,19 +587,70 @@ class AssetBindingService:
             rows = [dict(row) for row in reader]
         return ParsedTable(headers=headers, rows=rows)
 
-    def _read_xlsx(self, path: Path) -> ParsedTable:
+    def _read_xlsx(self, path: Path, preferred_sheets: Sequence[str] | None = None) -> ParsedTable:
         wb = load_workbook(path, data_only=True, read_only=True)
         ws = wb.active
-        header_row = next(ws.iter_rows(min_row=1, max_row=1, values_only=True))
+        for sheet_name in preferred_sheets or ():
+            if sheet_name in wb.sheetnames:
+                ws = wb[sheet_name]
+                break
+
+        values = list(ws.iter_rows(values_only=True))
+        if not values:
+            return ParsedTable(headers=[], rows=[])
+
+        header_idx = self._find_device_header_row(values) if preferred_sheets else 0
+        header_row = values[header_idx]
         headers = [str(cell).strip() if cell is not None else "" for cell in header_row]
         rows: List[Dict[str, Any]] = []
-        for values in ws.iter_rows(min_row=2, values_only=True):
-            if values is None:
+        for row_values in values[header_idx + 1:]:
+            if row_values is None:
                 continue
-            row = {headers[idx]: values[idx] if idx < len(values) else None for idx in range(len(headers))}
+            row = {headers[idx]: row_values[idx] if idx < len(row_values) else None for idx in range(len(headers))}
             if any(v not in (None, "") for v in row.values()):
                 rows.append(row)
         return ParsedTable(headers=headers, rows=rows)
+
+    def _find_device_header_row(self, values: Sequence[Sequence[Any]]) -> int:
+        for idx, row in enumerate(values[:25]):
+            normalized = {self._normalize_header_name(cell) for cell in row if cell not in (None, "")}
+            if {"vendor", "model"}.issubset(normalized):
+                return idx
+        return 0
+
+    def _read_device_library_schema_version(self, file_path: str | Path) -> str:
+        path = Path(file_path)
+        if path.suffix.lower() not in {".xlsx", ".xlsm"}:
+            return ""
+        try:
+            wb = load_workbook(path, data_only=True, read_only=True)
+        except Exception:
+            return ""
+        if "元数据" not in wb.sheetnames:
+            return ""
+        rows = list(wb["元数据"].iter_rows(values_only=True))
+        if not rows:
+            return ""
+        headers = [str(cell).strip() if cell is not None else "" for cell in rows[0]]
+        try:
+            key_idx = headers.index("key")
+            value_idx = headers.index("value")
+        except ValueError:
+            return ""
+        for row in rows[1:]:
+            key = str(row[key_idx] if key_idx < len(row) else "").strip()
+            if key == "schema_version":
+                return str(row[value_idx] if value_idx < len(row) else "").strip()
+        return ""
+
+    def _looks_like_device_description_row(self, row: Dict[str, Any], header_map: Dict[str, str]) -> bool:
+        vendor_header = header_map.get("vendor")
+        model_header = header_map.get("model")
+        if not vendor_header or not model_header:
+            return False
+        vendor = str(row.get(vendor_header, "")).strip()
+        model = str(row.get(model_header, "")).strip()
+        return vendor in {"厂家", "供应商", "制造商"} and model in {"型号", "设备型号", "产品型号"}
 
     def _normalize_header_map(self, headers: Sequence[str]) -> Dict[str, str]:
         mapping: Dict[str, str] = {}
