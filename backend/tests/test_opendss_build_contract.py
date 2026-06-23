@@ -459,6 +459,109 @@ def test_length_km_and_selected_frontend_linecode_are_sufficient_for_line_units_
     assert not any("LineCode 但参数不完整" in item for item in issue_messages)
 
 
+def _runtime_capacity_validation_case(tmp_path: Path, *, category: str = "residential") -> tuple[dict, dict]:
+    year_map = tmp_path / "runtime_year_model_map.csv"
+    model_library = tmp_path / "runtime_model_library.csv"
+    year_map.write_text("internal_model_id\nm1\n", encoding="utf-8")
+    hour_columns = ",".join(f"h{i:02d}" for i in range(24))
+    hour_values = ",".join("120" if i == 18 else "40" for i in range(24))
+    model_library.write_text(f"internal_model_id,{hour_columns}\nm1,{hour_values}\n", encoding="utf-8")
+
+    topology = {
+        "nodes": [
+            {"id": "grid", "type": "grid", "name": "grid", "params": {"source_bus": "sourcebus", "base_kv": 110, "phases": 3}},
+            {
+                "id": "tx_main",
+                "type": "transformer",
+                "name": "main tx",
+                "params": {"rated_kva": 10000, "primary_voltage_kv": 110, "voltage_level_kv": 10, "phases": 3},
+            },
+            {
+                "id": "user_tx",
+                "type": "transformer",
+                "name": "user tx",
+                "params": {
+                    "transformer_role": "distribution",
+                    "is_distribution_transformer": True,
+                    "rated_kva": 80,
+                    "primary_voltage_kv": 10,
+                    "voltage_level_kv": 0.4,
+                    "phases": 3,
+                },
+            },
+            {
+                "id": "load_001",
+                "type": "load",
+                "name": "LD01",
+                "params": {
+                    "node_id": 1,
+                    "dss_bus_name": "n1_load",
+                    "dss_load_name": "LD01",
+                    "target_kv_ln": 0.4,
+                    "category": category,
+                    "design_kw": 50,
+                    "q_to_p_ratio": 0.2,
+                    "transformer_capacity_kva": 100,
+                    "transformer_pf_limit": 0.95,
+                    "transformer_reserve_ratio": 0.15,
+                    "phases": 3,
+                },
+                "runtime_binding": {
+                    "year_map_file_id": "year_asset",
+                    "model_library_file_id": "model_asset",
+                },
+            },
+        ],
+        "edges": [
+            {"id": "edge_grid_tx", "from_node_id": "grid", "to_node_id": "tx_main", "params": {"enabled": True}},
+            {
+                "id": "edge_main_user_tx",
+                "from_node_id": "tx_main",
+                "to_node_id": "user_tx",
+                "params": {"length_km": 0.1, "units": "km", "linecode": "LC_MAIN", "phases": 3, "rated_current_a": 1000, "emerg_current_a": 1200},
+            },
+            {
+                "id": "edge_tx_load",
+                "from_node_id": "user_tx",
+                "to_node_id": "load_001",
+                "params": {"length_km": 0.005, "units": "km", "linecode": "LC_CABLE", "phases": 3, "rated_current_a": 300, "emerg_current_a": 360},
+            },
+        ],
+        "economic_parameters": {},
+    }
+    project = {
+        "project_id": "proj01",
+        "network": topology,
+        "assets": {
+            "year_asset": {"metadata": {"stored_path": str(year_map)}},
+            "model_asset": {"metadata": {"stored_path": str(model_library)}},
+        },
+    }
+    return topology, project
+
+
+def test_build_preview_warns_residential_capacity_recommendation(tmp_path):
+    topology, project = _runtime_capacity_validation_case(tmp_path, category="residential")
+    validation = BuildExportService(data_root=tmp_path)._validate_topology(topology, project)
+
+    warnings = "\n".join(validation["warnings"])
+    assert "导入曲线峰值 120.0 kW 高于设计负荷" not in warnings
+    assert "transformer_capacity_kva=100.0 kVA 与相连用户配变 user tx rated_kva=80.0 kVA 不一致" in warnings
+    assert "居民负荷节点 LD01 当前相连/配置配变容量 80.0 kVA" in warnings
+    assert "建议容量不低于 160 kVA" in warnings
+    assert "超过配变运行可用上限" not in warnings
+
+
+def test_build_preview_suppresses_inference_warnings_for_industrial_known_capacity(tmp_path):
+    topology, project = _runtime_capacity_validation_case(tmp_path, category="industrial")
+    validation = BuildExportService(data_root=tmp_path)._validate_topology(topology, project)
+
+    warnings = "\n".join(validation["warnings"])
+    assert "导入曲线峰值 120.0 kW 高于设计负荷" not in warnings
+    assert "transformer_capacity_kva=100.0 kVA 与相连用户配变" not in warnings
+    assert "建议容量不低于" not in warnings
+
+
 def test_legacy_loads_without_connection_and_model_use_frontend_defaults(tmp_path, monkeypatch):
     builder = DssBuilderService()
     topology_path = Path("backend/data/topology_templates/403a70db9fe2.json")
@@ -524,6 +627,155 @@ def test_duplicate_bus_mapping_is_warning_not_structural_error():
     assert checks["passed"] is True
     assert any("同一 OpenDSS 母线" in item for item in checks["warnings"])
     assert not checks["errors"]
+
+
+def test_common_line_neutral_voltage_inputs_are_normalized_to_line_line_voltage():
+    builder = DssBuilderService()
+    build_service = BuildExportService(data_root="unused")
+    solver = SolverExecutionService(data_root="unused")
+
+    low_voltage_ln = 0.4 / 3 ** 0.5
+    medium_voltage_ln = 10.0 / 3 ** 0.5
+
+    assert builder._distribution_voltage_kv_for_opendss(low_voltage_ln, 3) == pytest.approx(0.4)
+    assert builder._distribution_voltage_kv_for_opendss(low_voltage_ln, 1) == pytest.approx(low_voltage_ln)
+    assert builder._distribution_voltage_kv_for_opendss(medium_voltage_ln, 3) == pytest.approx(10.0)
+    assert build_service._normalize_distribution_base_kv(low_voltage_ln, 3) == pytest.approx(0.4)
+    assert solver._estimate_line_line_voltage_kv(0.4) == pytest.approx(0.4)
+    assert solver._estimate_line_line_voltage_kv(low_voltage_ln) == pytest.approx(0.4)
+    assert solver._estimate_line_line_voltage_kv(medium_voltage_ln) == pytest.approx(10.0)
+
+
+def test_shared_bus_devices_are_allowed_without_visual_line(tmp_path):
+    builder = DssBuilderService()
+    service = BuildExportService(data_root="unused")
+    nodes = [
+        {
+            "id": "grid_001",
+            "type": "grid",
+            "name": "grid",
+            "params": {
+                "source_bus": "sourcebus",
+                "base_kv": 110,
+                "pu": 1,
+                "phases": 3,
+                "mvasc3": 500,
+                "mvasc1": 250,
+                "x1r1": 10,
+                "x0r0": 10,
+            },
+        },
+        {
+            "id": "tx_001",
+            "type": "transformer",
+            "name": "tx",
+            "params": {
+                "dss_bus_name": "n0",
+                "rated_kva": 1000,
+                "primary_voltage_kv": 110,
+                "voltage_level_kv": 10,
+                "primary_conn": "wye",
+                "secondary_conn": "wye",
+                "percent_r": 0.5,
+                "xhl_percent": 6.0,
+                "phases": 3,
+            },
+        },
+        {"id": "bus_001", "type": "bus", "name": "bus", "params": {"dss_bus_name": "n1", "voltage_level_kv": 10, "phases": 3}},
+        {
+            "id": "load_001",
+            "type": "load",
+            "name": "load",
+            "params": {
+                "dss_bus_name": "n1",
+                "dss_load_name": "LD01",
+                "target_kv_ln": 10,
+                "design_kw": 100,
+                "q_to_p_ratio": 0.25,
+                "phases": 3,
+            },
+        },
+        {
+            "id": "pv_001",
+            "type": "pv",
+            "name": "pv",
+            "params": {
+                "dss_bus_name": "n1",
+                "voltage_level_kv": 10,
+                "pmpp_kw": 20,
+                "kva": 25,
+                "pf": 1,
+                "irradiance": 1,
+                "phases": 3,
+            },
+        },
+    ]
+    edges = [
+        {"id": "edge_grid_tx", "from_node_id": "grid_001", "to_node_id": "tx_001", "params": {"enabled": True}},
+        {
+            "id": "edge_tx_bus",
+            "from_node_id": "tx_001",
+            "to_node_id": "bus_001",
+            "params": {
+                "length_km": 1.0,
+                "linecode": "LC_MAIN",
+                "phases": 3,
+                "rated_current_a": 100,
+                "emerg_current_a": 120,
+                "enabled": True,
+            },
+        },
+    ]
+    topology = {"nodes": nodes, "edges": edges, "economic_parameters": {}}
+
+    validation = service._validate_topology(topology)
+    assert not validation["errors"]
+
+    review = builder._build_model_review("proj01", nodes, edges, {str(node["id"]): node for node in nodes}, tmp_path)
+    assert not [item for item in review["issues"] if item["level"] == "error"]
+    assert any(item["code"] == "OPENDSS_SHARED_BUS" and item["level"] == "warning" for item in review["issues"])
+
+
+def test_same_bus_visual_line_is_blocked_by_build_validation(tmp_path):
+    builder = DssBuilderService()
+    service = BuildExportService(data_root="unused")
+    topology = {
+        "nodes": [
+            {"id": "grid_001", "type": "grid", "name": "grid", "params": {"source_bus": "sourcebus", "base_kv": 110, "phases": 3}},
+            {"id": "tx_001", "type": "transformer", "name": "tx", "params": {"dss_bus_name": "n0", "rated_kva": 1000, "phases": 3}},
+            {"id": "bus_001", "type": "bus", "name": "bus", "params": {"dss_bus_name": "n1", "voltage_level_kv": 10, "phases": 3}},
+            {
+                "id": "load_001",
+                "type": "load",
+                "name": "load",
+                "params": {"dss_bus_name": "n1", "dss_load_name": "LD01", "target_kv_ln": 10, "design_kw": 100, "q_to_p_ratio": 0.25, "phases": 3},
+            },
+        ],
+        "edges": [
+            {"id": "edge_grid_tx", "from_node_id": "grid_001", "to_node_id": "tx_001", "params": {"enabled": True}},
+            {
+                "id": "edge_tx_bus",
+                "from_node_id": "tx_001",
+                "to_node_id": "bus_001",
+                "params": {"length_km": 1.0, "linecode": "LC_MAIN", "phases": 3, "rated_current_a": 100, "emerg_current_a": 120},
+            },
+            {
+                "id": "edge_bus_load",
+                "from_node_id": "bus_001",
+                "to_node_id": "load_001",
+                "params": {"length_km": 0.1, "linecode": "LC_BRANCH", "phases": 3, "rated_current_a": 100, "emerg_current_a": 120},
+            },
+        ],
+        "economic_parameters": {},
+    }
+
+    validation = service._validate_topology(topology)
+    assert any("同一 OpenDSS 母线" in item for item in validation["errors"])
+
+    node_map = {str(node["id"]): node for node in topology["nodes"]}
+    review = builder._build_model_review("proj01", topology["nodes"], topology["edges"], node_map, tmp_path)
+    assert any(item["code"] == "OPENDSS_LINE_SAME_BUS" for item in review["issues"])
+    assert "New Line.edge_bus_load" not in builder._build_lines(topology["edges"], node_map)
 
 
 def test_dss_name_sanitizers_are_ascii_consistent():

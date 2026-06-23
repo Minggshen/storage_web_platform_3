@@ -124,6 +124,21 @@ def test_legacy_progress_no_longer_reports_fake_final_population_eval(tmp_path: 
     assert "准备全年重校核" in progress["detail"]
 
 
+def test_distribution_transformer_edge_is_not_reported_as_line_loading() -> None:
+    bus = {"id": "bus_09", "type": "bus"}
+    user_tx = {"id": "user_tx_09", "type": "distribution_transformer"}
+    load = {"id": "load_09", "type": "load"}
+    role_tx = {
+        "id": "user_tx_10",
+        "type": "transformer",
+        "params": {"transformer_role": "distribution"},
+    }
+
+    assert SolverExecutionService._is_transformer_link(bus, user_tx) is True
+    assert SolverExecutionService._is_transformer_link(role_tx, bus) is True
+    assert SolverExecutionService._is_transformer_link(user_tx, load) is False
+
+
 def test_network_topology_trace_summary_cache_hit_skips_trace_rescan(tmp_path: Path) -> None:
     service = SolverExecutionService(data_root=tmp_path)
     case_dir = tmp_path / "case"

@@ -6,7 +6,7 @@ import type { TemplateMeta } from '../../services/topology';
 import { ErrorBanner } from '@/components/common/ErrorBanner';
 import { ConfirmDialog } from '@/components/common/ConfirmDialog';
 import type { NodeKind, Selection, TopologyData, TopologyDraft, TopologyEdge, TopologyNode } from './topologyTypes';
-import { CANVAS_HEIGHT, CANVAS_WIDTH, DEFAULT_LINE_CODE, ECONOMIC_DEFAULT_PARAMS, EDGE_ADVANCED_PARAM_KEYS, EMPTY_TOPOLOGY_TEXT, LINE_CODE_OPTIONS, LINE_LEGEND_ITEMS, LOAD_CATEGORY_VISUALS, LOAD_PANEL_INFERRED_KEY_LABELS, LOAD_PANEL_READONLY_INFERRED_KEYS, SERVICE_LINE_DEFAULT_LENGTH_KM, SERVICE_LINE_EMERGENCY_MARGIN, SERVICE_LINE_LINECODE, SERVICE_LINE_LOW_Z_CURRENT_THRESHOLD_A, SERVICE_LINE_MIN_RATED_A, SERVICE_LINE_RESOURCE_MARGIN, SERVICE_LINE_TRANSFORMER_EMERGENCY_MARGIN, TOPOLOGY_WORKBENCH_HEIGHT, WIRE_DATA_CU, WIRE_XR_RATIO } from './topologyConstants';
+import { CANVAS_HEIGHT, CANVAS_WIDTH, DEFAULT_LINE_CODE, ECONOMIC_DEFAULT_PARAMS, EDGE_ADVANCED_PARAM_KEYS, EMPTY_TOPOLOGY_TEXT, LINE_CODE_OPTIONS, LINE_LEGEND_ITEMS, LOAD_CATEGORY_VISUALS, LOAD_PANEL_INFERRED_KEY_LABELS, LOAD_PANEL_READONLY_INFERRED_KEYS, SERVICE_LINE_DEFAULT_LENGTH_KM, SERVICE_LINE_EMERGENCY_MARGIN, SERVICE_LINE_LINECODE, SERVICE_LINE_LOW_Z_CURRENT_THRESHOLD_A, SERVICE_LINE_MIN_RATED_A, SERVICE_LINE_RESOURCE_MARGIN, TOPOLOGY_WORKBENCH_HEIGHT, WIRE_DATA_CU, WIRE_XR_RATIO } from './topologyConstants';
 import { booleanParam, buildNodeDefaultParams, clamp, cleanLoadPanelParams, edgeVisualMeta, editableEdgeParams, editableNodeParams, formatCurrentDisplay, getLoadCategory, getLoadCategoryVisual, getLoadNodeCode, getLoadPowerFactor, getNodeBoundaryPoint, getNodeCenter, getNodeDetail, getNodeLabel, getNodeLabelForNode, getNodeSize, getNodeSizeForNode, getNodeVisualForNode, hasPositiveNumberParam, isBusEquipmentType, isDistributionTransformerNode, isLowSideResourceNode, isResourceType, isTransformerType, lineCodeDefaults, normalizeEconomicParams, normalizeTopology, numberInputValue, numberParam, pickParamKeys, resolveNodeOverlaps, resourceApparentPowerKva, safeNumber, sanitizeNodeParamsForEditor, stringParam, stringifyEconomicParams, stringifyTopology, threePhaseCurrentFromKva } from './topologyUtils';
 
 function stableStringify(value: unknown): string {
@@ -194,6 +194,26 @@ export default function TopologyPage() {
     selectedNode?.type === 'load' && booleanParam(selectedNode.params, 'optimize_storage', true);
   const selectedLoadPowerFactor =
     selectedNode?.type === 'load' ? getLoadPowerFactor(selectedNode.params) : null;
+  const selectedLoadCategory =
+    selectedNode?.type === 'load' ? getLoadCategory(selectedNode.params?.category) : undefined;
+  const selectedLoadConnectedTransformer = useMemo(() => {
+    if (selectedNode?.type !== 'load') return null;
+    for (const edge of topology.edges) {
+      if (edge.from_node_id !== selectedNode.id && edge.to_node_id !== selectedNode.id) continue;
+      const otherNodeId = edge.from_node_id === selectedNode.id ? edge.to_node_id : edge.from_node_id;
+      const otherNode = nodeMap.get(otherNodeId);
+      if (isDistributionTransformerNode(otherNode)) return otherNode;
+    }
+    return null;
+  }, [nodeMap, selectedNode, topology.edges]);
+  const selectedLoadConnectedTransformerKva =
+    selectedLoadConnectedTransformer == null
+      ? null
+      : numberParam(selectedLoadConnectedTransformer.params, 'rated_kva', 0);
+  const selectedLoadConnectedTransformerCapacityText =
+    selectedLoadConnectedTransformerKva != null && selectedLoadConnectedTransformerKva > 0
+      ? `${selectedLoadConnectedTransformerKva.toLocaleString('zh-CN', { maximumFractionDigits: 1 })} kVA`
+      : '未设置 rated_kva';
   const storageControlledInputStyle = selectedLoadStorageEnabled ? inputStyle : disabledInputStyle;
   const storageControlledLabel: '求解必填' | undefined = selectedLoadStorageEnabled ? '求解必填' : undefined;
   const auxServiceEnabled = booleanParam(economicParams, 'include_aux_service_revenue', false);
@@ -423,14 +443,11 @@ function inferAutoEdgeParams(
     const resNode = isDistributionTransformerNode(fromNode) ? toNode : fromNode;
     const txParams = txNode?.params ?? {};
     const secondaryKv = numberParam(txParams, 'voltage_level_kv', 0.4);
-    const transformerKva = numberParam(txParams, 'rated_kva', 1000);
     const resourceKva = resNode ? resourceApparentPowerKva(resNode) : 0;
-    const transformerCurrentA = threePhaseCurrentFromKva(transformerKva, secondaryKv);
     const resourceCurrentA = threePhaseCurrentFromKva(resourceKva, secondaryKv);
-    const ratedCurrentA = Math.max(transformerCurrentA, resourceCurrentA * SERVICE_LINE_RESOURCE_MARGIN, SERVICE_LINE_MIN_RATED_A);
+    const ratedCurrentA = Math.max(resourceCurrentA * SERVICE_LINE_RESOURCE_MARGIN, SERVICE_LINE_MIN_RATED_A);
     const emergCurrentA = Math.max(
       ratedCurrentA * SERVICE_LINE_EMERGENCY_MARGIN,
-      transformerCurrentA * SERVICE_LINE_TRANSFORMER_EMERGENCY_MARGIN,
       ratedCurrentA,
     );
 
@@ -1379,6 +1396,9 @@ function createEdge(fromId: string, toId: string) {
                     const to = nodeMap.get(edge.to_node_id);
                     if (!from?.position || !to?.position) return null;
                     const edgeMeta = edgeVisualMeta(edge, nodeMap);
+                    const serviceRatedCurrentA = edgeMeta.serviceProfile
+                      ? numberParam(edge.params, 'rated_current_a', edgeMeta.serviceProfile.ratedCurrentA)
+                      : null;
 
                     const fromCenter = getNodeCenter(from);
                     const toCenter = getNodeCenter(to);
@@ -1445,7 +1465,7 @@ function createEdge(fromId: string, toId: string) {
                           </tspan>
                           {edgeMeta.serviceProfile ? (
                             <tspan x={mx} dy="11" fill={edgeMeta.stroke}>
-                              {`${edgeMeta.shortLabel} | ${formatCurrentDisplay(edgeMeta.serviceProfile.ratedCurrentA)}`}
+                              {`${edgeMeta.shortLabel} | ${formatCurrentDisplay(serviceRatedCurrentA ?? edgeMeta.serviceProfile.ratedCurrentA)}`}
                             </tspan>
                           ) : edgeMeta.dash ? (
                             <tspan x={mx} dy="11" fill={edgeMeta.stroke}>
@@ -1746,6 +1766,11 @@ function createEdge(fromId: string, toId: string) {
                         onChange={(e) => applyNodeParam('rated_kva', Number(e.target.value || 0))}
                         style={inputStyle}
                       />
+                      {isDistributionTransformerNode(selectedNode) ? (
+                        <div style={{ marginTop: -2, color: '#64748b', fontSize: 12, lineHeight: 1.4 }}>
+                          用户配变的 rated_kva 是 OpenDSS 建模和求解约束优先采用的容量；负荷节点中的备用容量只在没有相连用户配变时使用。
+                        </div>
+                      ) : null}
 
                       <FieldLabel marker="建议">低压侧基准电压 kV</FieldLabel>
                       <input
@@ -2097,15 +2122,18 @@ function createEdge(fromId: string, toId: string) {
                         style={inputStyle}
                       />
 
-                      <FieldLabel marker="必填" missing={selectedLoadVoltageMissing}>基准电压 kV</FieldLabel>
+                      <FieldLabel marker="必填" missing={selectedLoadVoltageMissing}>OpenDSS 电压 kV</FieldLabel>
                       <input
                         type="number"
                         step="0.0001"
                         value={numberInputValue(selectedNode.params, 'target_kv_ln')}
-                        placeholder="例如 10"
+                        placeholder="三相填线电压，例如 0.4 或 10"
                         onChange={(e) => applyNodeParam('target_kv_ln', e.target.value === '' ? null : Number(e.target.value))}
                         style={selectedLoadVoltageMissing ? missingRequiredInputStyle : inputStyle}
                       />
+                      <div style={{ marginTop: -2, color: '#64748b', fontSize: 12, lineHeight: 1.4 }}>
+                        三相负荷按 OpenDSS 线电压口径建模；旧数据中常见的 0.23/5.77kV 会自动规范为 0.4/10kV。
+                      </div>
 
                       <label style={labelStyle}>负荷类别</label>
                       <select
@@ -2210,14 +2238,37 @@ function createEdge(fromId: string, toId: string) {
                         onChange={applyNodeParam}
                       />
 
-                      <FieldLabel marker={storageControlledLabel}>变压器容量 kVA</FieldLabel>
-                      <input
-                        type="number"
-                        disabled={!selectedLoadStorageEnabled}
-                        value={numberParam(selectedNode.params, 'transformer_capacity_kva', 2000)}
-                        onChange={(e) => applyNodeParam('transformer_capacity_kva', Number(e.target.value || 0))}
-                        style={storageControlledInputStyle}
-                      />
+                      {selectedLoadConnectedTransformer ? (
+                        <>
+                          <label style={labelStyle}>当前采用配变容量</label>
+                          <input
+                            type="text"
+                            readOnly
+                            disabled
+                            value={`${selectedLoadConnectedTransformer.name || selectedLoadConnectedTransformer.id} · ${selectedLoadConnectedTransformerCapacityText}`}
+                            style={disabledInputStyle}
+                          />
+                          <div style={{ marginTop: -2, color: '#64748b', fontSize: 12, lineHeight: 1.45 }}>
+                            该负荷已连接用户配变，容量只在用户配变元件的 rated_kva 中维护；负荷节点中的旧 transformer_capacity_kva 不参与优先取值。
+                          </div>
+                        </>
+                      ) : (
+                        <>
+                          <FieldLabel marker={storageControlledLabel}>备用配变容量 kVA</FieldLabel>
+                          <input
+                            type="number"
+                            disabled={!selectedLoadStorageEnabled}
+                            value={numberParam(selectedNode.params, 'transformer_capacity_kva', 2000)}
+                            onChange={(e) => applyNodeParam('transformer_capacity_kva', Number(e.target.value || 0))}
+                            style={storageControlledInputStyle}
+                          />
+                          <div style={{ marginTop: -2, color: '#64748b', fontSize: 12, lineHeight: 1.45 }}>
+                            {selectedLoadCategory === 'residential'
+                              ? '仅在没有相连用户配变节点时作为居民负荷估算容量；建议后续新建用户配变，并把容量写入配变 rated_kva。'
+                              : '仅在没有相连用户配变节点的旧模型中作为求解约束备用；工商业/商业负荷建议新建用户配变并维护 rated_kva。'}
+                          </div>
+                        </>
+                      )}
 
                       <FieldLabel marker={storageControlledLabel}>变压器功率因数下限</FieldLabel>
                       <input
@@ -2506,42 +2557,32 @@ function createEdge(fromId: string, toId: string) {
 
                   <FieldLabel marker="建议">额定电流 A</FieldLabel>
                   <input
-                    type="text"
-                    value={
-                      selectedEdgeMeta?.serviceProfile
-                        ? formatCurrentDisplay(selectedEdgeMeta.serviceProfile.ratedCurrentA)
-                        : String(numberParam(selectedEdge.params, 'rated_current_a', selectedEdge.type === 'special_line' ? 400 : 300))
-                    }
-                    readOnly={Boolean(selectedEdgeMeta?.serviceProfile)}
-                    disabled={Boolean(selectedEdgeMeta?.serviceProfile)}
-                    onChange={
-                      selectedEdgeMeta?.serviceProfile
-                        ? undefined
-                        : (e) => applyEdgeParam('rated_current_a', Number(e.target.value || 0))
-                    }
-                    style={selectedEdgeMeta?.serviceProfile ? disabledInputStyle : inputStyle}
+                    type="number"
+                    step="1"
+                    value={String(numberParam(
+                      selectedEdge.params,
+                      'rated_current_a',
+                      selectedEdgeMeta?.serviceProfile?.ratedCurrentA ?? (selectedEdge.type === 'special_line' ? 400 : 300),
+                    ))}
+                    onChange={(e) => applyEdgeParam('rated_current_a', Number(e.target.value || 0))}
+                    style={inputStyle}
                   />
 
                   <label style={labelStyle}>应急电流 A</label>
                   <input
-                    type="text"
-                    value={
-                      selectedEdgeMeta?.serviceProfile
-                        ? formatCurrentDisplay(selectedEdgeMeta.serviceProfile.emergCurrentA)
-                        : String(numberParam(selectedEdge.params, 'emerg_current_a', numberParam(selectedEdge.params, 'rated_current_a', 300) * 1.25))
-                    }
-                    readOnly={Boolean(selectedEdgeMeta?.serviceProfile)}
-                    disabled={Boolean(selectedEdgeMeta?.serviceProfile)}
-                    onChange={
-                      selectedEdgeMeta?.serviceProfile
-                        ? undefined
-                        : (e) => applyEdgeParam('emerg_current_a', Number(e.target.value || 0))
-                    }
-                    style={selectedEdgeMeta?.serviceProfile ? disabledInputStyle : inputStyle}
+                    type="number"
+                    step="1"
+                    value={String(numberParam(
+                      selectedEdge.params,
+                      'emerg_current_a',
+                      selectedEdgeMeta?.serviceProfile?.emergCurrentA ?? numberParam(selectedEdge.params, 'rated_current_a', 300) * 1.25,
+                    ))}
+                    onChange={(e) => applyEdgeParam('emerg_current_a', Number(e.target.value || 0))}
+                    style={inputStyle}
                   />
                   {selectedEdgeMeta?.serviceProfile ? (
                     <div style={{ marginTop: -2, color: '#64748b', fontSize: 12, lineHeight: 1.5 }}>
-                      {`该线路识别为用户低压接入线，系统会按用户配变容量 ${Math.round(selectedEdgeMeta.serviceProfile.transformerKva)} kVA 和接入负荷/资源规模 ${Math.round(selectedEdgeMeta.serviceProfile.resourceKva)} kVA 自动估算额定/应急电流。`}
+                      {`该线路识别为用户低压接入线。系统建议线路额定/应急电流约 ${formatCurrentDisplay(selectedEdgeMeta.serviceProfile.ratedCurrentA)} / ${formatCurrentDisplay(selectedEdgeMeta.serviceProfile.emergCurrentA)}；配变容量 ${Math.round(selectedEdgeMeta.serviceProfile.transformerKva)} kVA 会作为独立容量约束，不再覆盖线路载流量。`}
                     </div>
                   ) : null}
 

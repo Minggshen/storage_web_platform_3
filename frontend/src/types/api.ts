@@ -152,6 +152,15 @@ export type EngineDiagnosticsScenario = {
     feasible_count?: number;
     archive_size?: number;
     best_npv_yuan?: number | null;
+    best_fitness_score_pct?: number | null;
+    best_safety_score_pct?: number | null;
+    best_economic_score_pct?: number | null;
+    best_operation_safety_score_pct?: number | null;
+    best_device_safety_score_pct?: number | null;
+    best_fitness_compromise_cost?: number | null;
+    best_score_strategy_id?: string | null;
+    best_score_power_kw?: number | null;
+    best_score_energy_kwh?: number | null;
     generation_wall_time_s?: number | null;
     evaluator_eval_count?: number | null;
   }>;

@@ -299,6 +299,14 @@ function numberTooltipFormatter(value: unknown, name: unknown): [string, string]
   return [metricText(value), String(name)];
 }
 
+function historyTooltipFormatter(value: unknown, name: unknown): [string, string] {
+  const label = String(name);
+  if (label.includes('%') || label.includes('分') || label.includes('适应度')) {
+    return [metricText(value, '%'), label];
+  }
+  return [metricText(value), label];
+}
+
 function yuanToWanText(value: unknown): string {
   const amountYuan = toFiniteNumber(value);
   return amountYuan === null ? metricText(value) : metricText(amountYuan / 10000, ' 万元');
@@ -637,7 +645,7 @@ export default function ResultsPage() {
       const link = document.createElement('a');
       link.href = url;
       link.download = filenameFromDisposition(response.headers.get('content-disposition'))
-        || `diagnostics_${projectId}_${selectedTaskId || 'latest'}.zip`;
+        || `diagnostics_${sanitizeFilename(projectId)}_${sanitizeFilename(selectedTaskId || 'latest')}.zip`;
       document.body.appendChild(link);
       link.click();
       link.remove();
@@ -2058,6 +2066,8 @@ function HistoryChart(props: { data: ResultChartPoint[] }) {
     const data = activeGroup?.rows ?? [];
     const hasAvgNpv = data.some((row) => toFiniteNumber(row.avgNpvWan) !== null);
     const hasPopulationSize = data.some((row) => toFiniteNumber(row.populationSize) !== null);
+    const hasSafetyScore = data.some((row) => toFiniteNumber(row.bestSafetyScorePct) !== null);
+    const hasFitnessScore = data.some((row) => toFiniteNumber(row.bestFitnessScorePct) !== null);
     const selectedOrdinal = strategyGroups.findIndex((group) => group.strategy === activeGroup?.strategy) + 1;
     return (
       <div>
@@ -2082,18 +2092,27 @@ function HistoryChart(props: { data: ResultChartPoint[] }) {
           <span style={historyCounterStyle}>{selectedOrdinal} / {strategyGroups.length}</span>
         </div>
         <ResponsiveContainer width="100%" height={340}>
-          <ComposedChart data={data} margin={{ top: 10, right: 18, bottom: 0, left: 0 }}>
+          <ComposedChart data={data} margin={{ top: 10, right: hasSafetyScore || hasFitnessScore ? 72 : 18, bottom: 0, left: 0 }}>
             <CartesianGrid stroke={SEMANTIC_COLORS.grid} strokeDasharray="3 3" />
             <XAxis dataKey="displayGeneration" />
             <YAxis yAxisId="npv" />
-            <YAxis yAxisId="count" orientation="right" allowDecimals={false} />
-            <Tooltip formatter={numberTooltipFormatter} labelFormatter={(value) => `本型号第 ${metricText(value)} 代`} />
+            <YAxis yAxisId="count" orientation="right" allowDecimals={false} hide={hasSafetyScore || hasFitnessScore} />
+            {(hasSafetyScore || hasFitnessScore) ? (
+              <YAxis yAxisId="score" orientation="right" domain={[0, 100]} tickFormatter={(value) => `${compactTickFormatter(value)}%`} />
+            ) : null}
+            <Tooltip formatter={historyTooltipFormatter} labelFormatter={(value) => `本型号第 ${metricText(value)} 代`} />
             <Legend />
             <Line yAxisId="npv" type="monotone" dataKey="bestNpvWan" name="最优NPV" stroke={activeGroup?.color ?? SEMANTIC_COLORS.optimized} strokeWidth={2.2} connectNulls />
             {hasAvgNpv ? (
               <Line yAxisId="npv" type="monotone" dataKey="avgNpvWan" name="平均NPV" stroke={SEMANTIC_COLORS.baseline} strokeWidth={1.6} strokeDasharray={LINE_STYLES.dashed} dot={false} connectNulls />
             ) : null}
             <Line yAxisId="count" type="monotone" dataKey="archiveSize" name="Archive大小" stroke={SEMANTIC_COLORS.revenue.secondary} strokeWidth={1.8} dot={false} connectNulls />
+            {hasSafetyScore ? (
+              <Line yAxisId="score" type="monotone" dataKey="bestSafetyScorePct" name="安全性能分（%）" stroke={SEMANTIC_COLORS.revenue.tertiary} strokeWidth={2} dot={false} connectNulls />
+            ) : null}
+            {hasFitnessScore ? (
+              <Line yAxisId="score" type="monotone" dataKey="bestFitnessScorePct" name="综合适应度（%）" stroke={SEMANTIC_COLORS.recommended} strokeWidth={2.2} strokeDasharray={LINE_STYLES.dashDot} dot={false} connectNulls />
+            ) : null}
             {hasPopulationSize ? (
               <Line yAxisId="count" type="monotone" dataKey="populationSize" name="种群规模" stroke={SEMANTIC_COLORS.tariff} strokeWidth={1.5} strokeDasharray="2,4" dot={false} connectNulls />
             ) : null}
@@ -2106,19 +2125,30 @@ function HistoryChart(props: { data: ResultChartPoint[] }) {
 
   const hasAvgNpv = props.data.some(d => toFiniteNumber(d.avgNpvWan) !== null);
   const hasPopulationSize = props.data.some(d => toFiniteNumber(d.populationSize) !== null);
+  const hasSafetyScore = props.data.some(d => toFiniteNumber(d.bestSafetyScorePct) !== null);
+  const hasFitnessScore = props.data.some(d => toFiniteNumber(d.bestFitnessScorePct) !== null);
   const xKey = props.data.some(d => toFiniteNumber(d.localGeneration) !== null) ? 'localGeneration' : 'generation';
   return (
     <ResponsiveContainer width="100%" height={310}>
-      <ComposedChart data={props.data} margin={{ top: 10, right: 18, bottom: 0, left: 0 }}>
+      <ComposedChart data={props.data} margin={{ top: 10, right: hasSafetyScore || hasFitnessScore ? 72 : 18, bottom: 0, left: 0 }}>
         <CartesianGrid stroke={SEMANTIC_COLORS.grid} strokeDasharray="3 3" />
         <XAxis dataKey={xKey} />
         <YAxis yAxisId="npv" />
-        <YAxis yAxisId="count" orientation="right" allowDecimals={false} />
-        <Tooltip formatter={numberTooltipFormatter} />
+        <YAxis yAxisId="count" orientation="right" allowDecimals={false} hide={hasSafetyScore || hasFitnessScore} />
+        {(hasSafetyScore || hasFitnessScore) ? (
+          <YAxis yAxisId="score" orientation="right" domain={[0, 100]} tickFormatter={(value) => `${compactTickFormatter(value)}%`} />
+        ) : null}
+        <Tooltip formatter={historyTooltipFormatter} />
         <Legend />
         <Line yAxisId="npv" type="monotone" dataKey="bestNpvWan" name="最优NPV" stroke={SEMANTIC_COLORS.optimized} strokeWidth={2} />
         {hasAvgNpv && <Line yAxisId="npv" type="monotone" dataKey="avgNpvWan" name="平均NPV" stroke={SEMANTIC_COLORS.baseline} strokeWidth={1.5} strokeDasharray={LINE_STYLES.dashed} dot={false} />}
         <Line yAxisId="count" type="monotone" dataKey="archiveSize" name="Archive大小" stroke={SEMANTIC_COLORS.revenue.secondary} strokeWidth={2} />
+        {hasSafetyScore ? (
+          <Line yAxisId="score" type="monotone" dataKey="bestSafetyScorePct" name="安全性能分（%）" stroke={SEMANTIC_COLORS.revenue.tertiary} strokeWidth={2} dot={false} connectNulls />
+        ) : null}
+        {hasFitnessScore ? (
+          <Line yAxisId="score" type="monotone" dataKey="bestFitnessScorePct" name="综合适应度（%）" stroke={SEMANTIC_COLORS.recommended} strokeWidth={2.2} strokeDasharray={LINE_STYLES.dashDot} dot={false} connectNulls />
+        ) : null}
         {hasPopulationSize && <Line yAxisId="count" type="monotone" dataKey="populationSize" name="种群规模" stroke={SEMANTIC_COLORS.tariff} strokeWidth={1.6} strokeDasharray="2,4" dot={false} />}
         <Bar yAxisId="count" dataKey="feasibleCount" name="可行解数量" fill={SEMANTIC_COLORS.feasible} opacity={0.55} />
       </ComposedChart>
@@ -2179,6 +2209,11 @@ function EngineDiagnosticsScenarioBlock(props: { scenario: EngineDiagnosticsScen
       feasibleCount: toFiniteNumber(row.feasible_count) ?? 0,
       archiveSize: toFiniteNumber(row.archive_size) ?? 0,
       bestNpvWan: bestNpvYuan === null ? null : bestNpvYuan / 10000,
+      bestFitnessScorePct: toFiniteNumber(row.best_fitness_score_pct),
+      bestSafetyScorePct: toFiniteNumber(row.best_safety_score_pct),
+      bestEconomicScorePct: toFiniteNumber(row.best_economic_score_pct),
+      bestOperationSafetyScorePct: toFiniteNumber(row.best_operation_safety_score_pct),
+      bestDeviceSafetyScorePct: toFiniteNumber(row.best_device_safety_score_pct),
     };
   });
   const scenarioLabel = scenario.scenario ? String(scenario.scenario) : `场景 ${index + 1}`;
@@ -2224,14 +2259,164 @@ function projectTopologyPoint(x: number, y: number, depth = 0) {
   };
 }
 
-function buildProjectedTopologyNodes(nodes: ResultChartPoint[]): ProjectedTopologyNode[] {
+function topologyNodeId(node: ResultChartPoint, index: number) {
+  return String(node.id ?? node.bus ?? node.name ?? `node-${index}`);
+}
+
+function compareTopologyNodeName(a: ResultChartPoint, b: ResultChartPoint) {
+  const aText = String(a.name ?? a.bus ?? a.id ?? '');
+  const bText = String(b.name ?? b.bus ?? b.id ?? '');
+  return aText.localeCompare(bText, 'zh-Hans-CN', { numeric: true, sensitivity: 'base' });
+}
+
+function buildAutoTopologyRawPositions(nodes: ResultChartPoint[], edges: ResultChartPoint[]) {
+  const positions = new Map<string, { x: number; y: number; depth: number }>();
+  if (!nodes.length) return positions;
+
+  const nodeIds = nodes.map(topologyNodeId);
+  const nodeById = new Map(nodes.map((node, index) => [nodeIds[index], node]));
+  const nodeIndex = new Map(nodeIds.map((id, index) => [id, index]));
+  const adjacency = new Map<string, string[]>();
+  const indegree = new Map<string, number>();
+  nodeIds.forEach((id) => {
+    adjacency.set(id, []);
+    indegree.set(id, 0);
+  });
+  edges.forEach((edge) => {
+    const from = String(edge.from_node_id ?? '');
+    const to = String(edge.to_node_id ?? '');
+    if (!nodeById.has(from) || !nodeById.has(to) || from === to) return;
+    adjacency.get(from)?.push(to);
+    indegree.set(to, (indegree.get(to) ?? 0) + 1);
+  });
+  adjacency.forEach((children) => {
+    children.sort((a, b) => compareTopologyNodeName(nodeById.get(a) ?? ({} as ResultChartPoint), nodeById.get(b) ?? ({} as ResultChartPoint)));
+  });
+
+  const rootIds = nodeIds
+    .filter((id) => isTopologyRootNode(nodeById.get(id) ?? {}) || (indegree.get(id) ?? 0) === 0)
+    .sort((a, b) => {
+      const aRoot = isTopologyRootNode(nodeById.get(a) ?? {}) ? 0 : 1;
+      const bRoot = isTopologyRootNode(nodeById.get(b) ?? {}) ? 0 : 1;
+      return aRoot - bRoot || (nodeIndex.get(a) ?? 0) - (nodeIndex.get(b) ?? 0);
+    });
+  const startIds = rootIds.length ? rootIds : [nodeIds[0]];
+  const parent = new Map<string, string | null>();
+  const depth = new Map<string, number>();
+  const visitFrom = (startId: string) => {
+    if (!nodeById.has(startId) || depth.has(startId)) return;
+    const queue = [startId];
+    parent.set(startId, null);
+    depth.set(startId, 0);
+    for (let cursor = 0; cursor < queue.length; cursor += 1) {
+      const current = queue[cursor];
+      const currentDepth = depth.get(current) ?? 0;
+      (adjacency.get(current) ?? []).forEach((childId) => {
+        if (depth.has(childId)) return;
+        parent.set(childId, current);
+        depth.set(childId, currentDepth + 1);
+        queue.push(childId);
+      });
+    }
+  };
+  startIds.forEach(visitFrom);
+  nodeIds.forEach(visitFrom);
+
+  const firstRoot = startIds.find((id) => depth.has(id)) ?? nodeIds[0];
+  let anchorId = firstRoot;
+  const upstreamPath = new Set<string>([anchorId]);
+  for (let guard = 0; guard < nodes.length; guard += 1) {
+    const children = adjacency.get(anchorId) ?? [];
+    if (children.length !== 1) break;
+    const nextId = children[0];
+    const nextNode = nodeById.get(nextId) ?? ({} as ResultChartPoint);
+    const nextKind = topologyNodeKind(String(nextNode.type ?? ''), nextNode.storageTarget === true);
+    anchorId = nextId;
+    upstreamPath.add(anchorId);
+    if (!['substation', 'transformer', 'bus'].includes(nextKind)) break;
+  }
+
+  const feederKeyOf = (id: string) => {
+    if (upstreamPath.has(id)) return '__upstream__';
+    let current = id;
+    let currentParent = parent.get(current);
+    while (currentParent) {
+      if (currentParent === anchorId) return current;
+      current = currentParent;
+      currentParent = parent.get(current);
+    }
+    return `__component_${depth.get(id) ?? 0}_${id}`;
+  };
+
+  const groups = new Map<string, string[]>();
+  nodeIds.forEach((id) => {
+    const key = feederKeyOf(id);
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key)?.push(id);
+  });
+
+  const feederKeys = [
+    ...((adjacency.get(anchorId) ?? []).filter((id) => groups.has(id))),
+    ...Array.from(groups.keys()).filter((key) => key !== '__upstream__' && !(adjacency.get(anchorId) ?? []).includes(key)),
+  ];
+  const xStep = 185;
+  const yStep = 92;
+  const groupGap = 42;
+  let nextTop = 0;
+  const groupCenters = new Map<string, number>();
+  feederKeys.forEach((key) => {
+    const members = groups.get(key) ?? [];
+    const byDepth = new Map<number, string[]>();
+    members.forEach((id) => {
+      const d = depth.get(id) ?? 0;
+      if (!byDepth.has(d)) byDepth.set(d, []);
+      byDepth.get(d)?.push(id);
+    });
+    let maxLayerSize = 1;
+    byDepth.forEach((ids) => {
+      ids.sort((a, b) => compareTopologyNodeName(nodeById.get(a) ?? ({} as ResultChartPoint), nodeById.get(b) ?? ({} as ResultChartPoint)));
+      maxLayerSize = Math.max(maxLayerSize, ids.length);
+    });
+    const groupHeight = Math.max(84, maxLayerSize * yStep);
+    const center = nextTop + groupHeight / 2;
+    groupCenters.set(key, center);
+    byDepth.forEach((ids, d) => {
+      ids.forEach((id, index) => {
+        const offset = (index - (ids.length - 1) / 2) * yStep;
+        positions.set(id, { x: d * xStep, y: center + offset, depth: d });
+      });
+    });
+    nextTop += groupHeight + groupGap;
+  });
+
+  const anchorY = feederKeys.length
+    ? feederKeys.reduce((sum, key) => sum + (groupCenters.get(key) ?? 0), 0) / feederKeys.length
+    : 0;
+  (groups.get('__upstream__') ?? []).forEach((id) => {
+    const d = depth.get(id) ?? 0;
+    positions.set(id, { x: d * xStep, y: anchorY, depth: d });
+  });
+
+  nodeIds.forEach((id, index) => {
+    if (positions.has(id)) return;
+    const d = depth.get(id) ?? 0;
+    positions.set(id, { x: d * xStep, y: nextTop + index * 54, depth: d });
+  });
+
+  return positions;
+}
+
+function buildProjectedTopologyNodes(nodes: ResultChartPoint[], edges: ResultChartPoint[]): ProjectedTopologyNode[] {
+  const autoPositions = buildAutoTopologyRawPositions(nodes, edges);
   return nodes.map((node, index) => {
-    const rawX = toFiniteNumber(node.x) ?? index * 90;
-    const rawY = toFiniteNumber(node.y) ?? (index % 7) * 70;
-    const projected = projectTopologyPoint(rawX, rawY);
+    const nodeId = topologyNodeId(node, index);
+    const autoPosition = autoPositions.get(nodeId);
+    const rawX = autoPosition?.x ?? toFiniteNumber(node.x) ?? index * 90;
+    const rawY = autoPosition?.y ?? toFiniteNumber(node.y) ?? (index % 7) * 70;
+    const projected = projectTopologyPoint(rawX, rawY, (autoPosition?.depth ?? 0) * 4);
     return {
       ...node,
-      nodeId: String(node.id ?? node.bus ?? node.name ?? `node-${index}`),
+      nodeId,
       rawX,
       rawY,
       projectedX: projected.x,
@@ -2431,32 +2616,39 @@ function topologyStatusFromMetrics(params: {
 }
 
 function IsoBuildingBlock(props: { x: number; y: number; height: number; warning?: boolean }) {
-  const width = 24;
-  const depth = 14;
-  const height = Math.max(12, Math.min(46, props.height));
-  const topColor = props.warning ? '#f97316' : '#38bdf8';
+  const height = Math.max(8, Math.min(28, props.height));
+  const statusColor = props.warning ? '#f59e0b' : '#22c55e';
   return (
-    <g opacity={0.78}>
-      <ellipse cx={props.x + 10} cy={props.y + 12} rx={23} ry={9} fill="#020617" opacity={0.34} />
-      <polygon
-        points={`${props.x - width / 2},${props.y} ${props.x + width / 2},${props.y - depth * 0.34} ${props.x + width / 2},${props.y - height} ${props.x - width / 2},${props.y - height + depth * 0.34}`}
-        fill="#0f3b64"
-        stroke="#38bdf8"
-        strokeOpacity={0.18}
+    <g opacity={0.58}>
+      <ellipse cx={props.x + 9} cy={props.y + 8} rx={23} ry={7} fill="#020617" opacity={0.28} />
+      <path
+        d={`M ${props.x - 19} ${props.y + 4} L ${props.x + 9} ${props.y - 5} L ${props.x + 31} ${props.y + 4} L ${props.x + 4} ${props.y + 14} Z`}
+        fill="#071627"
+        stroke="#164e63"
+        strokeWidth={0.9}
       />
-      <polygon
-        points={`${props.x + width / 2},${props.y - depth * 0.34} ${props.x + width / 2 + depth},${props.y + depth * 0.28} ${props.x + width / 2 + depth},${props.y - height + depth * 0.62} ${props.x + width / 2},${props.y - height}`}
-        fill="#0b2444"
-        stroke="#38bdf8"
-        strokeOpacity={0.14}
+      <path
+        d={`M ${props.x - 12} ${props.y + 2} L ${props.x + 9} ${props.y - 5} L ${props.x + 9} ${props.y - height} L ${props.x - 12} ${props.y - height + 7} Z`}
+        fill="#082f49"
+        fillOpacity={0.64}
+        stroke="#155e75"
+        strokeWidth={0.8}
       />
-      <polygon
-        points={`${props.x - width / 2},${props.y - height + depth * 0.34} ${props.x + width / 2},${props.y - height} ${props.x + width / 2 + depth},${props.y - height + depth * 0.62} ${props.x - width / 2 + depth},${props.y - height + depth}`}
-        fill={topColor}
-        fillOpacity={props.warning ? 0.52 : 0.34}
-        stroke={topColor}
-        strokeOpacity={0.7}
+      <path
+        d={`M ${props.x + 9} ${props.y - 5} L ${props.x + 24} ${props.y + 2} L ${props.x + 24} ${props.y - height + 8} L ${props.x + 9} ${props.y - height} Z`}
+        fill="#0f172a"
+        fillOpacity={0.72}
+        stroke="#164e63"
+        strokeWidth={0.8}
       />
+      <path
+        d={`M ${props.x - 8} ${props.y - height + 8} H ${props.x + 17}`}
+        stroke={statusColor}
+        strokeWidth={1.6}
+        strokeLinecap="round"
+        opacity={0.86}
+      />
+      <circle cx={props.x + 24} cy={props.y - height + 8} r={2.4} fill={statusColor} opacity={0.86} />
     </g>
   );
 }
@@ -2489,7 +2681,7 @@ function NetworkTopologyPanel(props: { data: NetworkTopologyChart | null }) {
     storageImpact: true,
     riskBadges: true,
     labels: false,
-    buildings: true,
+    buildings: false,
   });
   const [zoom, setZoom] = useState(1);
   const [pan, setPan] = useState({ x: 0, y: 0 });
@@ -2497,7 +2689,7 @@ function NetworkTopologyPanel(props: { data: NetworkTopologyChart | null }) {
   const topologySvgRef = useRef<SVGSVGElement | null>(null);
   const topologyWheelRef = useRef<HTMLDivElement | null>(null);
   const topologyStateRef = useRef({ zoom: 1, pan: { x: 0, y: 0 }, minX: 0, minY: 0, baseWidth: 600, baseHeight: 420 });
-  const projectedNodes = useMemo(() => buildProjectedTopologyNodes(nodes), [nodes]);
+  const projectedNodes = useMemo(() => buildProjectedTopologyNodes(nodes, edges), [nodes, edges]);
   const nodeById = useMemo(() => new Map(projectedNodes.map((node) => [node.nodeId, node])), [projectedNodes]);
   const edgeById = useMemo(
     () => new Map(edges.map((edge, index) => [String(edge.id ?? `edge-${index}`), edge])),
@@ -2511,12 +2703,12 @@ function NetworkTopologyPanel(props: { data: NetworkTopologyChart | null }) {
   const selectedRisk = riskItems.find((risk) => risk.id === selectedRiskId) ?? null;
   const layerEntries: Array<{ key: TopologyLayerKey; label: string }> = [
     { key: 'lineLoading', label: '线路负载' },
-    { key: 'nodeVoltage', label: '节点电压' },
-    { key: 'flowDirection', label: '潮流方向' },
-    { key: 'storageImpact', label: '储能影响' },
-    { key: 'riskBadges', label: '风险编号' },
-    { key: 'labels', label: '详细标签' },
-    { key: 'buildings', label: '负荷块' },
+    { key: 'nodeVoltage', label: '电压状态' },
+    { key: 'flowDirection', label: '潮流箭头' },
+    { key: 'storageImpact', label: '储能路径' },
+    { key: 'riskBadges', label: '风险定位' },
+    { key: 'labels', label: '设备标注' },
+    { key: 'buildings', label: '低压台区' },
   ];
 
   useEffect(() => {
@@ -2675,8 +2867,8 @@ function NetworkTopologyPanel(props: { data: NetworkTopologyChart | null }) {
       {props.data?.warnings?.length ? <WarningPanel warnings={props.data.warnings} /> : null}
       <div style={topologyToolbarStyle}>
         <div>
-          <div style={{ color: '#0f172a', fontSize: 14, fontWeight: 800 }}>2.5D 配电网数字孪生态势图</div>
-          <div style={{ color: '#64748b', fontSize: 12, marginTop: 3 }}>当前显示：{qualityLabel}</div>
+          <div style={{ color: '#0f172a', fontSize: 15, fontWeight: 900 }}>2.5D 配电网数字孪生态势图</div>
+          <div style={{ color: '#64748b', fontSize: 12, marginTop: 3 }}>当前显示：{qualityLabel}；已按电源、主变、馈线、分支和台区自动优化展示布局。</div>
         </div>
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
           <button type="button" onClick={() => setDetailsOpen((value) => !value)} style={smallBtnStyle}>
@@ -2693,7 +2885,7 @@ function NetworkTopologyPanel(props: { data: NetworkTopologyChart | null }) {
           </button>
         </div>
       </div>
-      <div style={topologyViewHintStyle}>滚轮缩放，拖拽平移；当前缩放 {Math.round(zoom * 100)}%，标注层级：{zoomDisplayLabel}</div>
+      <div style={topologyViewHintStyle}>滚轮缩放，拖拽平移；当前缩放 {Math.round(zoom * 100)}%，标注层级：{zoomDisplayLabel}。结果页采用自动层级布局，不直接沿用拓扑建模画布坐标。</div>
       <div style={topologyLegendStripStyle}>
         <TopologyLegend />
       </div>
@@ -2720,20 +2912,21 @@ function NetworkTopologyPanel(props: { data: NetworkTopologyChart | null }) {
         >
             <defs>
               <linearGradient id="topology-floor-gradient" x1="0" y1="0" x2="1" y2="1">
-                <stop offset="0%" stopColor="#081524" />
-                <stop offset="55%" stopColor="#0b1a2e" />
-                <stop offset="100%" stopColor="#050b14" />
+                <stop offset="0%" stopColor="#07111f" />
+                <stop offset="55%" stopColor="#0a1728" />
+                <stop offset="100%" stopColor="#020817" />
               </linearGradient>
               <radialGradient id="topology-storage-glow">
                 <stop offset="0%" stopColor="#22d3ee" stopOpacity="0.42" />
                 <stop offset="52%" stopColor="#0ea5e9" stopOpacity="0.16" />
                 <stop offset="100%" stopColor="#020617" stopOpacity="0" />
               </radialGradient>
-              <pattern id="topology-grid" width="92" height="64" patternUnits="userSpaceOnUse">
-                <path d="M 0 32 H 92 M 46 0 V 64" fill="none" stroke="#7dd3fc" strokeWidth="0.72" opacity="0.16" />
+              <pattern id="topology-grid" width="88" height="56" patternUnits="userSpaceOnUse">
+                <path d="M 0 28 H 88 M 44 0 V 56" fill="none" stroke="#7dd3fc" strokeWidth="0.7" opacity="0.12" />
+                <path d="M 0 0 H 88 V 56 H 0 Z" fill="none" stroke="#1e3a8a" strokeWidth="0.45" opacity="0.18" />
               </pattern>
               <filter id="topology-line-glow" x="-35%" y="-35%" width="170%" height="170%">
-                <feGaussianBlur stdDeviation="4" result="blur" />
+                <feGaussianBlur stdDeviation="2.2" result="blur" />
                 <feMerge>
                   <feMergeNode in="blur" />
                   <feMergeNode in="SourceGraphic" />
@@ -2747,13 +2940,13 @@ function NetworkTopologyPanel(props: { data: NetworkTopologyChart | null }) {
               </filter>
             </defs>
             <rect x={minX - baseWidth} y={minY - baseHeight} width={baseWidth * 3} height={baseHeight * 3} fill="url(#topology-floor-gradient)" />
-            <rect x={minX - baseWidth} y={minY - baseHeight} width={baseWidth * 3} height={baseHeight * 3} fill="url(#topology-grid)" opacity={0.72} />
+            <rect x={minX - baseWidth} y={minY - baseHeight} width={baseWidth * 3} height={baseHeight * 3} fill="url(#topology-grid)" opacity={0.84} />
             <path
               d={`M ${minX + baseWidth * 0.08} ${minY + baseHeight * 0.42} H ${minX + baseWidth * 0.92} M ${minX + baseWidth * 0.08} ${minY + baseHeight * 0.58} H ${minX + baseWidth * 0.92}`}
               fill="none"
               stroke="#93c5fd"
-              strokeOpacity={0.14}
-              strokeWidth={5}
+              strokeOpacity={0.10}
+              strokeWidth={3.2}
               strokeLinecap="round"
             />
             {storageNode ? (
@@ -2782,22 +2975,34 @@ function NetworkTopologyPanel(props: { data: NetworkTopologyChart | null }) {
               const isStoragePath = storagePath.edgeIds.has(edgeId);
               const isRiskEdge = riskItems.slice(0, 5).some((risk) => risk.kind === 'edge' && risk.objectId === edgeId);
               const isSelectedRiskEdge = selectedRisk?.kind === 'edge' && selectedRisk.objectId === edgeId;
-              const stroke = layers.storageImpact && isStoragePath ? '#22d3ee' : layers.lineLoading ? topologyEdgeColor(loadRate) : '#38bdf8';
               const isOpen = edge.enabled === false || edge.normallyOpen === true;
               const isTransformerLink = edge.isTransformerLink === true;
+              const linecodeText = String(edge.linecode ?? edge.name ?? edge.id ?? '').toLowerCase();
+              const isLowVoltageService = edge.autoServiceLine === true
+                || linecodeText.includes('service')
+                || linecodeText.includes('low')
+                || linecodeText.includes('lv')
+                || linecodeText.includes('接户')
+                || linecodeText.includes('低压');
+              const isPrimaryFeeder = !isTransformerLink && !isLowVoltageService;
               const isTopLoadedLine = topLoadedLineIds.has(String(edge.id ?? ''));
               const isOverloadedLine = loadRate !== null && loadRate > 100;
               const isHighlightedFlow = isStoragePath || isTopLoadedLine || isOverloadedLine || isSelectedRiskEdge;
+              const statusStroke = topologyEdgeColor(loadRate);
+              const equipmentStroke = isTransformerLink ? '#60a5fa' : isLowVoltageService ? '#5eead4' : '#38bdf8';
+              const stroke = layers.storageImpact && isStoragePath ? '#22d3ee' : layers.lineLoading ? statusStroke : equipmentStroke;
               const shouldLabelLine = showDetailedLabels || isOverloadedLine || (showSummaryLabels && isTopLoadedLine);
               const flowDirection = String(edge.flowDirection ?? 'forward') === 'reverse' ? 'reverse' : 'forward';
               const lineDx = x2 - x1;
               const lineDy = y2 - y1;
               const lineLength = Math.hypot(lineDx, lineDy);
               const edgePathD = `M ${x1} ${y1} L ${x2} ${y2}`;
-              let edgeWidth = loadRate === null ? 1.6 : Math.min(6.4, Math.max(1.8, 1.6 + loadRate / 26));
-              if (isTransformerLink) edgeWidth += 0.8;
-              if (layers.storageImpact && isStoragePath) edgeWidth += 2.2;
-              if (isSelectedRiskEdge) edgeWidth += 2.4;
+              let edgeWidth = loadRate === null ? 1.25 : Math.min(5.2, Math.max(1.35, 1.25 + loadRate / 34));
+              if (isTransformerLink) edgeWidth += 0.45;
+              if (isLowVoltageService) edgeWidth = Math.max(1.05, edgeWidth - 0.45);
+              if (isPrimaryFeeder) edgeWidth += 0.25;
+              if (layers.storageImpact && isStoragePath) edgeWidth += 1.15;
+              if (isSelectedRiskEdge) edgeWidth += 1.35;
               const flowSign = flowDirection === 'reverse' ? -1 : 1;
               const flowUx = lineLength > 0 ? (lineDx / lineLength) * flowSign : 0;
               const flowUy = lineLength > 0 ? (lineDy / lineLength) * flowSign : 0;
@@ -2870,7 +3075,8 @@ function NetworkTopologyPanel(props: { data: NetworkTopologyChart | null }) {
               const capacityTitle = capacityInsufficient
                 ? ` | 容量建议 估算需求 ${ampText(estimatedRequiredCurrentA)} / 建议 ${ampText(recommendedCurrentA)}`
                 : '';
-              const title = `${String(edge.name || edge.id || '')} | 潮流方向 ${flowDirectionText} | 端口有功 ${metricText(terminal1PowerKw, ' kW')} | 负载率 ${metricText(loadRate, '%')} | 电流 ${metricText(currentA, ' A')} | 额定 ${metricText(normamps, ' A')} | 应急 ${metricText(emergamps, ' A')}${serviceTitle}${capacityTitle}`;
+              const lineClassText = isTransformerLink ? '主变连接' : isLowVoltageService ? '低压接户/台区线' : '中压馈线';
+              const title = `${String(edge.name || edge.id || '')} | ${lineClassText} | 潮流方向 ${flowDirectionText} | 端口有功 ${metricText(terminal1PowerKw, ' kW')} | 负载率 ${metricText(loadRate, '%')} | 电流 ${metricText(currentA, ' A')} | 额定 ${metricText(normamps, ' A')} | 应急 ${metricText(emergamps, ' A')}${serviceTitle}${capacityTitle}`;
               return (
                 <g key={edgeId}>
                   <title>{title}</title>
@@ -2878,10 +3084,10 @@ function NetworkTopologyPanel(props: { data: NetworkTopologyChart | null }) {
                     d={edgePathD}
                     fill="none"
                     stroke={layers.storageImpact && isStoragePath ? '#22d3ee' : stroke}
-                    strokeWidth={edgeWidth + (isStoragePath ? 9 : 5)}
+                    strokeWidth={edgeWidth + (isStoragePath ? 4.4 : 2.4)}
                     strokeLinecap="round"
                     strokeLinejoin="round"
-                    opacity={isOpen ? 0.1 : isStoragePath ? 0.26 : isRiskEdge ? 0.24 : 0.15}
+                    opacity={isOpen ? 0.08 : isStoragePath ? 0.22 : isRiskEdge ? 0.18 : 0.10}
                     filter="url(#topology-line-glow)"
                   />
                   <path
@@ -2892,18 +3098,18 @@ function NetworkTopologyPanel(props: { data: NetworkTopologyChart | null }) {
                     strokeDasharray={isOpen ? '8 6' : undefined}
                     strokeLinecap="round"
                     strokeLinejoin="round"
-                    opacity={isOpen ? 0.32 : isTransformerLink ? 0.64 : 0.92}
+                    opacity={isOpen ? 0.30 : isTransformerLink ? 0.68 : isLowVoltageService ? 0.62 : 0.9}
                   />
                   {!isOpen ? (
                     <path
                       d={edgePathD}
                       fill="none"
                       stroke="#e0f2fe"
-                      strokeWidth={Math.max(0.7, edgeWidth * 0.22)}
+                      strokeWidth={Math.max(0.45, edgeWidth * 0.16)}
                       strokeLinecap="round"
                       strokeLinejoin="round"
                       transform="translate(-1.2 -1)"
-                      opacity={isTransformerLink ? 0.28 : 0.45}
+                      opacity={isTransformerLink ? 0.24 : isLowVoltageService ? 0.22 : 0.38}
                     />
                   ) : null}
                   {!isOpen && lineLength > 1 && layers.flowDirection ? (
@@ -2911,8 +3117,8 @@ function NetworkTopologyPanel(props: { data: NetworkTopologyChart | null }) {
                       points={flowArrowPoints}
                       fill={flowDirection === 'reverse' ? SEMANTIC_COLORS.cost.secondary : '#67e8f9'}
                       stroke="#082f49"
-                      strokeWidth={isHighlightedFlow ? 1.2 : 0.8}
-                      opacity={isHighlightedFlow ? 0.96 : 0.66}
+                      strokeWidth={isHighlightedFlow ? 1.05 : 0.65}
+                      opacity={isHighlightedFlow ? 0.92 : isLowVoltageService ? 0.42 : 0.58}
                     />
                   ) : null}
                   {edgeLabelPlacement ? (
@@ -2954,7 +3160,12 @@ function NetworkTopologyPanel(props: { data: NetworkTopologyChart | null }) {
 
             {layers.buildings ? projectedNodes.map((node) => {
               const designLoadKw = toFiniteNumber(node.designLoadKw);
-              if (node.storageTarget === true || designLoadKw === null || designLoadKw <= 0) return null;
+              if (
+                node.storageTarget === true
+                || topologyNodeKind(String(node.type ?? ''), false) !== 'load'
+                || designLoadKw === null
+                || designLoadKw <= 0
+              ) return null;
               const voltageMin = toFiniteNumber(node.voltagePuMin);
               const voltageMax = toFiniteNumber(node.voltagePuMax);
               const warning = (voltageMin !== null && voltageMin < 0.95) || (voltageMax !== null && voltageMax > 1.05);
@@ -2974,6 +3185,7 @@ function NetworkTopologyPanel(props: { data: NetworkTopologyChart | null }) {
               const y = node.projectedY;
               const isTarget = node.storageTarget === true;
               const nodeType = String(node.type ?? '');
+              const nodeKindLabel = topologyNodeKindLabel(nodeType, isTarget);
               const label = String(node.bus || node.name || node.id || '');
               const nodeShortLabel = zoomDisplayMode === 'overview' && !isTarget ? String(node.id || label) : label;
               const baselineVoltageMin = toFiniteNumber(node.baselineVoltagePuMin);
@@ -2997,6 +3209,7 @@ function NetworkTopologyPanel(props: { data: NetworkTopologyChart | null }) {
               const isRiskNode = riskItems.slice(0, 5).some((risk) => risk.kind === 'node' && risk.objectId === node.nodeId);
               const showNodeInfo = labelsEnabled && (showDetailedLabels || isTarget || hasVoltageAlert || hasStorageVoltageWorsening);
               const detailedInfoLines = [
+                `设备类型 ${nodeKindLabel}`,
                 baselineVoltageLabel ? `储前电压标幺值 ${baselineVoltageLabel}` : '',
                 voltageLabel ? `储后电压标幺值 ${voltageLabel}` : '储后电压标幺值 --',
                 isTarget && storagePowerKw !== null && storageEnergyKwh !== null
@@ -3007,6 +3220,7 @@ function NetworkTopologyPanel(props: { data: NetworkTopologyChart | null }) {
                   : '',
               ].filter(Boolean);
               const compactInfoLines = [
+                isTarget || hasVoltageAlert ? nodeKindLabel : '',
                 hasVoltageAlert && voltageLabel ? `储后V ${voltageLabel}` : '',
                 isTarget && storagePowerKw !== null && storageEnergyKwh !== null
                   ? `储能 ${metricText(storagePowerKw, ' kW')} / ${metricText(storageEnergyKwh, ' kWh')}`
@@ -3043,6 +3257,7 @@ function NetworkTopologyPanel(props: { data: NetworkTopologyChart | null }) {
                 : null;
               const title = [
                 `${label}`,
+                `设备类型 ${nodeKindLabel}`,
                 `储前电压标幺值 ${baselineVoltageLabel || '--'}`,
                 `储后电压标幺值 ${voltageLabel || '--'}`,
                 `负荷 ${metricText(designLoadKw, ' kW')}`,
@@ -3224,13 +3439,15 @@ function NetworkTopologyPanel(props: { data: NetworkTopologyChart | null }) {
 function TopologyLegend() {
   return (
     <div style={legendStyle}>
-      <div><span style={{ ...legendSwatchStyle, background: SEMANTIC_COLORS.feasible }} />正常</div>
+      <div><span style={{ ...legendSwatchStyle, background: SEMANTIC_COLORS.feasible }} />正常运行</div>
       <div><span style={{ ...legendSwatchStyle, background: SEMANTIC_COLORS.cost.secondary }} />接近上限</div>
-      <div><span style={{ ...legendSwatchStyle, background: SEMANTIC_COLORS.cost.primary }} />过载/越限</div>
-      <div><span style={{ ...legendSwatchStyle, background: SEMANTIC_COLORS.neutral }} />估算/缺少实测</div>
-      <div><span style={{ ...legendSwatchStyle, background: '#22d3ee' }} />储能影响路径</div>
-      <div><span style={{ ...legendSwatchStyle, background: '#facc15' }} />储能接入点</div>
-      <div style={{ color: '#9fb6cf' }}>箭头显示全部闭合线路潮流方向，重点线路箭头加粗</div>
+      <div><span style={{ ...legendSwatchStyle, background: SEMANTIC_COLORS.cost.primary }} />越限/过载</div>
+      <div><span style={{ ...legendSwatchStyle, background: SEMANTIC_COLORS.neutral }} />估算数据</div>
+      <div><span style={{ ...legendSwatchStyle, background: '#38bdf8' }} />中压馈线</div>
+      <div><span style={{ ...legendSwatchStyle, background: '#5eead4' }} />低压接户</div>
+      <div><span style={{ ...legendSwatchStyle, background: '#22d3ee' }} />储能路径</div>
+      <div><span style={{ ...legendSwatchStyle, background: '#facc15' }} />光伏/储能接入</div>
+      <div style={{ color: '#9fb6cf' }}>箭头表示闭合线路潮流方向；风险编号可点击联动右侧清单。</div>
     </div>
   );
 }
@@ -3255,66 +3472,125 @@ function topologyQualityLabel(dataQuality: string | undefined) {
   return '估算拓扑图';
 }
 
-function topologyNodeColor(type: string) {
-  if (type === 'grid' || type === 'source') return '#f87171';
-  if (type === 'transformer') return '#f59e0b';
-  if (type === 'load') return '#22c55e';
-  if (type === 'branch' || type === 'ring_main_unit') return '#38bdf8';
-  if (type === 'bus') return '#60a5fa';
-  return '#22d3ee';
+function topologyNodeKind(type: string, isTarget = false) {
+  const text = String(type ?? '').toLowerCase();
+  if (isTarget || text.includes('storage') || text.includes('battery') || text.includes('ess')) return 'storage';
+  if (text.includes('pv') || text.includes('solar') || text.includes('photovoltaic')) return 'pv';
+  if (text.includes('charg') || text.includes('ev')) return 'charger';
+  if (text.includes('grid') || text.includes('source') || text.includes('substation')) return 'substation';
+  if (text.includes('transformer') || text.includes('user_tx') || text.includes('distribution_transformer')) return 'transformer';
+  if (text.includes('ring') || text.includes('switch') || text.includes('breaker') || text.includes('cabinet')) return 'switchgear';
+  if (text.includes('bus')) return 'bus';
+  if (text.includes('branch')) return 'branch';
+  if (text.includes('load')) return 'load';
+  return 'node';
+}
+
+function topologyNodeColor(type: string, isTarget = false) {
+  const kind = topologyNodeKind(type, isTarget);
+  if (kind === 'substation') return '#60a5fa';
+  if (kind === 'transformer') return '#f59e0b';
+  if (kind === 'switchgear') return '#38bdf8';
+  if (kind === 'bus') return '#93c5fd';
+  if (kind === 'branch') return '#2dd4bf';
+  if (kind === 'load') return '#22c55e';
+  if (kind === 'pv') return '#facc15';
+  if (kind === 'storage') return '#22d3ee';
+  if (kind === 'charger') return '#a78bfa';
+  return '#67e8f9';
+}
+
+function topologyNodeKindLabel(type: string, isTarget = false) {
+  const kind = topologyNodeKind(type, isTarget);
+  const labels: Record<string, string> = {
+    substation: '变电站',
+    transformer: '配电变压器',
+    switchgear: '开关站/环网柜',
+    bus: '母线',
+    branch: '分支点',
+    load: '低压台区',
+    pv: '分布式光伏',
+    storage: '储能',
+    charger: '充电桩',
+    node: '节点',
+  };
+  return labels[kind] ?? '节点';
 }
 
 function TopologyNodeSymbol(props: { type: string; isTarget: boolean; voltageColor: string; missingVoltage: boolean }) {
-  const color = topologyNodeColor(props.type);
-  const ringRadius = props.isTarget ? 22 : 17;
+  const kind = topologyNodeKind(props.type, props.isTarget);
+  const color = topologyNodeColor(props.type, props.isTarget);
+  const ringRadius = props.isTarget ? 24 : kind === 'substation' ? 22 : 17;
   const ringOpacity = props.missingVoltage ? 0.28 : 0.9;
   const commonStroke = props.isTarget ? '#facc15' : color;
   return (
     <g filter="url(#topology-node-shadow)">
-      <ellipse cx={8} cy={14} rx={ringRadius + 10} ry={ringRadius * 0.5} fill="#020617" opacity={0.42} />
+      <ellipse cx={7} cy={15} rx={ringRadius + 12} ry={ringRadius * 0.43} fill="#020617" opacity={0.32} />
       <circle
         r={ringRadius + 5}
-        fill="#071827"
+        fill="#061321"
         stroke={props.voltageColor}
-        strokeWidth={props.isTarget ? 4 : 3}
+        strokeWidth={props.isTarget ? 3.2 : 2.4}
         opacity={ringOpacity}
       />
-      {props.type === 'grid' || props.type === 'source' ? (
+      <circle r={ringRadius + 1} fill="none" stroke="#dff7ff" strokeWidth={0.8} opacity={props.missingVoltage ? 0.12 : 0.28} />
+      {kind === 'substation' ? (
         <g>
-          <circle cx={5} cy={6} r={ringRadius} fill="#7f1d1d" opacity={0.38} />
-          <circle r={ringRadius} fill="#1f0d13" stroke={commonStroke} strokeWidth={2.4} />
-          <path d="M -3 -10 L -11 2 H -3 L -6 11 L 8 -4 H 0 L 3 -10 Z" fill={commonStroke} />
+          <rect x={-21} y={-15} width={42} height={28} rx={4} fill="#071827" stroke={commonStroke} strokeWidth={2} />
+          <path d="M -13 -5 H 13 M -13 5 H 13 M -6 -10 V 10 M 6 -10 V 10" stroke={commonStroke} strokeWidth={1.9} strokeLinecap="round" />
+          <path d="M -21 -19 H 21" stroke="#dff7ff" strokeWidth={1.6} opacity={0.72} />
         </g>
-      ) : props.type === 'transformer' ? (
+      ) : kind === 'transformer' ? (
         <g>
-          <rect x={-13} y={-7} width={36} height={26} rx={6} fill="#92400e" opacity={0.38} />
-          <rect x={-18} y={-13} width={36} height={26} rx={6} fill="#221307" stroke={commonStroke} strokeWidth={2.2} />
-          <circle cx={-6} cy={0} r={6} fill="none" stroke={commonStroke} strokeWidth={2} />
-          <circle cx={6} cy={0} r={6} fill="none" stroke={commonStroke} strokeWidth={2} />
+          <rect x={-20} y={-14} width={40} height={28} rx={5} fill="#1c1917" stroke={commonStroke} strokeWidth={2} />
+          <circle cx={-6} cy={0} r={6.4} fill="none" stroke={commonStroke} strokeWidth={1.8} />
+          <circle cx={6} cy={0} r={6.4} fill="none" stroke={commonStroke} strokeWidth={1.8} />
+          <path d="M -20 -18 H 20 M -20 18 H 20" stroke="#fde68a" strokeWidth={1.1} opacity={0.58} />
         </g>
-      ) : props.isTarget ? (
+      ) : kind === 'switchgear' ? (
         <g>
-          <rect x={-20} y={-12} width={45} height={29} rx={6} fill="#713f12" opacity={0.5} />
-          <rect x={-24} y={-17} width={45} height={29} rx={6} fill="#1c1917" stroke={commonStroke} strokeWidth={2.6} />
-          <rect x={21} y={-8} width={5} height={11} rx={2} fill={commonStroke} />
-          <path d="M -15 -2 H 8 M -15 6 H 3" stroke={commonStroke} strokeWidth={2.2} strokeLinecap="round" />
-          <circle r={32} fill="none" stroke="#facc15" strokeWidth={2} strokeDasharray="7 5" opacity={0.75} />
+          <rect x={-20} y={-14} width={40} height={28} rx={4} fill="#082f49" stroke={commonStroke} strokeWidth={2} />
+          <circle cx={-11} cy={0} r={3.2} fill="#020617" stroke={commonStroke} strokeWidth={1.6} />
+          <circle cx={11} cy={0} r={3.2} fill="#020617" stroke={commonStroke} strokeWidth={1.6} />
+          <path d="M -8 0 H 0 L 8 -8 M 0 0 L 8 8" stroke={commonStroke} strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round" />
         </g>
-      ) : props.type === 'load' ? (
+      ) : kind === 'bus' ? (
         <g>
-          <rect x={-12} y={-6} width={34} height={24} rx={5} fill="#166534" opacity={0.34} />
-          <rect x={-17} y={-12} width={34} height={24} rx={5} fill="#052e20" stroke={commonStroke} strokeWidth={2.2} />
-          <path d="M -10 6 V -2 L -4 -7 L 2 -2 V 6 M 2 -2 L 8 -7 L 14 -2 V 6" fill="none" stroke={commonStroke} strokeWidth={2} strokeLinejoin="round" />
+          <path d="M -22 0 H 22" stroke={commonStroke} strokeWidth={5.4} strokeLinecap="round" />
+          <path d="M -14 -9 V 9 M 0 -9 V 9 M 14 -9 V 9" stroke="#dff7ff" strokeWidth={1.5} opacity={0.78} />
         </g>
-      ) : props.type === 'branch' || props.type === 'ring_main_unit' || props.type === 'bus' ? (
+      ) : kind === 'branch' ? (
         <g>
-          <rect x={-14} y={-4} width={38} height={20} rx={10} fill="#1e3a8a" opacity={0.34} />
-          <rect x={-19} y={-10} width={38} height={20} rx={10} fill="#082f49" stroke={commonStroke} strokeWidth={2.2} />
-          <path d="M -12 0 H 12 M -7 -7 V 7 M 0 -7 V 7 M 7 -7 V 7" stroke={commonStroke} strokeWidth={2} strokeLinecap="round" />
+          <circle r={14} fill="#042f2e" stroke={commonStroke} strokeWidth={2} />
+          <path d="M -13 0 H 13 M 0 0 V -14" stroke={commonStroke} strokeWidth={2.4} strokeLinecap="round" />
+          <circle r={3.2} fill={commonStroke} />
+        </g>
+      ) : kind === 'pv' ? (
+        <g>
+          <path d="M -20 -10 H 16 L 21 12 H -15 Z" fill="#1e293b" stroke={commonStroke} strokeWidth={2} />
+          <path d="M -11 -10 L -7 12 M 0 -10 L 4 12 M 10 -10 L 14 12 M -17 1 H 19" stroke={commonStroke} strokeWidth={1} opacity={0.8} />
+          <circle cx={-22} cy={-17} r={4} fill="none" stroke={commonStroke} strokeWidth={1.5} />
+        </g>
+      ) : kind === 'charger' ? (
+        <g>
+          <rect x={-13} y={-17} width={25} height={34} rx={5} fill="#1e1b4b" stroke={commonStroke} strokeWidth={2} />
+          <path d="M -5 -6 H 5 M 0 -11 V -1 M 12 -2 C 23 -2 19 14 11 14" fill="none" stroke={commonStroke} strokeWidth={1.8} strokeLinecap="round" />
+          <circle cx={0} cy={8} r={2.5} fill={commonStroke} />
+        </g>
+      ) : kind === 'storage' ? (
+        <g>
+          <rect x={-24} y={-15} width={45} height={30} rx={5} fill="#0f172a" stroke={commonStroke} strokeWidth={2.4} />
+          <rect x={21} y={-6} width={5} height={12} rx={2} fill={commonStroke} />
+          <path d="M -16 -4 H 8 M -16 5 H 3" stroke={commonStroke} strokeWidth={2.1} strokeLinecap="round" />
+          <circle r={34} fill="none" stroke="#facc15" strokeWidth={1.8} strokeDasharray="7 5" opacity={0.72} />
+        </g>
+      ) : kind === 'load' ? (
+        <g>
+          <rect x={-17} y={-13} width={34} height={26} rx={4} fill="#052e20" stroke={commonStroke} strokeWidth={2} />
+          <path d="M -10 7 V -2 L -4 -8 L 2 -2 V 7 M 2 -2 L 8 -8 L 14 -2 V 7" fill="none" stroke={commonStroke} strokeWidth={1.8} strokeLinejoin="round" />
         </g>
       ) : (
         <g>
-          <circle cx={5} cy={6} r={ringRadius} fill="#020617" opacity={0.38} />
           <circle r={ringRadius} fill="#082f49" stroke={color} strokeWidth={2.4} />
           <circle r={4} fill={color} opacity={0.9} />
         </g>
@@ -3721,21 +3997,21 @@ const plotImageStyle: React.CSSProperties = { width: '100%', height: 220, object
 const topologyToolbarStyle: React.CSSProperties = { display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, marginBottom: 10, flexWrap: 'wrap' };
 const topologyCanvasStyle: React.CSSProperties = {
   position: 'relative',
-  height: 680,
-  border: '1px solid rgba(125,159,190,0.32)',
+  height: 700,
+  border: '1px solid rgba(96,165,250,0.22)',
   borderRadius: 8,
-  background: '#06101f',
+  background: '#06101a',
   overflow: 'hidden',
-  boxShadow: 'inset 0 0 38px rgba(15,23,42,0.45)',
+  boxShadow: 'inset 0 0 36px rgba(15,23,42,0.36), 0 12px 28px rgba(15,23,42,0.08)',
 };
 const topologySvgStyle: React.CSSProperties = { cursor: 'grab', touchAction: 'none', userSelect: 'none', display: 'block' };
 const topologyViewHintStyle: React.CSSProperties = { margin: '-2px 0 8px 0', color: '#64748b', fontSize: 12 };
 const topologyLegendStripStyle: React.CSSProperties = {
   marginBottom: 10,
-  padding: '8px 10px',
-  border: '1px solid rgba(56,189,248,0.22)',
+  padding: '8px 11px',
+  border: '1px solid rgba(56,189,248,0.18)',
   borderRadius: 8,
-  background: '#08152b',
+  background: 'linear-gradient(90deg, #071427, #0a1a2f)',
 };
 const topologyFullscreenStyle: React.CSSProperties = {
   position: 'fixed',
@@ -3760,15 +4036,15 @@ const topologySummaryStyle: React.CSSProperties = {
   top: 14,
   right: 14,
   zIndex: 3,
-  width: 300,
+  width: 286,
   maxHeight: 'calc(100% - 28px)',
   overflow: 'auto',
-  border: '1px solid rgba(45,212,191,0.38)',
+  border: '1px solid rgba(56,189,248,0.22)',
   borderRadius: 8,
-  padding: 14,
-  background: 'linear-gradient(180deg, rgba(8,21,43,0.92), rgba(2,6,23,0.88))',
-  boxShadow: '0 18px 48px rgba(0,0,0,0.42)',
-  backdropFilter: 'blur(7px)',
+  padding: 13,
+  background: 'linear-gradient(180deg, rgba(7,17,31,0.94), rgba(3,10,23,0.91))',
+  boxShadow: '0 18px 42px rgba(0,0,0,0.34)',
+  backdropFilter: 'blur(6px)',
 };
 const topologySummaryGridStyle: React.CSSProperties = { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: 10 };
 const topologyKpiStripStyle: React.CSSProperties = {
@@ -3778,11 +4054,11 @@ const topologyKpiStripStyle: React.CSSProperties = {
   marginBottom: 10,
 };
 const topologyKpiItemStyle: React.CSSProperties = {
-  border: '1px solid rgba(56,189,248,0.20)',
+  border: '1px solid rgba(56,189,248,0.16)',
   borderRadius: 8,
   padding: '10px 12px',
-  background: 'linear-gradient(180deg, #0b1b33, #071427)',
-  boxShadow: 'inset 0 0 20px rgba(14,165,233,0.08)',
+  background: 'linear-gradient(180deg, #0a1728, #07111f)',
+  boxShadow: 'inset 0 0 18px rgba(14,165,233,0.05)',
 };
 const topologyKpiLabelStyle: React.CSSProperties = { display: 'block', color: '#94a3b8', fontSize: 12, marginBottom: 5 };
 const topologyKpiValueStyle: React.CSSProperties = { display: 'block', fontSize: 18, lineHeight: 1.1 };
@@ -3791,13 +4067,13 @@ const topologyLayerBarStyle: React.CSSProperties = {
   top: 14,
   left: 14,
   zIndex: 3,
-  width: 150,
-  padding: 12,
-  border: '1px solid rgba(45,212,191,0.36)',
+  width: 138,
+  padding: 11,
+  border: '1px solid rgba(56,189,248,0.22)',
   borderRadius: 8,
-  background: 'linear-gradient(180deg, rgba(8,21,43,0.9), rgba(2,6,23,0.82))',
-  boxShadow: '0 18px 48px rgba(0,0,0,0.34)',
-  backdropFilter: 'blur(7px)',
+  background: 'linear-gradient(180deg, rgba(7,17,31,0.91), rgba(3,10,23,0.82))',
+  boxShadow: '0 16px 36px rgba(0,0,0,0.26)',
+  backdropFilter: 'blur(6px)',
 };
 const topologyLayerTitleStyle: React.CSSProperties = { color: '#dff7ff', fontWeight: 800, fontSize: 13, marginBottom: 10 };
 const topologyLayerButtonStyle: React.CSSProperties = {
@@ -3817,8 +4093,8 @@ const topologyLayerButtonStyle: React.CSSProperties = {
 };
 const topologyLayerButtonActiveStyle: React.CSSProperties = {
   ...topologyLayerButtonStyle,
-  border: '1px solid rgba(34,211,238,0.34)',
-  background: 'rgba(14,165,233,0.14)',
+  border: '1px solid rgba(34,211,238,0.28)',
+  background: 'rgba(14,165,233,0.12)',
   color: '#dff7ff',
 };
 const topologyLayerDotStyle: React.CSSProperties = { width: 7, height: 7, borderRadius: 99, background: '#475569', flex: '0 0 auto' };
@@ -3840,10 +4116,10 @@ const topologySideMetricGridStyle: React.CSSProperties = {
   marginTop: 12,
 };
 const topologySideMetricItemStyle: React.CSSProperties = {
-  border: '1px solid rgba(56,189,248,0.16)',
+  border: '1px solid rgba(56,189,248,0.14)',
   borderRadius: 7,
   padding: '8px 9px',
-  background: 'rgba(15,23,42,0.48)',
+  background: 'rgba(15,23,42,0.36)',
   color: '#dff7ff',
 };
 const topologySideSectionTitleStyle: React.CSSProperties = {
@@ -3861,10 +4137,10 @@ const topologyRiskListItemStyle: React.CSSProperties = {
   alignItems: 'center',
   gap: 8,
   width: '100%',
-  border: '1px solid rgba(56,189,248,0.16)',
+  border: '1px solid rgba(56,189,248,0.14)',
   borderRadius: 7,
   padding: '7px 8px',
-  background: 'rgba(15,23,42,0.56)',
+  background: 'rgba(15,23,42,0.42)',
   color: '#dff7ff',
   textAlign: 'left',
   cursor: 'pointer',
@@ -3894,9 +4170,9 @@ const topologyRiskTextStyle: React.CSSProperties = {
 };
 const topologyEmptyRiskStyle: React.CSSProperties = { color: '#9fb6cf', fontSize: 12, lineHeight: 1.5 };
 const topologyImpactTextStyle: React.CSSProperties = { color: '#dff7ff', fontSize: 12, lineHeight: 1.65 };
-const legendStyle: React.CSSProperties = { display: 'flex', gap: '8px 14px', flexWrap: 'wrap', color: '#dff7ff', fontSize: 12 };
+const legendStyle: React.CSSProperties = { display: 'flex', gap: '7px 12px', flexWrap: 'wrap', color: '#dff7ff', fontSize: 12, alignItems: 'center' };
 const legendItemStyle: React.CSSProperties = { display: 'inline-flex', alignItems: 'center', gap: 5, color: '#374151', fontSize: 13, fontWeight: 600 };
-const legendSwatchStyle: React.CSSProperties = { display: 'inline-block', width: 12, height: 12, borderRadius: 2, marginRight: 8, verticalAlign: '-1px' };
+const legendSwatchStyle: React.CSSProperties = { display: 'inline-block', width: 11, height: 11, borderRadius: 2, marginRight: 7, verticalAlign: '-1px' };
 const btnStyle: React.CSSProperties = { padding: '10px 14px', borderRadius: 8, border: '1px solid #cbd5e1', background: '#f1f5f9', fontWeight: 600, cursor: 'pointer' };
 const deleteTaskButtonStyle: React.CSSProperties = {
   display: 'inline-flex',

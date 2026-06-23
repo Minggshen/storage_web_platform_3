@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import shutil
+import stat
 import zipfile
 from pathlib import Path
 from typing import Optional
@@ -24,11 +25,16 @@ ALLOWED_SUFFIXES = {
     "dss": {".dss", ".txt", ".zip"},
 }
 
+MAX_ZIP_ENTRIES = 10_000
+MAX_ZIP_MEMBER_UNCOMPRESSED_BYTES = 512 * 1024 * 1024
+MAX_ZIP_TOTAL_UNCOMPRESSED_BYTES = 1024 * 1024 * 1024
+
 
 async def save_upload(file: Optional[UploadFile], target_dir: Path, kind: str) -> Optional[Path]:
     if file is None:
         return None
 
+    target_dir.mkdir(parents=True, exist_ok=True)
     suffix = Path(file.filename or "").suffix.lower()
     if suffix not in ALLOWED_SUFFIXES[kind]:
         allowed = ", ".join(sorted(ALLOWED_SUFFIXES[kind]))
@@ -51,8 +57,41 @@ def extract_zip_if_needed(file_path: Path) -> Path:
     extract_dir = file_path.parent / file_path.stem
     extract_dir.mkdir(parents=True, exist_ok=True)
     with zipfile.ZipFile(file_path, "r") as zf:
-        zf.extractall(extract_dir)
+        _safe_extract_zip(zf, extract_dir)
     return extract_dir
+
+
+def _safe_extract_zip(zf: zipfile.ZipFile, extract_dir: Path) -> None:
+    base_dir = extract_dir.resolve()
+    members = zf.infolist()
+    if len(members) > MAX_ZIP_ENTRIES:
+        raise HTTPException(status_code=400, detail=f"压缩包文件数量过多：{len(members)} > {MAX_ZIP_ENTRIES}")
+
+    total_uncompressed_size = 0
+    for member in members:
+        member_path = Path(member.filename)
+        target_path = (base_dir / member.filename).resolve()
+        mode = member.external_attr >> 16
+        if stat.S_ISLNK(mode):
+            raise HTTPException(status_code=400, detail=f"压缩包包含不支持的符号链接：{member.filename}")
+        if member_path.is_absolute() or not _is_path_within(target_path, base_dir):
+            raise HTTPException(status_code=400, detail=f"压缩包路径越界：{member.filename}")
+        if member.file_size > MAX_ZIP_MEMBER_UNCOMPRESSED_BYTES:
+            raise HTTPException(status_code=400, detail=f"压缩包单文件解压后过大：{member.filename}")
+        total_uncompressed_size += member.file_size
+        if total_uncompressed_size > MAX_ZIP_TOTAL_UNCOMPRESSED_BYTES:
+            raise HTTPException(status_code=400, detail="压缩包解压后总大小超过限制。")
+
+    for member in members:
+        zf.extract(member, base_dir)
+
+
+def _is_path_within(path: Path, parent: Path) -> bool:
+    try:
+        path.relative_to(parent)
+        return True
+    except ValueError:
+        return False
 
 
 def read_table_file(file_path: Path, sheet_name: str | int | None = 0, header: int | None = 0) -> pd.DataFrame:

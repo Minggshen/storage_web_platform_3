@@ -168,7 +168,7 @@ export function TopologyInspector(props: Props) {
               <Field label="设计负荷 kW">
                 <input type="number" value={numberValue(selectedNode.params.design_kw, 800)} onChange={(e) => onChangeNode(updateParam(selectedNode, 'design_kw', Number(e.target.value)))} style={inputStyle} />
               </Field>
-              <Field label="变压器容量 kVA">
+              <Field label="备用配变容量 kVA">
                 <input type="number" value={numberValue(selectedNode.params.transformer_capacity_kva, 2000)} onChange={(e) => onChangeNode(updateParam(selectedNode, 'transformer_capacity_kva', Number(e.target.value)))} style={inputStyle} />
               </Field>
               <Field label="变压器功率因数上限">

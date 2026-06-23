@@ -60,7 +60,7 @@ class BuildExportService:
         topology = self._extract_topology(project)
         topology_hash = self._topology_hash(topology)
         build_input_hash = self._build_input_hash(project)
-        validation = self._validate_topology(topology)
+        validation = self._validate_topology(topology, project)
         warnings = validation["warnings"]
         errors = validation["errors"]
         summary = {
@@ -504,6 +504,8 @@ class BuildExportService:
         rows: list[dict[str, Any]] = []
         network = project.get("network") if isinstance(project.get("network"), dict) else {}
         nodes = network.get("nodes") if isinstance(network.get("nodes"), list) else []
+        edges = network.get("edges") if isinstance(network.get("edges"), list) else []
+        node_map = {str(node.get("id") or ""): node for node in nodes if isinstance(node, dict)}
         economic_params = network.get("economic_parameters") if isinstance(network.get("economic_parameters"), dict) else {}
         assets = project.get("assets") if isinstance(project.get("assets"), dict) else {}
         device_records = ((project.get("device_library") or {}).get("records") or []) if isinstance(project.get("device_library"), dict) else []
@@ -516,6 +518,7 @@ class BuildExportService:
             params = node.get("params") if isinstance(node.get("params"), dict) else {}
             node_id = self._safe_int(params.get("node_id"), load_index)
             raw_category = str(params.get("category") or "industrial").strip() or "industrial"
+            normalized_category = self._normalize_load_category(raw_category)
             category = self._path_segment(raw_category)
             if category != raw_category:
                 warnings.append(
@@ -546,7 +549,21 @@ class BuildExportService:
             shutil.copy2(year_path, node_dir / "runtime_year_model_map.csv")
             shutil.copy2(model_path, node_dir / "runtime_model_library.csv")
 
-            transformer_capacity_kva = self._safe_float(params.get("transformer_capacity_kva"), 0.0) or None
+            load_transformer_capacity_kva = self._safe_float(params.get("transformer_capacity_kva"), 0.0)
+            connected_tx = self._connected_distribution_transformer(str(node.get("id") or ""), node_map, edges)
+            connected_tx_kva = self._safe_float(
+                (connected_tx.get("params") if isinstance(connected_tx, dict) and isinstance(connected_tx.get("params"), dict) else {}).get("rated_kva"),
+                0.0,
+            )
+            transformer_capacity_kva = connected_tx_kva or load_transformer_capacity_kva or None
+            if normalized_category == "residential" and connected_tx_kva > 0 and load_transformer_capacity_kva > 0:
+                denominator = max(connected_tx_kva, load_transformer_capacity_kva, 1.0)
+                if abs(connected_tx_kva - load_transformer_capacity_kva) / denominator > 0.02:
+                    warnings.append(
+                        f"负荷节点 {node.get('name') or internal_id} 的 transformer_capacity_kva={load_transformer_capacity_kva:.1f} kVA "
+                        f"与相连用户配变 {connected_tx.get('name') or connected_tx.get('id')} rated_kva={connected_tx_kva:.1f} kVA 不一致；"
+                        "求解器已优先采用用户配变 rated_kva。"
+                    )
             transformer_pf_limit = self._safe_float(params.get("transformer_pf_limit"), self._safe_float(params.get("pf"), 0.95))
             transformer_reserve_ratio = self._safe_float(params.get("transformer_reserve_ratio"), 0.15)
             grid_interconnection_limit_kw = None
@@ -580,7 +597,10 @@ class BuildExportService:
                     "remarks": str(params.get("remarks") or params.get("description") or ""),
                     "target_bus_name": dss_bus_name,
                     "target_load_name": dss_load_name,
-                    "target_kv_ln": self._normalize_distribution_base_kv(params.get("target_kv_ln")),
+                    "target_kv_ln": self._normalize_distribution_base_kv(
+                        params.get("target_kv_ln"),
+                        self._safe_int(params.get("phases"), 3),
+                    ),
                     "static_load_reference_kw": self._safe_float(params.get("design_kw"), 0.0),
                     "dss_bus_name": dss_bus_name,
                     "dss_load_name": dss_load_name,
@@ -872,12 +892,8 @@ class BuildExportService:
         except Exception:
             return float(default)
 
-    def _normalize_distribution_base_kv(self, value: Any) -> float:
-        kv = self._safe_float(value, 0.0)
-        legacy_ln = 10.0 / math.sqrt(3.0)
-        if kv > 0 and abs(kv - legacy_ln) <= max(0.02, legacy_ln * 0.03):
-            return 10.0
-        return kv
+    def _normalize_distribution_base_kv(self, value: Any, phases: int = 3) -> float:
+        return self.dss_builder._distribution_voltage_kv_for_opendss(value, phases)
 
     def _safe_int(self, value: Any, default: int) -> int:
         try:
@@ -985,7 +1001,7 @@ class BuildExportService:
     def _build_errors(self, topology: dict[str, Any]) -> list[str]:
         return list(self._validate_topology(topology)["errors"])
 
-    def _validate_topology(self, topology: dict[str, Any]) -> dict[str, Any]:
+    def _validate_topology(self, topology: dict[str, Any], project: dict[str, Any] | None = None) -> dict[str, Any]:
         errors: list[str] = []
         warnings: list[str] = []
         nodes = topology["nodes"]
@@ -1063,6 +1079,13 @@ class BuildExportService:
                     errors.append(f"负荷节点 {node.get('name') or node_id} 缺少基准电压。")
                 if self._safe_float(params.get("design_kw"), 0.0) <= 0:
                     warnings.append(f"负荷节点 {node.get('name') or node_id} 的设计负荷 design_kw 未设置或为 0。")
+                self._append_load_runtime_capacity_warnings(
+                    project=project,
+                    node=node,
+                    node_map=node_map,
+                    edges=edges,
+                    warnings=warnings,
+                )
 
         for duplicate in self._find_duplicates(load_node_ids):
             errors.append(f"负荷 node_id 重复：{duplicate}。")
@@ -1092,6 +1115,12 @@ class BuildExportService:
             to_node = node_map.get(to_node_id, {})
             is_transformer_connection = self._is_transformer_connection_edge(from_node, to_node)
             if not is_transformer_connection:
+                if self.dss_builder._bus_name(from_node) == self.dss_builder._bus_name(to_node):
+                    errors.append(
+                        f"线路 {edge_id} 两端映射到同一 OpenDSS 母线 {self.dss_builder._bus_name(from_node)}。"
+                        "如果这是同母线挂载关系，请删除线路；如果是实际线路，请设置不同 dss_bus_name。"
+                    )
+                    continue
                 has_explicit_rx = bool(params.get("r_ohm_per_km") not in (None, "") and params.get("x_ohm_per_km") not in (None, ""))
                 has_geometry = bool(params.get("geometry") or params.get("line_geometry"))
                 if not (linecode or has_explicit_rx or has_geometry):
@@ -1135,6 +1164,20 @@ class BuildExportService:
                 active_adjacency[from_node_id].add(to_node_id)
                 active_adjacency[to_node_id].add(from_node_id)
 
+        nodes_by_bus: dict[str, list[str]] = {}
+        for node in nodes:
+            node_id = str(node.get("id") or "")
+            if not node_id:
+                continue
+            nodes_by_bus.setdefault(self.dss_builder._bus_name(node), []).append(node_id)
+        for same_bus_node_ids in nodes_by_bus.values():
+            if len(same_bus_node_ids) < 2:
+                continue
+            anchor = same_bus_node_ids[0]
+            for node_id in same_bus_node_ids[1:]:
+                active_adjacency.setdefault(anchor, set()).add(node_id)
+                active_adjacency.setdefault(node_id, set()).add(anchor)
+
         if legacy_phase_seen:
             warnings.append("检测到拓扑中存在非三相相数设置，请确认相别、相序与端点节点一致。")
 
@@ -1157,6 +1200,120 @@ class BuildExportService:
             "active_edge_count": active_edge_count,
             "disconnected_count": len(disconnected),
         }
+
+    def _append_load_runtime_capacity_warnings(
+        self,
+        *,
+        project: dict[str, Any] | None,
+        node: dict[str, Any],
+        node_map: dict[str, dict[str, Any]],
+        edges: list[dict[str, Any]],
+        warnings: list[str],
+    ) -> None:
+        if not isinstance(project, dict):
+            return
+
+        binding = node.get("runtime_binding") if isinstance(node.get("runtime_binding"), dict) else {}
+        if not binding:
+            return
+        assets = project.get("assets") if isinstance(project.get("assets"), dict) else {}
+        year_path = self._asset_path(assets.get(str(binding.get("year_map_file_id") or "")))
+        model_path = self._asset_path(assets.get(str(binding.get("model_library_file_id") or "")))
+        if year_path is None or model_path is None:
+            return
+
+        stats = self._load_runtime_stats(year_path, model_path)
+        peak_kw = self._safe_float(stats.get("peak_kw"), 0.0)
+        if peak_kw <= 0:
+            return
+
+        params = node.get("params") if isinstance(node.get("params"), dict) else {}
+        if self._normalize_load_category(params.get("category")) != "residential":
+            return
+
+        label = str(node.get("name") or node.get("id") or "负荷节点")
+        design_kw = self._safe_float(params.get("design_kw"), 0.0)
+        connected_tx = self._connected_distribution_transformer(str(node.get("id") or ""), node_map, edges)
+        connected_tx_params = connected_tx.get("params") if isinstance(connected_tx, dict) and isinstance(connected_tx.get("params"), dict) else {}
+        connected_tx_kva = self._safe_float(connected_tx_params.get("rated_kva"), 0.0)
+        load_tx_kva = self._safe_float(params.get("transformer_capacity_kva"), 0.0)
+
+        if connected_tx_kva > 0 and load_tx_kva > 0:
+            denominator = max(connected_tx_kva, load_tx_kva, 1.0)
+            if abs(connected_tx_kva - load_tx_kva) / denominator > 0.02:
+                warnings.append(
+                    f"负荷节点 {label} 的 transformer_capacity_kva={load_tx_kva:.1f} kVA 与相连用户配变 "
+                    f"{connected_tx.get('name') or connected_tx.get('id')} rated_kva={connected_tx_kva:.1f} kVA 不一致；"
+                    "OpenDSS 建模以用户配变节点为准。"
+                )
+
+        capacity_kva = connected_tx_kva or load_tx_kva
+
+        q_to_p_ratio = self._safe_float(params.get("q_to_p_ratio"), 0.0)
+        if q_to_p_ratio <= 0 and design_kw > 0:
+            q_to_p_ratio = self._safe_float(params.get("kvar"), 0.0) / max(design_kw, 1e-9)
+        peak_kva = peak_kw * math.sqrt(1.0 + max(q_to_p_ratio, 0.0) ** 2)
+        pf_limit = min(max(self._safe_float(params.get("transformer_pf_limit"), self._safe_float(params.get("pf"), 0.95)), 0.0), 1.0)
+        reserve_ratio = min(max(self._safe_float(params.get("transformer_reserve_ratio"), 0.15), 0.0), 0.95)
+        operating_denominator = pf_limit * (1.0 - reserve_ratio)
+        required_kva = peak_kva
+        if operating_denominator > 0:
+            required_kva = max(required_kva, peak_kw / operating_denominator)
+        recommended_kva = self._next_standard_transformer_kva(required_kva)
+
+        if capacity_kva <= 0:
+            warnings.append(
+                f"居民负荷节点 {label} 未设置相连用户配变容量；按导入曲线峰值 {peak_kw:.1f} kW "
+                f"估算，建议用户配变 rated_kva 不低于 {recommended_kva:.0f} kVA。"
+            )
+            return
+
+        if required_kva > capacity_kva * 1.02:
+            warnings.append(
+                f"居民负荷节点 {label} 当前相连/配置配变容量 {capacity_kva:.1f} kVA；按导入曲线峰值 {peak_kw:.1f} kW、"
+                f"无功比例和 {reserve_ratio:.0%} 备用率估算，建议容量不低于 {recommended_kva:.0f} kVA。"
+                "若已有真实台账容量，请以台账为准；若没有真实容量，建议将该值回填到相连用户配变 rated_kva。"
+            )
+
+    def _connected_distribution_transformer(
+        self,
+        node_id: str,
+        node_map: dict[str, dict[str, Any]],
+        edges: list[dict[str, Any]],
+    ) -> dict[str, Any] | None:
+        if not node_id:
+            return None
+        for edge in edges:
+            if not isinstance(edge, dict):
+                continue
+            from_node_id = str(edge.get("from_node_id") or "").strip()
+            to_node_id = str(edge.get("to_node_id") or "").strip()
+            if from_node_id != node_id and to_node_id != node_id:
+                continue
+            other_id = to_node_id if from_node_id == node_id else from_node_id
+            other_node = node_map.get(other_id)
+            if other_node and self._is_distribution_transformer_node(other_node):
+                return other_node
+        return None
+
+    @staticmethod
+    def _normalize_load_category(value: Any) -> str:
+        text = str(value or "industrial").strip().lower()
+        if text in {"residential", "resident", "居民", "居民负荷"}:
+            return "residential"
+        if text in {"commercial", "commerce", "business", "商业", "商业负荷"}:
+            return "commercial"
+        return "industrial"
+
+    @staticmethod
+    def _next_standard_transformer_kva(required_kva: float) -> float:
+        standards = (50, 80, 100, 125, 160, 200, 250, 315, 400, 500, 630, 800, 1000, 1250, 1600, 2000, 2500, 3150, 4000, 5000, 6300, 8000)
+        if required_kva <= 0:
+            return 0.0
+        for value in standards:
+            if required_kva <= value:
+                return float(value)
+        return math.ceil(required_kva / 1000.0) * 1000.0
 
     def _find_duplicates(self, values: list[str]) -> list[str]:
         seen: set[str] = set()

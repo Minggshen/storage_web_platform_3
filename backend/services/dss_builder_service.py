@@ -101,6 +101,7 @@ class DssBuilderService:
     }
     LOAD_MODEL_DEFAULT = 1
     LOAD_CONNECTION_DEFAULT = "wye"
+    COMMON_LINE_LINE_KV = (0.4, 6.0, 6.3, 10.0, 20.0, 35.0, 66.0, 110.0, 220.0)
 
     def __init__(self, base_kv: float = 10.0) -> None:
         self.base_kv = float(base_kv)
@@ -338,6 +339,10 @@ class DssBuilderService:
             to_node_id = str(edge.get("to_node_id", "")).strip()
             if from_node_id not in node_map or to_node_id not in node_map:
                 continue
+            if self._is_transformer_connection_edge(node_map[from_node_id], node_map[to_node_id]):
+                continue
+            if self._bus_name(node_map[from_node_id]) == self._bus_name(node_map[to_node_id]):
+                continue
             values = self._linecode_electrical_values(linecode, params)
             emitted.add(linecode)
             lines.extend(
@@ -424,6 +429,9 @@ class DssBuilderService:
 
             from_bus = self._bus_name(from_node)
             to_bus = self._bus_name(to_node)
+            if from_bus == to_bus:
+                lines.append(f"! skipped {edge_id}: both endpoints map to OpenDSS bus {from_bus}")
+                continue
             phases = self._edge_phases(edge, from_node, to_node)
             length_km = self._num(params.get("length_km"), 0.0)
             units = str(params.get("units") or params.get("length_unit") or "").strip()
@@ -616,6 +624,9 @@ class DssBuilderService:
             if self._is_transformer_connection_edge(from_node, to_node):
                 lines.append(f"! skipped {edge_id}: connection is represented by Transformer winding")
                 continue
+            if self._bus_name(from_node) == self._bus_name(to_node):
+                lines.append(f"! skipped {edge_id}: both endpoints map to the same OpenDSS bus")
+                continue
             params = edge.get("params") if isinstance(edge.get("params"), dict) else {}
             enabled = "yes" if self._bool(params.get("enabled"), True) and not self._bool(params.get("normally_open"), False) else "no"
             lines.append(f"Edit Line.{edge_id} enabled={enabled}")
@@ -749,6 +760,8 @@ class DssBuilderService:
             to_node = node_map[to_node_id]
             if self._is_transformer_connection_edge(from_node, to_node):
                 continue
+            if self._bus_name(from_node) == self._bus_name(to_node):
+                continue
 
             params = edge.get("params") if isinstance(edge.get("params"), dict) else {}
             phases = self._edge_phases(edge, from_node, to_node)
@@ -793,6 +806,12 @@ class DssBuilderService:
             to_node_id = str(edge.get("to_node_id", "")).strip()
             if from_node_id not in node_map or to_node_id not in node_map:
                 continue
+            from_node = node_map[from_node_id]
+            to_node = node_map[to_node_id]
+            if self._is_transformer_connection_edge(from_node, to_node):
+                continue
+            if self._bus_name(from_node) == self._bus_name(to_node):
+                continue
             params = edge.get("params") if isinstance(edge.get("params"), dict) else {}
             if not self._bool(params.get("enabled"), True) or self._bool(params.get("normally_open"), False):
                 continue
@@ -819,6 +838,8 @@ class DssBuilderService:
             from_node = node_map[from_node_id]
             to_node = node_map[to_node_id]
             if self._is_transformer_connection_edge(from_node, to_node):
+                continue
+            if self._bus_name(from_node) == self._bus_name(to_node):
                 continue
 
             params = edge.get("params") if isinstance(edge.get("params"), dict) else {}
@@ -949,6 +970,8 @@ class DssBuilderService:
             if self._is_transformer_connection_edge(from_node, to_node):
                 skipped_transformer_connection_edge_ids.append(edge_id)
                 continue
+            if self._bus_name(from_node) == self._bus_name(to_node):
+                continue
             params = edge.get("params") if isinstance(edge.get("params"), dict) else {}
             editable_line_ids.append(edge_id)
             if self._bool(params.get("normally_open"), False):
@@ -1018,10 +1041,11 @@ class DssBuilderService:
             missing_fields: list[str] | None = None,
             dss_element: str = "",
             doc: str = "",
+            level: str = "error",
         ) -> None:
             issues.append(
                 {
-                    "level": "error",
+                    "level": level,
                     "code": code,
                     "stage": stage,
                     "object_type": object_type,
@@ -1146,14 +1170,15 @@ class DssBuilderService:
             bus_name = self._bus_name(node)
             if bus_name in bus_names and bus_names[bus_name] != node_id:
                 add_issue(
-                    "OPENDSS_NAME_COLLISION",
+                    "OPENDSS_SHARED_BUS",
                     "naming",
                     node_type,
                     node_id,
                     f"OpenDSS bus 名称 {bus_name} 被多个对象复用：{bus_names[bus_name]} 与 {node_id}。",
-                    "如不是同母线挂载，请在对象参数中填写不同的 dss_bus_name。",
+                    "同母线挂载设备可以复用；如果代表不同电气节点，请填写不同的 dss_bus_name。",
                     [],
                     doc="OpenDSS naming",
+                    level="warning",
                 )
             bus_names[bus_name] = node_id
             element_name = f"{node_type}.{self._safe_name(str(params.get('dss_name') or node_id))}"
@@ -1201,6 +1226,20 @@ class DssBuilderService:
             from_node = node_map[from_id]
             to_node = node_map[to_id]
             if self._is_transformer_connection_edge(from_node, to_node):
+                continue
+            from_bus = self._bus_name(from_node)
+            to_bus = self._bus_name(to_node)
+            if from_bus == to_bus:
+                add_issue(
+                    "OPENDSS_LINE_SAME_BUS",
+                    "line",
+                    "line",
+                    edge_id,
+                    f"线路 {edge_id} 两端都映射到 OpenDSS 母线 {from_bus}。",
+                    "如果这是同母线挂载关系，请删除这条线路；如果是实际电缆/架空线，请把两端节点设置为不同的 dss_bus_name。",
+                    ["from_node_id", "to_node_id", "dss_bus_name"],
+                    doc="Line bus1/bus2",
+                )
                 continue
             if not self._has_value(params, "length_km"):
                 add_issue("OPENDSS_LINE_LENGTH_REQUIRED", "line", "line", edge_id, f"线路 {edge_id} 缺少长度。", "请在线路参数中填写 length_km。", ["length_km"], doc="Line")
@@ -1374,6 +1413,19 @@ class DssBuilderService:
             if a in node_map and b in node_map:
                 graph.setdefault(a, []).append(b)
                 graph.setdefault(b, []).append(a)
+        nodes_by_bus: dict[str, list[str]] = {}
+        for node in nodes:
+            node_id = str(node.get("id") or "")
+            if not node_id:
+                continue
+            nodes_by_bus.setdefault(self._bus_name(node), []).append(node_id)
+        for same_bus_node_ids in nodes_by_bus.values():
+            if len(same_bus_node_ids) < 2:
+                continue
+            anchor = same_bus_node_ids[0]
+            for node_id in same_bus_node_ids[1:]:
+                graph.setdefault(anchor, []).append(node_id)
+                graph.setdefault(node_id, []).append(anchor)
         reachable: set[str] = set()
         stack = [str(node.get("id")) for node in grid_nodes if node.get("id") is not None]
         while stack:
@@ -2149,8 +2201,8 @@ print(json.dumps(result, ensure_ascii=False), flush=True)
         if raw in (None, ""):
             return 0.0
         kv = self._num(raw, 0.0)
-        if abs(kv - 110.0 / math.sqrt(3.0)) <= 0.5:
-            return 110.0
+        if int(phases) > 1:
+            kv = self._line_line_kv_from_possible_line_neutral(kv)
         return kv
 
     def _load_voltage_kv_for_opendss(self, params: dict[str, Any], phases: int) -> float:
@@ -2159,9 +2211,18 @@ print(json.dumps(result, ensure_ascii=False), flush=True)
 
     def _distribution_voltage_kv_for_opendss(self, value: Any, phases: int) -> float:
         kv = self._num(value, 0.0)
-        base_ln = float(self.base_kv) / math.sqrt(3.0)
-        if kv > 0 and abs(kv - base_ln) <= max(0.02, base_ln * 0.03):
-            return float(self.base_kv)
+        if int(phases) > 1:
+            kv = self._line_line_kv_from_possible_line_neutral(kv)
+        return kv
+
+    @classmethod
+    def _line_line_kv_from_possible_line_neutral(cls, kv: float) -> float:
+        if kv <= 0:
+            return kv
+        for nominal_ll in cls.COMMON_LINE_LINE_KV:
+            nominal_ln = nominal_ll / math.sqrt(3.0)
+            if abs(kv - nominal_ln) <= max(0.002, nominal_ln * 0.03):
+                return float(nominal_ll)
         return kv
 
     def _resource_apparent_power_kva(self, node: dict[str, Any]) -> float:

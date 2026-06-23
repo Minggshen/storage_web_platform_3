@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import csv
 import io
+from urllib.parse import quote
 
 from typing import Any
 
@@ -383,7 +384,10 @@ def preview_node_files(project_id: str, node_id: str) -> PreviewNodeResponse:
         PreviewFileInfo(
             name=f["name"],
             type=f["type"],
-            url=f"/api/assets/preview/{project_id}/{node_id}/{f['name']}",
+            url=(
+                f"/api/assets/preview/{quote(project_id, safe='')}/"
+                f"{quote(node_id, safe='')}/{quote(f['name'], safe='')}"
+            ),
         )
         for f in files
     ]

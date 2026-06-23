@@ -12,6 +12,7 @@ from typing import List
 from fastapi import UploadFile
 
 from models.project_model import AssetRef, DeviceRecord, ListProjectsItem, NetworkEdge, NetworkModel, NetworkNode, ProjectModel, SolverBindingConfig
+from services.atomic_io import write_text_atomic
 
 PROJECT_ID_PATTERN = re.compile(r"^[A-Za-z0-9_-]{6,64}$")
 
@@ -126,7 +127,7 @@ class ProjectModelService:
             project.created_at = self._format_timestamp(project_file.stat().st_ctime) if project_file.exists() else self._now_iso()
 
         data = self._model_dump(project)
-        project_file.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+        write_text_atomic(project_file, json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
         return project_id, project_file
 
     def load_project(self, project_id: str) -> ProjectModel:

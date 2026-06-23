@@ -174,6 +174,12 @@ function AssetsPage() {
     };
   }, []);
 
+  useEffect(() => {
+    return () => {
+      processAbort?.abort();
+    };
+  }, [processAbort]);
+
   async function onUploadTariff() {
     if (!projectId || !tariffFile) return;
     setUploading(true);
@@ -214,7 +220,9 @@ function AssetsPage() {
       const data = await listUploadedNodes(projectId);
       setUploadedNodeIds(data.uploaded_nodes);
       setProcessedNodeIds(data.processed_nodes);
-    } catch { /* network or parse failure, surfaced via error state */ }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
   }
 
   async function onUploadRawData() {
@@ -284,6 +292,11 @@ function AssetsPage() {
     setPreviewNodeId(nodeId);
     setPreviewFile(null);
     setPreviewContent(null);
+    setPreviewFiles([]);
+    if (blobUrlRef.current) {
+      URL.revokeObjectURL(blobUrlRef.current);
+      blobUrlRef.current = null;
+    }
     if (!nodeId || !projectId) return;
     setPreviewLoading(true);
     try {
@@ -307,9 +320,17 @@ function AssetsPage() {
         const url = URL.createObjectURL(result);
         blobUrlRef.current = url;
         setPreviewContent({ kind: 'image', imageUrl: url });
-      } else if ('content' in result && result.content) {
-        setPreviewContent({ kind: 'text', textContent: result.content });
-      } else if ('rows' in result && result.rows) {
+      } else if ('content' in result) {
+        if (blobUrlRef.current) {
+          URL.revokeObjectURL(blobUrlRef.current);
+          blobUrlRef.current = null;
+        }
+        setPreviewContent({ kind: 'text', textContent: result.content ?? '' });
+      } else if ('rows' in result) {
+        if (blobUrlRef.current) {
+          URL.revokeObjectURL(blobUrlRef.current);
+          blobUrlRef.current = null;
+        }
         setPreviewContent({
           kind: 'csv',
           columns: result.columns,

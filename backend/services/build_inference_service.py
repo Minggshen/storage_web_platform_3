@@ -23,6 +23,7 @@ class BuildInferenceService:
         project = self.project_service.load_project(project_id)
         rows: List[SearchSpaceInferenceRow] = []
         records = project.device_library.records
+        node_map = {node.id: node for node in project.network.nodes}
 
         for node in project.network.nodes:
             if str(getattr(node.type, "value", node.type)) != "load":
@@ -37,7 +38,9 @@ class BuildInferenceService:
                 "search_duration_max_h",
             ):
                 params.pop(key, None)
-            transformer_capacity_kva = self._safe_float(params.get("transformer_capacity_kva"))
+            connected_tx = self._connected_distribution_transformer(node.id, node_map, project.network.edges)
+            connected_tx_kva = self._safe_float((connected_tx.params or {}).get("rated_kva")) if connected_tx else None
+            transformer_capacity_kva = connected_tx_kva or self._safe_float(params.get("transformer_capacity_kva"))
             transformer_pf_limit = self._safe_float(params.get("transformer_pf_limit"), 0.95)
             transformer_reserve_ratio = self._safe_float(params.get("transformer_reserve_ratio"), 0.15)
             grid_interconnection_limit_kw = None
@@ -73,6 +76,31 @@ class BuildInferenceService:
                 explain=result.explain,
             ))
         return rows
+
+    def _connected_distribution_transformer(self, node_id: str, node_map: Dict[str, Any], edges: List[Any]) -> Any | None:
+        if not node_id:
+            return None
+        for edge in edges:
+            from_node_id = str(getattr(edge, "from_node_id", "") or "").strip()
+            to_node_id = str(getattr(edge, "to_node_id", "") or "").strip()
+            if from_node_id != node_id and to_node_id != node_id:
+                continue
+            other_id = to_node_id if from_node_id == node_id else from_node_id
+            other = node_map.get(other_id)
+            if other is not None and self._is_distribution_transformer_node(other):
+                return other
+        return None
+
+    @staticmethod
+    def _is_distribution_transformer_node(node: Any) -> bool:
+        node_type = str(getattr(getattr(node, "type", ""), "value", getattr(node, "type", "")) or "").strip().lower()
+        if node_type == "distribution_transformer":
+            return True
+        if node_type != "transformer":
+            return False
+        params = getattr(node, "params", None) or {}
+        role = str(params.get("transformer_role") or params.get("role") or "").strip().lower()
+        return role in {"distribution", "distribution_transformer", "customer_distribution"} or bool(params.get("is_distribution_transformer"))
 
     def _load_runtime_stats(self, project, node) -> Dict[str, Any]:
         if not node.runtime_binding:

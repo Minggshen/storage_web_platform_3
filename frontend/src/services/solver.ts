@@ -44,27 +44,29 @@ export type SolverRunOptions = {
 
 export async function fetchLatestSolverTask(projectId: string): Promise<SolverTask | null> {
   const data = await http<{ success: boolean; project_id: string; task: SolverTask | null }>(
-    `/api/solver/project/${projectId}/latest`,
+    `/api/solver/project/${encodeURIComponent(projectId)}/latest`,
   );
   return data.task;
 }
 
 export async function fetchSolverTasks(projectId: string): Promise<SolverTask[]> {
   const data = await http<{ success: boolean; project_id: string; tasks: SolverTask[] }>(
-    `/api/solver/project/${projectId}/tasks`,
+    `/api/solver/project/${encodeURIComponent(projectId)}/tasks`,
   );
   return Array.isArray(data.tasks) ? data.tasks : [];
 }
 
 export async function fetchTaskLogs(taskId: string, projectId?: string): Promise<SolverTask> {
   const query = projectId ? `?project_id=${encodeURIComponent(projectId)}` : '';
-  const data = await http<{ success: boolean; task: SolverTask }>(`/api/solver/task/${taskId}/logs${query}`);
+  const data = await http<{ success: boolean; task: SolverTask }>(
+    `/api/solver/task/${encodeURIComponent(taskId)}/logs${query}`,
+  );
   return data.task;
 }
 
 export async function cancelSolverTask(projectId: string, taskId: string): Promise<SolverTask> {
   const data = await http<{ success: boolean; task: SolverTask }>(
-    `/api/solver/project/${projectId}/task/${taskId}/cancel`,
+    `/api/solver/project/${encodeURIComponent(projectId)}/task/${encodeURIComponent(taskId)}/cancel`,
     { method: 'POST' },
   );
   return data.task;
@@ -85,7 +87,7 @@ export type DeletedSolverTask = {
 export async function deleteSolverTask(projectId: string, taskId: string): Promise<DeletedSolverTask> {
   const encodedTaskId = encodeURIComponent(taskId);
   const data = await http<{ success: boolean; deleted_task: DeletedSolverTask }>(
-    `/api/solver/project/${projectId}/task/${encodedTaskId}`,
+    `/api/solver/project/${encodeURIComponent(projectId)}/task/${encodedTaskId}`,
     { method: 'DELETE' },
   );
   return data.deleted_task;
@@ -96,47 +98,49 @@ function taskQuery(taskId?: string) {
 }
 
 export async function fetchSolverSummary(projectId: string, taskId?: string) {
-  return http<SolverSummaryResponse>(`/api/solver/project/${projectId}/summary${taskQuery(taskId)}`);
+  return http<SolverSummaryResponse>(`/api/solver/project/${encodeURIComponent(projectId)}/summary${taskQuery(taskId)}`);
 }
 
 export async function fetchReportData(projectId: string, taskId?: string): Promise<ReportPayload> {
   const data = await http<{ success: boolean; project_id: string; payload: ReportPayload }>(
-    `/api/solver/project/${projectId}/report-data${taskQuery(taskId)}`,
+    `/api/solver/project/${encodeURIComponent(projectId)}/report-data${taskQuery(taskId)}`,
   );
   return data.payload;
 }
 
 export async function fetchResultCharts(projectId: string, taskId?: string) {
-  return http<ResultChartsResponse>(`/api/solver/project/${projectId}/charts${taskQuery(taskId)}`);
+  return http<ResultChartsResponse>(`/api/solver/project/${encodeURIComponent(projectId)}/charts${taskQuery(taskId)}`);
 }
 
 export async function fetchResultFiles(projectId: string, taskId?: string) {
-  return http<ResultFilesResponse>(`/api/solver/project/${projectId}/result-files${taskQuery(taskId)}`);
+  return http<ResultFilesResponse>(`/api/solver/project/${encodeURIComponent(projectId)}/result-files${taskQuery(taskId)}`);
 }
 
 export async function fetchResultFilePreview(projectId: string, relativePath: string, group?: string, taskId?: string) {
   const query = new URLSearchParams({ relative_path: relativePath });
   if (group) query.set('group', group);
   if (taskId) query.set('task_id', taskId);
-  return http<ResultFilePreviewResponse>(`/api/solver/project/${projectId}/result-file?${query.toString()}`);
+  return http<ResultFilePreviewResponse>(
+    `/api/solver/project/${encodeURIComponent(projectId)}/result-file?${query.toString()}`,
+  );
 }
 
 export function getResultFileDownloadUrl(projectId: string, relativePath: string, group?: string, taskId?: string) {
   const query = new URLSearchParams({ relative_path: relativePath });
   if (group) query.set('group', group);
   if (taskId) query.set('task_id', taskId);
-  return `${API_BASE}/api/solver/project/${projectId}/result-file/download?${query.toString()}`;
+  return `${API_BASE}/api/solver/project/${encodeURIComponent(projectId)}/result-file/download?${query.toString()}`;
 }
 
 export function getDiagnosticsDownloadUrl(projectId: string, taskId?: string) {
   const query = new URLSearchParams();
   if (taskId) query.set('task_id', taskId);
   const suffix = query.toString() ? `?${query.toString()}` : '';
-  return `${API_BASE}/api/solver/project/${projectId}/diagnostics/download${suffix}`;
+  return `${API_BASE}/api/solver/project/${encodeURIComponent(projectId)}/diagnostics/download${suffix}`;
 }
 
 export async function rerunSolver(projectId: string, options: SolverRunOptions = {}) {
-  return http<{ success: boolean; task: SolverTask }>(`/api/solver/project/${projectId}/run`, {
+  return http<{ success: boolean; task: SolverTask }>(`/api/solver/project/${encodeURIComponent(projectId)}/run`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({

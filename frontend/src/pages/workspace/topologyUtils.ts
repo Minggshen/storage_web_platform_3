@@ -33,7 +33,6 @@ import {
   SERVICE_LINE_LOW_Z_CURRENT_THRESHOLD_A,
   SERVICE_LINE_MIN_RATED_A,
   SERVICE_LINE_RESOURCE_MARGIN,
-  SERVICE_LINE_TRANSFORMER_EMERGENCY_MARGIN,
   TRANSFORMER_NODE_TYPES,
   WIRE_DATA_CU,
   WIRE_XR_RATIO,
@@ -200,6 +199,18 @@ export function cleanLoadPanelParams(params: Record<string, unknown> | undefined
   return syncLoadElectricalParams(next);
 }
 
+function normalizeCommonLineNeutralToLineLineKv(value: unknown) {
+  const kv = Number(value);
+  if (!(Number.isFinite(kv) && kv > 0)) return value;
+  for (const nominalLineLineKv of [0.4, 6.0, 6.3, 10.0, 20.0, 35.0, 66.0, 110.0, 220.0]) {
+    const lineNeutralKv = nominalLineLineKv / Math.sqrt(3);
+    if (Math.abs(kv - lineNeutralKv) <= Math.max(0.002, lineNeutralKv * 0.03)) {
+      return nominalLineLineKv;
+    }
+  }
+  return kv;
+}
+
 // ── Param picking ──
 
 export function pickParamKeys(
@@ -358,14 +369,24 @@ export function normalizeNode(node: Partial<TopologyNode>, index: number): Topol
   const strippedParams = stripEconomicParams(rawParams);
   const withDefaults = mergeParamDefaults(buildNodeDefaultParams(type as NodeKind), strippedParams);
   const params = type === 'load' ? cleanLoadPanelParams(withDefaults) : withDefaults;
-  if ((type === 'grid' || type === 'source') && Math.abs(Number(params.base_kv) - 110 / Math.sqrt(3)) <= 0.5) {
-    params.base_kv = 110;
+  if (type === 'grid' || type === 'source') {
+    params.base_kv = normalizeCommonLineNeutralToLineLineKv(params.base_kv);
   }
-  if (isTransformerType(type) && Math.abs(Number(params.primary_voltage_kv) - 110 / Math.sqrt(3)) <= 0.5) {
-    params.primary_voltage_kv = 110;
+  if (isTransformerType(type)) {
+    params.primary_voltage_kv = normalizeCommonLineNeutralToLineLineKv(params.primary_voltage_kv);
+    params.voltage_level_kv = normalizeCommonLineNeutralToLineLineKv(params.voltage_level_kv);
   }
-  if (type === 'load' && Math.abs(Number(params.target_kv_ln) - 10 / Math.sqrt(3)) <= 0.2) {
-    params.target_kv_ln = 10;
+  if (
+    type !== 'grid' &&
+    type !== 'source' &&
+    !isTransformerType(type) &&
+    type !== 'load' &&
+    numberParam(params, 'phases', 3) > 1
+  ) {
+    params.voltage_level_kv = normalizeCommonLineNeutralToLineLineKv(params.voltage_level_kv);
+  }
+  if (type === 'load' && numberParam(params, 'phases', 3) > 1) {
+    params.target_kv_ln = normalizeCommonLineNeutralToLineLineKv(params.target_kv_ln);
   }
   if (type === 'load' && params.allow_grid_export === undefined) {
     params.allow_grid_export = legacyBool(params.allow_reverse_power_to_grid ?? params.allow_export_to_grid, false);
@@ -813,10 +834,9 @@ export function buildDistributionServiceEdgeProfile(
   const transformerCurrentA = threePhaseCurrentFromKva(transformerKva, secondaryKv);
   const resourceCurrentA = threePhaseCurrentFromKva(resourceKva, secondaryKv);
   if (transformerCurrentA <= 0 && resourceCurrentA <= 0) return null;
-  const ratedCurrentA = Math.max(transformerCurrentA, resourceCurrentA * SERVICE_LINE_RESOURCE_MARGIN, SERVICE_LINE_MIN_RATED_A);
+  const ratedCurrentA = Math.max(resourceCurrentA * SERVICE_LINE_RESOURCE_MARGIN, SERVICE_LINE_MIN_RATED_A);
   const emergCurrentA = Math.max(
     ratedCurrentA * SERVICE_LINE_EMERGENCY_MARGIN,
-    transformerCurrentA * SERVICE_LINE_TRANSFORMER_EMERGENCY_MARGIN,
     ratedCurrentA,
   );
   return {
@@ -956,14 +976,11 @@ export function inferAutoEdgeParams(
     const resNode = isDistributionTransformerNode(fromNode) ? toNode : fromNode;
     const txParams = txNode?.params ?? {};
     const secondaryKv = numberParam(txParams, 'voltage_level_kv', 0.4);
-    const transformerKva = numberParam(txParams, 'rated_kva', 1000);
     const resourceKva = resNode ? resourceApparentPowerKva(resNode) : 0;
-    const transformerCurrentA = threePhaseCurrentFromKva(transformerKva, secondaryKv);
     const resourceCurrentA = threePhaseCurrentFromKva(resourceKva, secondaryKv);
-    const ratedCurrentA = Math.max(transformerCurrentA, resourceCurrentA * SERVICE_LINE_RESOURCE_MARGIN, SERVICE_LINE_MIN_RATED_A);
+    const ratedCurrentA = Math.max(resourceCurrentA * SERVICE_LINE_RESOURCE_MARGIN, SERVICE_LINE_MIN_RATED_A);
     const emergCurrentA = Math.max(
       ratedCurrentA * SERVICE_LINE_EMERGENCY_MARGIN,
-      transformerCurrentA * SERVICE_LINE_TRANSFORMER_EMERGENCY_MARGIN,
       ratedCurrentA,
     );
 

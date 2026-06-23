@@ -22,6 +22,15 @@ backend/static/
 data/
 logs/
 python/
+storage_engine_project/outputs/
+storage_engine_project/logs/
+storage_engine_project/inputs/node_loads/
+storage_engine_project/inputs/registry/*.xlsx
+storage_engine_project/inputs/registry/*.xls
+storage_engine_project/inputs/tariff/*.xlsx
+storage_engine_project/inputs/tariff/*.xls
+storage_engine_project/inputs/storage/*.xlsx
+storage_engine_project/inputs/storage/*.xls
 
 patent_outputs/
 

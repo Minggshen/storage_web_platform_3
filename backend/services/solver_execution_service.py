@@ -20,6 +20,7 @@ from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 import numpy as np
 
+from services.atomic_io import write_text_atomic
 from services.build_signature import (
     asset_signature,
     build_input_hash,
@@ -51,6 +52,7 @@ class SolverExecutionService:
 
     NETWORK_TOPOLOGY_SUMMARY_CACHE_FILE = "network_topology_summary_cache.json"
     NETWORK_TOPOLOGY_SUMMARY_CACHE_VERSION = 1
+    COMMON_LINE_LINE_KV = (0.4, 6.0, 6.3, 10.0, 20.0, 35.0, 66.0, 110.0, 220.0)
 
     def __init__(
         self,
@@ -720,10 +722,10 @@ class SolverExecutionService:
 
     def _write_task_files(self, task_dir: Path, task: Dict[str, Any]) -> None:
         data = json.dumps(task, ensure_ascii=False, indent=2)
-        (task_dir / "task_meta.json").write_text(data, encoding="utf-8")
+        write_text_atomic(task_dir / "task_meta.json", data, encoding="utf-8")
         state_dir = task_dir / "state"
         state_dir.mkdir(parents=True, exist_ok=True)
-        (state_dir / "task.json").write_text(data, encoding="utf-8")
+        write_text_atomic(state_dir / "task.json", data, encoding="utf-8")
 
     def _load_task_summary_rows(self, task: Dict[str, Any]) -> List[Dict[str, Any]]:
         output_dir = Path(str(task.get("outputs_dir") or ""))
@@ -3917,11 +3919,45 @@ class SolverExecutionService:
         return voltage
 
     @staticmethod
+    def _is_grid_node(node: Dict[str, Any] | None) -> bool:
+        return str((node or {}).get("type") or "").strip().lower() in {"grid", "source"}
+
+    @staticmethod
+    def _is_transformer_node(node: Dict[str, Any] | None) -> bool:
+        return str((node or {}).get("type") or "").strip().lower() in {"transformer", "distribution_transformer"}
+
+    @staticmethod
+    def _is_distribution_transformer_node(node: Dict[str, Any] | None) -> bool:
+        if not node:
+            return False
+        node_type = str(node.get("type") or "").strip().lower()
+        if node_type == "distribution_transformer":
+            return True
+        if node_type != "transformer":
+            return False
+        params = node.get("params") if isinstance(node.get("params"), dict) else {}
+        role = str(params.get("transformer_role") or params.get("role") or "").strip().lower()
+        return role in {"distribution", "distribution_transformer", "customer_distribution"} or SolverExecutionService._bool(
+            params.get("is_distribution_transformer")
+        )
+
+    @staticmethod
+    def _is_low_side_resource_node(node: Dict[str, Any] | None) -> bool:
+        return str((node or {}).get("type") or "").strip().lower() in {"load", "storage", "pv", "wind", "capacitor"}
+
+    @staticmethod
     def _is_transformer_link(node_a: Dict[str, Any] | None, node_b: Dict[str, Any] | None) -> bool:
         if not node_a or not node_b:
             return False
-        types = {str(node_a.get("type") or "").strip().lower(), str(node_b.get("type") or "").strip().lower()}
-        return bool(types & {"grid", "source"}) and "transformer" in types
+        if SolverExecutionService._is_grid_node(node_a) and SolverExecutionService._is_transformer_node(node_b):
+            return True
+        if SolverExecutionService._is_grid_node(node_b) and SolverExecutionService._is_transformer_node(node_a):
+            return True
+        if SolverExecutionService._is_distribution_transformer_node(node_b) and not SolverExecutionService._is_low_side_resource_node(node_a):
+            return True
+        if SolverExecutionService._is_distribution_transformer_node(node_a) and not SolverExecutionService._is_low_side_resource_node(node_b):
+            return True
+        return False
 
     def _estimate_voltage_drop_pu(self, edge: Dict[str, Any], load_kw: float, voltage_kv: float, phases: int) -> float:
         if load_kw <= 0 or voltage_kv <= 0:
@@ -3981,8 +4017,9 @@ class SolverExecutionService:
         node_type = str(node.get("type") or "").strip().lower()
         if node_type in {"grid", "source"}:
             return self._safe_name(str(params.get("source_bus") or "sourcebus"))
-        if node_type == "transformer":
-            return self._safe_name(str(params.get("secondary_bus_name") or "n0"))
+        if self._is_transformer_node(node):
+            default_bus = f"{self._safe_name(str(node.get('id') or 'tx'))}_lv" if self._is_distribution_transformer_node(node) else "n0"
+            return self._safe_name(str(params.get("secondary_bus_name") or default_bus))
         node_id = params.get("node_id")
         if node_type == "load" and node_id not in (None, ""):
             return self._safe_name(f"n{int(float(node_id))}")
@@ -3992,10 +4029,10 @@ class SolverExecutionService:
         params = node.get("params") if isinstance(node.get("params"), dict) else {}
         node_type = str(node.get("type") or "").strip().lower()
         if node_type in {"grid", "source"}:
-            return self._number(params, "base_kv", 110.0)
+            return self._estimate_line_line_voltage_kv(self._number(params, "base_kv", 110.0))
         if node_type == "load":
-            return self._number(params, "target_kv_ln", 10.0)
-        return self._number(params, "voltage_level_kv", 10.0)
+            return self._estimate_line_line_voltage_kv(self._number(params, "target_kv_ln", 10.0))
+        return self._estimate_line_line_voltage_kv(self._number(params, "voltage_level_kv", 10.0))
 
     def _node_design_load_kw(self, node: Dict[str, Any]) -> float:
         params = node.get("params") if isinstance(node.get("params"), dict) else {}
@@ -4025,9 +4062,10 @@ class SolverExecutionService:
     def _estimate_line_line_voltage_kv(voltage_kv: float) -> float:
         if voltage_kv <= 0:
             return 0.0
-        # 5.7735 kV 等字段是 10 kV 系统的相电压；线路载流量按线电压口径估算。
-        if voltage_kv <= 7.0:
-            return voltage_kv * math.sqrt(3.0)
+        for nominal_ll in SolverExecutionService.COMMON_LINE_LINE_KV:
+            nominal_ln = nominal_ll / math.sqrt(3.0)
+            if abs(voltage_kv - nominal_ln) <= max(0.002, nominal_ln * 0.03):
+                return float(nominal_ll)
         return voltage_kv
 
     def _safe_name(self, value: str) -> str:
@@ -5351,6 +5389,15 @@ class SolverExecutionService:
                     if self._optional_number(row, "avg_npv_yuan") is not None
                     else None,
                     "bestPaybackYears": self._optional_number(row, "best_payback_years"),
+                    "bestFitnessScorePct": self._optional_number(row, "best_fitness_score_pct"),
+                    "bestSafetyScorePct": self._optional_number(row, "best_safety_score_pct"),
+                    "bestEconomicScorePct": self._optional_number(row, "best_economic_score_pct"),
+                    "bestOperationSafetyScorePct": self._optional_number(row, "best_operation_safety_score_pct"),
+                    "bestDeviceSafetyScorePct": self._optional_number(row, "best_device_safety_score_pct"),
+                    "bestFitnessCompromiseCost": self._optional_number(row, "best_fitness_compromise_cost"),
+                    "bestScoreStrategyId": row.get("best_score_strategy_id") or None,
+                    "bestScorePowerKw": self._optional_number(row, "best_score_power_kw"),
+                    "bestScoreEnergyKwh": self._optional_number(row, "best_score_energy_kwh"),
                 }
             )
         return chart

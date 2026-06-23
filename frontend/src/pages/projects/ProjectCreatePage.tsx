@@ -31,7 +31,7 @@ function ProjectCreatePage() {
         throw new Error('创建成功，但未返回 project_id');
       }
 
-      navigate(`/projects/${projectId}/overview`);
+      navigate(`/projects/${encodeURIComponent(projectId)}/overview`);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {

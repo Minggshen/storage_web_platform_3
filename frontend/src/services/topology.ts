@@ -46,7 +46,7 @@ function normalizeTopology(data: any): ProjectTopology {
 
 export async function fetchProjectTopology(projectId: string): Promise<ProjectTopology> {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const data = await http<any>(`/api/topology/project/${projectId}`);
+  const data = await http<any>(`/api/topology/project/${encodeURIComponent(projectId)}`);
   return normalizeTopology(data);
 }
 
@@ -62,14 +62,15 @@ export async function saveProjectTopology(
   projectId: string,
   topology: ProjectTopology
 ): Promise<ProjectTopology> {
+  const encodedProjectId = encodeURIComponent(projectId);
   // 先尝试直接提交 topology
   try {
-    const data = await putJson(`/api/topology/project/${projectId}`, topology);
+    const data = await putJson(`/api/topology/project/${encodedProjectId}`, topology);
     return normalizeTopology(data);
   } catch (firstErr) {
     // 再尝试包装成 { network: topology }
     try {
-      const data = await putJson(`/api/topology/project/${projectId}`, {
+      const data = await putJson(`/api/topology/project/${encodedProjectId}`, {
         network: topology,
       });
       return normalizeTopology(data);
@@ -105,7 +106,9 @@ export async function saveTemplate(name: string, description: string, topology: 
 }
 
 export async function fetchTemplateDetail(templateId: string): Promise<ProjectTopology> {
-  const data = await http<{ success: boolean; template: Record<string, unknown> }>(`/api/topology/templates/${templateId}`);
+  const data = await http<{ success: boolean; template: Record<string, unknown> }>(
+    `/api/topology/templates/${encodeURIComponent(templateId)}`,
+  );
   const topology = (data.template?.topology ?? data.template ?? {}) as Record<string, unknown>;
   return {
     nodes: Array.isArray(topology.nodes) ? topology.nodes : [],
@@ -117,5 +120,5 @@ export async function fetchTemplateDetail(templateId: string): Promise<ProjectTo
 }
 
 export async function deleteTemplate(templateId: string): Promise<void> {
-  await http<unknown>(`/api/topology/templates/${templateId}`, { method: 'DELETE' });
+  await http<unknown>(`/api/topology/templates/${encodeURIComponent(templateId)}`, { method: 'DELETE' });
 }

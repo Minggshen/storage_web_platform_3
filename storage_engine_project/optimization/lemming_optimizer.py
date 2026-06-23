@@ -467,11 +467,13 @@ class LemmingOptimizer:
                     valid_paybacks.append(value)
             record["best_payback_years"] = min(valid_paybacks) if valid_paybacks else np.nan
             record["avg_investment_yuan"] = float(np.mean(investments)) if investments else np.nan
+            self._annotate_generation_objective_scores(record, feasible)
         else:
             record["best_npv_yuan"] = np.nan
             record["avg_npv_yuan"] = np.nan
             record["best_payback_years"] = np.nan
             record["avg_investment_yuan"] = np.nan
+            self._annotate_empty_generation_objective_scores(record)
 
         if best_compromise is not None:
             record["best_compromise"] = best_compromise.summary_dict()
@@ -489,6 +491,57 @@ class LemmingOptimizer:
         record["population_adjust_reason"] = self._adaptive_reason(record)
 
         return record
+
+    def _annotate_generation_objective_scores(
+        self,
+        record: dict[str, Any],
+        feasible: list[FitnessEvaluationResult],
+    ) -> None:
+        scores = compute_weighted_objective_scores(
+            npv=[self._npv_metric(result) for result in feasible],
+            irr=[self._irr_metric(result) for result in feasible],
+            payback=[self._payback_metric(result) for result in feasible],
+            investment=[self._investment_metric(result) for result in feasible],
+            transformer=[result.constraint_vector.transformer_violation_hours for result in feasible],
+            voltage=[result.constraint_vector.voltage_violation_pu for result in feasible],
+            line=[result.constraint_vector.line_loading_violation_pct for result in feasible],
+            cycle=[device_strategy_safety_metric(result) for result in feasible],
+            safety_economy_tradeoff=self.safety_economy_tradeoff,
+            economic_metric_weights=self.economic_metric_weights,
+            safety_metric_weights=self.safety_metric_weights,
+            device_safety_cost=self._device_safety_costs(feasible),
+            device_safety_beta=self.device_safety_beta,
+        )
+        fitness_values = np.asarray(scores.fitness_score, dtype=float)
+        finite_indices = np.flatnonzero(np.isfinite(fitness_values))
+        if finite_indices.size == 0:
+            self._annotate_empty_generation_objective_scores(record)
+            return
+
+        local_best_index = int(finite_indices[np.argmax(fitness_values[finite_indices])])
+        best_result = feasible[local_best_index]
+        record["best_fitness_score_pct"] = float(scores.fitness_score[local_best_index]) * 100.0
+        record["best_safety_score_pct"] = float(scores.safety_score[local_best_index]) * 100.0
+        record["best_economic_score_pct"] = float(scores.economic_score[local_best_index]) * 100.0
+        record["best_operation_safety_score_pct"] = float(scores.operation_safety_score[local_best_index]) * 100.0
+        device_score = float(scores.device_safety_score[local_best_index])
+        record["best_device_safety_score_pct"] = device_score * 100.0 if np.isfinite(device_score) else np.nan
+        record["best_fitness_compromise_cost"] = float(scores.compromise_cost[local_best_index])
+        record["best_score_strategy_id"] = best_result.decision.strategy_id
+        record["best_score_power_kw"] = float(best_result.decision.rated_power_kw)
+        record["best_score_energy_kwh"] = float(best_result.decision.rated_energy_kwh)
+
+    @staticmethod
+    def _annotate_empty_generation_objective_scores(record: dict[str, Any]) -> None:
+        record["best_fitness_score_pct"] = np.nan
+        record["best_safety_score_pct"] = np.nan
+        record["best_economic_score_pct"] = np.nan
+        record["best_operation_safety_score_pct"] = np.nan
+        record["best_device_safety_score_pct"] = np.nan
+        record["best_fitness_compromise_cost"] = np.nan
+        record["best_score_strategy_id"] = None
+        record["best_score_power_kw"] = np.nan
+        record["best_score_energy_kwh"] = np.nan
 
     def _best_compromise_cost(
         self,

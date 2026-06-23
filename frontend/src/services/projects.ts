@@ -48,7 +48,7 @@ export async function createProject(payload: CreateProjectRequest) {
 }
 
 export async function getProjectDashboard(projectId: string) {
-  return http<{ success: boolean; dashboard: DashboardPayload }>(`/api/project/${projectId}/dashboard`);
+  return http<{ success: boolean; dashboard: DashboardPayload }>(`/api/project/${encodeURIComponent(projectId)}/dashboard`);
 }
 
 export async function deleteProject(projectId: string) {

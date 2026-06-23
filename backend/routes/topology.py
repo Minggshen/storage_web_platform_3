@@ -31,6 +31,7 @@ from models.project_model import (
     NetworkModel,
 )
 from services.network_topology_service import NetworkTopologyService
+from services.atomic_io import write_text_atomic
 from services.project_model_service import ProjectModelService
 from services.project_validation_service import ProjectValidationService
 
@@ -193,7 +194,7 @@ def save_template(request: SaveTemplateRequest) -> TopologyTemplateDetailRespons
         "topology": request.topology,
     }
     path = TEMPLATES_DIR / f"{template_id}.json"
-    path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    write_text_atomic(path, json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
     return TopologyTemplateDetailResponse(success=True, template=data)
 
 

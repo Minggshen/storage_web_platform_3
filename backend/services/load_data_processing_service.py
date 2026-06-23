@@ -5,6 +5,7 @@ import traceback
 from pathlib import Path
 from typing import AsyncGenerator, Dict
 
+from services.atomic_io import write_bytes_atomic
 from services.project_model_service import ProjectModelService
 
 
@@ -22,7 +23,7 @@ class LoadDataProcessingService:
         raw_dir.mkdir(parents=True, exist_ok=True)
 
         target = raw_dir / "raw_load_data.xlsx"
-        target.write_bytes(file_content)
+        write_bytes_atomic(target, file_content)
 
         return str(target), "raw_load_data.xlsx"
 
@@ -155,20 +156,18 @@ class LoadDataProcessingService:
 
     def delete_raw_load_data(self, project_id: str, node_id: str) -> bool:
         """删除某节点的原始上传数据及建模产物"""
-        import shutil
-
         project_dir = self.project_service._project_dir(project_id)
         safe_node_id = self.project_service.safe_path_segment(node_id, "节点编号")
         deleted = False
 
         raw_dir = project_dir / "raw_load_data" / safe_node_id
         if raw_dir.exists():
-            shutil.rmtree(str(raw_dir))
+            self._remove_directory_tree(raw_dir, project_dir)
             deleted = True
 
         model_dir = project_dir / "modeling_output" / safe_node_id
         if model_dir.exists():
-            shutil.rmtree(str(model_dir))
+            self._remove_directory_tree(model_dir, project_dir)
             deleted = True
 
         return deleted
@@ -206,16 +205,50 @@ class LoadDataProcessingService:
         for base in [model_base, runtime_base]:
             if not base.exists():
                 continue
+            base_resolved = base.resolve()
             for p in base.rglob(safe_file_name):
-                if p.is_file():
+                if p.is_symlink() or not p.is_file():
+                    continue
+                resolved = p.resolve()
+                if self._is_path_within(resolved, base_resolved):
                     return p
         return None
 
     @staticmethod
+    def _is_path_within(path: Path, parent: Path) -> bool:
+        try:
+            path.relative_to(parent)
+            return True
+        except ValueError:
+            return False
+
+    @classmethod
+    def _remove_directory_tree(cls, root: Path, allowed_parent: Path) -> None:
+        root_resolved = root.resolve()
+        parent_resolved = allowed_parent.resolve()
+        if root_resolved == parent_resolved or not cls._is_path_within(root_resolved, parent_resolved):
+            raise ValueError("删除范围越界，已拒绝操作。")
+
+        directories: list[Path] = [root_resolved]
+        stack = [root_resolved]
+        while stack:
+            current = stack.pop()
+            for child in current.iterdir():
+                if child.is_dir() and not child.is_symlink():
+                    child_resolved = child.resolve()
+                    if not cls._is_path_within(child_resolved, root_resolved):
+                        raise ValueError("目录中存在越界路径，已拒绝删除。")
+                    directories.append(child_resolved)
+                    stack.append(child_resolved)
+                    continue
+                child.unlink()
+
+        for directory in reversed(directories):
+            directory.rmdir()
+
+    @staticmethod
     def cleanup_empty_dirs(project_id: str, project_service: ProjectModelService | None = None) -> dict:
         """一次性清理工程中所有的空目录残留"""
-        import shutil
-
         ps = project_service or ProjectModelService()
         project_dir = ps._project_dir(project_id)
 
@@ -235,7 +268,7 @@ class LoadDataProcessingService:
                 for f in p.rglob("*")
             )
             if not has_content:
-                shutil.rmtree(str(p))
+                LoadDataProcessingService._remove_directory_tree(p, project_dir)
                 return True
             return False
 

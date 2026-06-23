@@ -221,12 +221,11 @@ export const LINE_STROKE_BY_CODE: Record<string, string> = {
   LC_LIGHT: '#64748b',
 };
 
-export const SERVICE_LINE_LINECODE = 'LC_CABLE';
+export const SERVICE_LINE_LINECODE = 'LC_LIGHT';
 export const SERVICE_LINE_DEFAULT_LENGTH_KM = 0.005;
 export const SERVICE_LINE_RESOURCE_MARGIN = 1.1;
 export const SERVICE_LINE_EMERGENCY_MARGIN = 1.2;
-export const SERVICE_LINE_TRANSFORMER_EMERGENCY_MARGIN = 1.25;
-export const SERVICE_LINE_MIN_RATED_A = 1;
+export const SERVICE_LINE_MIN_RATED_A = 300;
 
 export const WIRE_DATA_CU: Array<{name: string; rac: number; normamps: number}> = [
   { name: '250_CU',  rac: 0.159692, normamps: 540  },

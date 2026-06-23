@@ -67,6 +67,13 @@ Get-ChildItem "$SourceDir\storage_engine_project" -Recurse -Filter "*.py" | ForE
     Copy-Item $_.FullName $target -Force
 }
 
+# 保留求解器自带 OpenDSS 模板；用户导入的负荷、注册表、电价和设备库不随交付仓库生成
+$engineDssTemplate = "$SourceDir\storage_engine_project\inputs\dss"
+if (Test-Path $engineDssTemplate) {
+    New-Item -ItemType Directory -Force -Path "$DeliveryDir\storage_engine_project\inputs" | Out-Null
+    Copy-Item $engineDssTemplate "$DeliveryDir\storage_engine_project\inputs\" -Force -Recurse
+}
+
 # OpenDSS 测试馈线模型
 Copy-Item "$SourceDir\OpenDSS\*" "$DeliveryDir\OpenDSS\" -Force -Recurse
 
@@ -87,6 +94,11 @@ data/
 logs/
 python/
 .deps_installed
+storage_engine_project/outputs/
+storage_engine_project/logs/
+storage_engine_project/inputs/*
+!storage_engine_project/inputs/dss/
+!storage_engine_project/inputs/dss/**
 
 # 环境变量（含密钥）
 .env
@@ -107,15 +119,46 @@ Set-Content -Path "$DeliveryDir\.gitignore" -Value $gitignore -Encoding UTF8
 # ---- 4. 删除不应包含的目录（安全清理） ----
 Write-Host "[4/5] 清理排除项..." -ForegroundColor Yellow
 
-# 删除求解器引擎中意外带入的非 .py 目录
+function Remove-DirectoryTreeSafe {
+    param(
+        [Parameter(Mandatory=$true)][string]$Path,
+        [Parameter(Mandatory=$true)][string]$Root
+    )
+
+    if (-not (Test-Path -LiteralPath $Path)) {
+        return
+    }
+
+    $rootPath = (Resolve-Path -LiteralPath $Root).Path.TrimEnd('\')
+    $targetPath = (Resolve-Path -LiteralPath $Path).Path.TrimEnd('\')
+    $rootWithSep = $rootPath + [System.IO.Path]::DirectorySeparatorChar
+    if ($targetPath -eq $rootPath -or -not $targetPath.StartsWith($rootWithSep, [System.StringComparison]::OrdinalIgnoreCase)) {
+        throw "拒绝清理越界目录: $targetPath"
+    }
+
+    Get-ChildItem -LiteralPath $targetPath -Force -File -Recurse | ForEach-Object {
+        Remove-Item -LiteralPath $_.FullName -Force
+    }
+    Get-ChildItem -LiteralPath $targetPath -Force -Directory -Recurse |
+        Sort-Object FullName -Descending |
+        ForEach-Object { Remove-Item -LiteralPath $_.FullName -Force }
+    Remove-Item -LiteralPath $targetPath -Force
+}
+
+# 删除求解器引擎中意外带入的用户数据和运行产物，保留 inputs\dss 模板
 $dirsToRemove = @(
     "$DeliveryDir\storage_engine_project\.idea",
-    "$DeliveryDir\storage_engine_project\inputs",
+    "$DeliveryDir\storage_engine_project\inputs\node_loads",
+    "$DeliveryDir\storage_engine_project\inputs\registry",
+    "$DeliveryDir\storage_engine_project\inputs\tariff",
+    "$DeliveryDir\storage_engine_project\inputs\storage",
+    "$DeliveryDir\storage_engine_project\outputs",
+    "$DeliveryDir\storage_engine_project\logs",
     "$DeliveryDir\storage_engine_project\__pycache__"
 )
 foreach ($d in $dirsToRemove) {
     if (Test-Path $d) {
-        Remove-Item $d -Recurse -Force
+        Remove-DirectoryTreeSafe -Path $d -Root $DeliveryDir
         Write-Host "  → 删除: $d"
     }
 }

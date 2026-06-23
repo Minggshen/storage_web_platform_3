@@ -217,12 +217,12 @@ export type BuildManifest = {
 };
 
 export async function fetchBuildPreview(projectId: string): Promise<BuildPreviewResponse> {
-  return http<BuildPreviewResponse>(`/api/build/project/${projectId}/preview`);
+  return http<BuildPreviewResponse>(`/api/build/project/${encodeURIComponent(projectId)}/preview`);
 }
 
 export async function triggerBuild(projectId: string): Promise<{ success: boolean; project_id: string; manifest_path: string; manifest: BuildManifest }> {
   return http<{ success: boolean; project_id: string; manifest_path: string; manifest: BuildManifest }>(
-    `/api/build/project/${projectId}/generate`,
+    `/api/build/project/${encodeURIComponent(projectId)}/generate`,
     {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -232,11 +232,11 @@ export async function triggerBuild(projectId: string): Promise<{ success: boolea
 }
 
 export async function fetchBuildManifest(projectId: string): Promise<BuildManifest> {
-  return http<BuildManifest>(`/api/build/project/${projectId}/manifest`);
+  return http<BuildManifest>(`/api/build/project/${encodeURIComponent(projectId)}/manifest`);
 }
 
 export async function fetchSearchSpaceInference(projectId: string): Promise<SearchSpaceInferenceResponse> {
-  return http<SearchSpaceInferenceResponse>(`/api/build/project/${projectId}/inference-table`);
+  return http<SearchSpaceInferenceResponse>(`/api/build/project/${encodeURIComponent(projectId)}/inference-table`);
 }
 
 export type GridHealthCheck = {
@@ -279,5 +279,5 @@ export type GridHealthResponse = {
 };
 
 export async function fetchGridHealth(projectId: string): Promise<GridHealthResponse> {
-  return http<GridHealthResponse>(`/api/build/project/${projectId}/grid-health`);
+  return http<GridHealthResponse>(`/api/build/project/${encodeURIComponent(projectId)}/grid-health`);
 }

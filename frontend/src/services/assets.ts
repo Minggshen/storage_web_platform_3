@@ -40,28 +40,30 @@ async function postFormWithFallback(paths: string[], formData: FormData) {
 }
 
 export async function uploadTariffFile(projectId: string, file: File) {
+  const encodedProjectId = encodeURIComponent(projectId);
   const formData = new FormData();
   formData.append('file', file);
 
   return postFormWithFallback(
     [
-      `/api/assets/project/${projectId}/tariff/upload`,
-      `/api/assets/project/${projectId}/tariff`,
-      `/api/project/${projectId}/tariff/upload`,
+      `/api/assets/project/${encodedProjectId}/tariff/upload`,
+      `/api/assets/project/${encodedProjectId}/tariff`,
+      `/api/project/${encodedProjectId}/tariff/upload`,
     ],
     formData,
   );
 }
 
 export async function uploadDeviceLibraryFile(projectId: string, file: File) {
+  const encodedProjectId = encodeURIComponent(projectId);
   const formData = new FormData();
   formData.append('file', file);
 
   return postFormWithFallback(
     [
-      `/api/assets/project/${projectId}/device-library/upload`,
-      `/api/assets/project/${projectId}/device-library`,
-      `/api/project/${projectId}/device-library/upload`,
+      `/api/assets/project/${encodedProjectId}/device-library/upload`,
+      `/api/assets/project/${encodedProjectId}/device-library`,
+      `/api/project/${encodedProjectId}/device-library/upload`,
     ],
     formData,
   );
@@ -73,6 +75,7 @@ export async function uploadRuntimeFile(
   kind: 'year_map' | 'model_library',
   file: File,
 ) {
+  const encodedProjectId = encodeURIComponent(projectId);
   const formData = new FormData();
   formData.append('file', file);
   formData.append('node_id', nodeId);
@@ -80,16 +83,16 @@ export async function uploadRuntimeFile(
 
   return postFormWithFallback(
     [
-      `/api/assets/project/${projectId}/runtime/upload`,
-      `/api/assets/project/${projectId}/runtime`,
-      `/api/project/${projectId}/runtime/upload`,
+      `/api/assets/project/${encodedProjectId}/runtime/upload`,
+      `/api/assets/project/${encodedProjectId}/runtime`,
+      `/api/project/${encodedProjectId}/runtime/upload`,
     ],
     formData,
   );
 }
 
 export async function listProjectAssets(projectId: string): Promise<ProjectAsset[]> {
-  const data = await http<{ assets?: ProjectAsset[] }>(`/api/assets/project/${projectId}`);
+  const data = await http<{ assets?: ProjectAsset[] }>(`/api/assets/project/${encodeURIComponent(projectId)}`);
   return Array.isArray(data?.assets) ? (data.assets as ProjectAsset[]) : [];
 }
 
@@ -110,14 +113,14 @@ export async function uploadRawLoadData(
 export async function listUploadedNodes(
   projectId: string,
 ): Promise<{ uploaded_nodes: string[]; processed_nodes: string[] }> {
-  return http(`/api/assets/raw-load-data/uploaded/${projectId}`);
+  return http(`/api/assets/raw-load-data/uploaded/${encodeURIComponent(projectId)}`);
 }
 
 export async function deleteRawLoadData(
   projectId: string,
   nodeId: string,
 ): Promise<{ success: boolean; deleted: boolean }> {
-  return http(`/api/assets/raw-load-data/${projectId}/${nodeId}`, { method: 'DELETE' });
+  return http(`/api/assets/raw-load-data/${encodeURIComponent(projectId)}/${encodeURIComponent(nodeId)}`, { method: 'DELETE' });
 }
 
 export function processRuntime(
@@ -165,7 +168,7 @@ export async function listPreviewFiles(
   projectId: string,
   nodeId: string,
 ): Promise<{ node_id: string; files: Array<{ name: string; type: string; url: string }> }> {
-  return http(`/api/assets/preview/${projectId}/${nodeId}`);
+  return http(`/api/assets/preview/${encodeURIComponent(projectId)}/${encodeURIComponent(nodeId)}`);
 }
 
 export async function fetchPreviewContent(
@@ -173,7 +176,7 @@ export async function fetchPreviewContent(
   nodeId: string,
   fileName: string,
 ): Promise<{ file_name?: string; columns?: string[]; rows?: Array<Record<string, string>>; content?: string } | Blob> {
-  const url = `${API_BASE}/api/assets/preview/${projectId}/${nodeId}/${fileName}`;
+  const url = `${API_BASE}/api/assets/preview/${encodeURIComponent(projectId)}/${encodeURIComponent(nodeId)}/${encodeURIComponent(fileName)}`;
   const res = await fetch(url);
   if (!res.ok) throw new Error(await res.text());
   const contentType = res.headers.get('content-type') || '';
