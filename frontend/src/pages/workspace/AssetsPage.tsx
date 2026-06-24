@@ -380,7 +380,7 @@ function AssetsPage() {
               <input
                 id="tariff-file-input"
                 type="file"
-                accept=".xlsx,.xls,.csv"
+                accept=".xlsx,.xlsm,.csv"
                 className="hidden"
                 onChange={(e) => setTariffFile(e.target.files?.[0] ?? null)}
               />
@@ -391,7 +391,7 @@ function AssetsPage() {
             </Button>
           </div>
           <p className="mt-2 text-xs text-muted-foreground">
-            支持 .xlsx .xls .csv 格式。电价表用于全年经济性评估中的电费计算。
+            支持 .xlsx .xlsm .csv 格式。电价表用于全年经济性评估中的电费计算。
           </p>
         </section>
 
@@ -418,7 +418,7 @@ function AssetsPage() {
               <input
                 id="device-library-file-input"
                 type="file"
-                accept=".xlsx,.xls,.csv"
+                accept=".xlsx,.xlsm"
                 className="hidden"
                 onChange={(e) => setLibraryFile(e.target.files?.[0] ?? null)}
               />
@@ -468,7 +468,7 @@ function AssetsPage() {
                 <span className="text-base">📁</span> 选择文件
                 <input
                   type="file"
-                  accept=".xlsx,.xls"
+                  accept=".xlsx,.xlsm"
                   className="hidden"
                   onChange={(e) => setRawFile(e.target.files?.[0] ?? null)}
                 />

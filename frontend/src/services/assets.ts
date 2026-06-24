@@ -7,10 +7,22 @@ export type ProjectAsset = {
   metadata?: Record<string, unknown>;
 };
 
+function responseErrorMessage(text: string, fallback: string) {
+  try {
+    const payload = JSON.parse(text) as { detail?: unknown };
+    if (typeof payload.detail === 'string' && payload.detail.trim()) {
+      return payload.detail;
+    }
+  } catch {
+    // Non-JSON error bodies are reported as-is below.
+  }
+  return text || fallback;
+}
+
 async function parseJsonResponse(response: Response) {
   const text = await response.text();
   if (!response.ok) {
-    throw new Error(text || `HTTP ${response.status}`);
+    throw new Error(responseErrorMessage(text, `HTTP ${response.status}`));
   }
   return text ? JSON.parse(text) : { success: true };
 }
@@ -30,9 +42,15 @@ async function postFormWithFallback(paths: string[], formData: FormData) {
       }
 
       const text = await response.text();
-      lastError = text || `HTTP ${response.status}`;
+      lastError = responseErrorMessage(text, `HTTP ${response.status}`);
+      if (response.status !== 404 && response.status !== 405) {
+        throw new Error(lastError);
+      }
     } catch (err) {
       lastError = err instanceof Error ? err.message : String(err);
+      if (lastError) {
+        throw new Error(lastError);
+      }
     }
   }
 

@@ -30,8 +30,6 @@
       "Bash(git *)",
       "Bash(echo \"EXIT:$?\")",
       "Bash(echo \"---EXIT:$?---\")",
-      "Bash(find \"D:/storage_web_platform_3/backend/data/projects\" -name \"*.tmp\" -delete)",
-      "Bash(find \"D:/storage_web_platform_3/backend/data/projects\" -name \"*.log\" -delete)",
       "Bash(ls D:/storage_web_platform_3/frontend/vite_*.log)",
       "Bash(cmd.exe *)",
       "Bash(echo \"exit=$?\")",

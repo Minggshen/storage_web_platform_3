@@ -1,12 +1,14 @@
 from __future__ import annotations
 
+import io
 import os
 import sys
 import zipfile
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
-from fastapi import HTTPException
+from fastapi import HTTPException, UploadFile
 
 _BACKEND_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir))
 if _BACKEND_DIR not in sys.path:
@@ -15,11 +17,16 @@ if _BACKEND_DIR not in sys.path:
 sys.modules.pop("services.project_model_service", None)
 sys.modules.pop("services.load_data_processing_service", None)
 
+from models.project_model import AssetRef  # noqa: E402
 from services import file_store  # noqa: E402
+from services.asset_binding_service import AssetBindingService  # noqa: E402
 from services.atomic_io import write_bytes_atomic, write_text_atomic  # noqa: E402
-from services.load_data_processing_service import LoadDataProcessingService  # noqa: E402
+from services.build_export_service import BuildExportService  # noqa: E402
+from services.build_inference_service import BuildInferenceService  # noqa: E402
 from services.file_store import extract_zip_if_needed  # noqa: E402
+from services.load_data_processing_service import LoadDataProcessingService  # noqa: E402
 from services.project_model_service import ProjectModelService  # noqa: E402
+from routes import assets as assets_routes  # noqa: E402
 
 
 def test_project_dir_rejects_path_traversal(tmp_path: Path) -> None:
@@ -192,3 +199,146 @@ def test_atomic_writes_replace_content_and_clear_temp_files(tmp_path: Path) -> N
     assert text_path.read_text(encoding="utf-8") == "new"
     assert bytes_path.read_bytes() == b"xlsx"
     assert not list(tmp_path.glob(".*.tmp"))
+
+
+def test_clone_project_rewrites_asset_paths_to_clone_directory(tmp_path: Path) -> None:
+    service = ProjectModelService(base_dir=tmp_path)
+    project, _ = service.create_empty_project("source")
+    assert project.project_id is not None
+
+    source_project_dir = service._project_dir(project.project_id)
+    source_asset_dir = source_project_dir / "assets" / "tariff"
+    source_asset_dir.mkdir(parents=True)
+    source_asset = source_asset_dir / "asset_001_price.xlsx"
+    source_asset.write_text("price", encoding="utf-8")
+
+    asset = AssetRef(
+        file_id="asset_001",
+        file_name="price.xlsx",
+        source_type="upload",
+        metadata={"category": "tariff", "stored_path": str(source_asset.resolve())},
+    )
+    project.assets[asset.file_id] = asset
+    project.tariff.asset = asset
+    service.save_project(project)
+
+    cloned, _ = service.clone_project(project.project_id, "copy")
+    assert cloned.project_id is not None
+    cloned_asset_path = Path(str(cloned.assets["asset_001"].metadata["stored_path"]))
+
+    assert source_project_dir not in cloned_asset_path.resolve().parents
+    assert service._project_dir(cloned.project_id) in cloned_asset_path.resolve().parents
+    assert cloned_asset_path.read_text(encoding="utf-8") == "price"
+    assert cloned.tariff.asset is not None
+    assert cloned.tariff.asset.metadata["stored_path"] == str(cloned_asset_path.resolve())
+
+
+def test_invalid_tariff_upload_does_not_bind_project_asset(tmp_path: Path) -> None:
+    project_service = ProjectModelService(base_dir=tmp_path)
+    project, _ = project_service.create_empty_project("source")
+    assert project.project_id is not None
+
+    asset_service = AssetBindingService(project_service=project_service)
+    bad_upload = UploadFile(file=io.BytesIO(b"not an excel workbook"), filename="tariff.xls")
+
+    with pytest.raises(ValueError, match="文件格式不支持"):
+        asset_service.upload_tariff_file(project.project_id, bad_upload)
+
+    reloaded = project_service.load_project(project.project_id)
+    assert reloaded.tariff.asset is None
+    assert reloaded.assets == {}
+
+
+def test_build_asset_path_rejects_files_outside_project_assets(tmp_path: Path) -> None:
+    project_dir = tmp_path / "abc123"
+    project_dir.mkdir()
+    outside = tmp_path / "outside.csv"
+    outside.write_text("secret", encoding="utf-8")
+
+    asset = {"metadata": {"stored_path": str(outside.resolve())}}
+    service = BuildExportService(data_root=tmp_path)
+
+    assert service._asset_path(asset, project_dir=project_dir) is None
+
+
+def test_route_asset_bind_path_must_stay_inside_project_assets(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project_service = ProjectModelService(base_dir=tmp_path)
+    monkeypatch.setattr(assets_routes, "project_service", project_service)
+    project_dir = tmp_path / "abc123"
+    assets_dir = project_dir / "assets" / "runtime"
+    assets_dir.mkdir(parents=True)
+    inside = assets_dir / "ok.csv"
+    outside = tmp_path / "outside.csv"
+    inside.write_text("ok", encoding="utf-8")
+    outside.write_text("secret", encoding="utf-8")
+
+    assert assets_routes._project_asset_file_path("abc123", str(inside.resolve())) == inside.resolve()
+    with pytest.raises(ValueError, match="不在当前项目 assets 目录"):
+        assets_routes._project_asset_file_path("abc123", str(outside.resolve()))
+
+
+def test_build_signature_marks_asset_outside_project_without_stat(tmp_path: Path) -> None:
+    project_dir = tmp_path / "abc123"
+    assets_dir = project_dir / "assets" / "tariff"
+    assets_dir.mkdir(parents=True)
+    outside = tmp_path / "outside.xlsx"
+    outside.write_text("secret", encoding="utf-8")
+
+    service = BuildExportService(data_root=tmp_path)
+    signature = service._build_input_signature(
+        {
+            "project_id": "abc123",
+            "network": {"nodes": [], "edges": [], "economic_parameters": {}},
+            "tariff": {
+                "asset": {
+                    "file_id": "asset_001",
+                    "file_name": "outside.xlsx",
+                    "source_type": "upload",
+                    "metadata": {"stored_path": str(outside.resolve())},
+                }
+            },
+        }
+    )
+
+    file_stat = signature["tariff"]["asset"]["file_stat"]
+    assert file_stat["outside_project_assets"] is True
+    assert "size" not in file_stat
+
+
+def test_build_inference_ignores_runtime_assets_outside_project_assets(tmp_path: Path) -> None:
+    project_service = ProjectModelService(base_dir=tmp_path)
+    project, _ = project_service.create_empty_project("source")
+    assert project.project_id is not None
+
+    outside_year = tmp_path / "outside_year.csv"
+    outside_model = tmp_path / "outside_model.csv"
+    outside_year.write_text("internal_model_id\nM1\n", encoding="utf-8")
+    outside_model.write_text(
+        "internal_model_id,h00,h01,h02,h03,h04,h05,h06,h07,h08,h09,h10,h11,h12,h13,h14,h15,h16,h17,h18,h19,h20,h21,h22,h23\n"
+        "M1,999,999,999,999,999,999,999,999,999,999,999,999,999,999,999,999,999,999,999,999,999,999,999,999\n",
+        encoding="utf-8",
+    )
+
+    year_asset = AssetRef(
+        file_id="year",
+        file_name="year.csv",
+        source_type="upload",
+        metadata={"category": "runtime", "stored_path": str(outside_year.resolve())},
+    )
+    model_asset = AssetRef(
+        file_id="model",
+        file_name="model.csv",
+        source_type="upload",
+        metadata={"category": "runtime", "stored_path": str(outside_model.resolve())},
+    )
+    project.assets[year_asset.file_id] = year_asset
+    project.assets[model_asset.file_id] = model_asset
+    service = BuildInferenceService(project_service=project_service)
+    node = SimpleNamespace(
+        runtime_binding=SimpleNamespace(year_map_file_id=year_asset.file_id, model_library_file_id=model_asset.file_id)
+    )
+
+    assert service._load_runtime_stats(project, node) == {}

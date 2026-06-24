@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import csv
 import io
+from pathlib import Path
 from urllib.parse import quote
 
 from typing import Any
@@ -30,6 +31,7 @@ from models.project_model import (
     UpsertDeviceRecordResponse,
 )
 from services.asset_binding_service import AssetBindingService
+from services.asset_binding_service import RUNTIME_FILE_SUFFIXES
 from services.load_data_processing_service import LoadDataProcessingService
 from services.project_model_service import ProjectModelService
 
@@ -47,6 +49,20 @@ PREVIEW_IMAGE_HEADERS = {
     "X-Content-Type-Options": "nosniff",
     "Content-Security-Policy": "default-src 'none'; img-src data:; style-src 'unsafe-inline'",
 }
+
+
+def _project_asset_file_path(project_id: str, stored_path: object) -> Path:
+    if not stored_path:
+        raise ValueError("资产缺少 stored_path，无法绑定。")
+    try:
+        resolved = Path(str(stored_path)).resolve()
+        assets_dir = (project_service._project_dir(project_id) / "assets").resolve()
+        resolved.relative_to(assets_dir)
+    except (OSError, ValueError) as exc:
+        raise ValueError("资产文件路径不在当前项目 assets 目录内，拒绝绑定。") from exc
+    if not resolved.exists() or not resolved.is_file():
+        raise ValueError(f"资产文件不存在：{resolved}")
+    return resolved
 
 
 @router.get("/project/{project_id}", response_model=ProjectAssetsResponse)
@@ -74,6 +90,8 @@ def upload_runtime_files(
         )
     except (FileNotFoundError, ValueError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     return RuntimeUploadResponse(
         success=True,
         project=project,
@@ -92,6 +110,16 @@ def bind_existing_runtime_files(request: RuntimeBindingRequest) -> RuntimeBindin
         project = project_service.load_project(request.project_id)
         year_asset = project_service.get_asset(project, request.year_map_file_id)
         model_asset = project_service.get_asset(project, request.model_library_file_id)
+        year_path = _project_asset_file_path(request.project_id, year_asset.metadata.get("stored_path"))
+        model_path = _project_asset_file_path(request.project_id, model_asset.metadata.get("stored_path"))
+        year_report = asset_service.validate_runtime_year_map(year_path)
+        model_report = asset_service.validate_runtime_model_library(model_path)
+        if not year_report.ok or not model_report.ok:
+            message = asset_service._validation_failure_message(
+                [year_report, model_report],
+                "负荷 runtime 文件校验未通过，未绑定为当前文件",
+            )
+            raise ValueError(message)
         project, project_file = project_service.bind_runtime_assets(
             project_id=request.project_id,
             node_id=request.node_id,
@@ -100,8 +128,8 @@ def bind_existing_runtime_files(request: RuntimeBindingRequest) -> RuntimeBindin
         )
     except (FileNotFoundError, ValueError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    year_report = asset_service.validate_runtime_year_map(year_asset.metadata["stored_path"])
-    model_report = asset_service.validate_runtime_model_library(model_asset.metadata["stored_path"])
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     return RuntimeBindingResponse(
         success=True,
         project=project,
@@ -148,7 +176,10 @@ def bind_existing_tariff_file(request: TariffBindingRequest) -> TariffBindingRes
     try:
         project = project_service.load_project(request.project_id)
         asset = project_service.get_asset(project, request.file_id)
-        report = asset_service.validate_tariff_file(asset.metadata["stored_path"])
+        stored_path = _project_asset_file_path(request.project_id, asset.metadata.get("stored_path"))
+        report = asset_service.validate_tariff_file(stored_path)
+        if not report.ok:
+            raise ValueError(asset_service._validation_failure_message([report], "电价表校验未通过，未绑定为当前文件"))
         asset.metadata["validation"] = report.model_dump(mode="json")
         project.assets[asset.file_id] = asset
         project, project_file = project_service.bind_tariff_asset(
@@ -159,6 +190,8 @@ def bind_existing_tariff_file(request: TariffBindingRequest) -> TariffBindingRes
         project.assets[asset.file_id] = asset
         _, project_file = project_service.save_project(project)
     except (FileNotFoundError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return TariffBindingResponse(
         success=True,
@@ -211,6 +244,7 @@ def upload_runtime_file_compat(
 
     try:
         project_service.ensure_load_node(project_id, node_id)
+        asset_service._ensure_upload_suffix(file, RUNTIME_FILE_SUFFIXES, "负荷 runtime 文件")
         asset, path, project, project_file = project_service.save_asset_upload(
             project_id=project_id,
             upload_file=file,
@@ -218,11 +252,18 @@ def upload_runtime_file_compat(
             subfolder=node_id,
             metadata={"runtime_kind": kind, "node_id": node_id},
         )
-        report = (
-            asset_service.validate_runtime_year_map(path)
-            if kind == "year_map"
-            else asset_service.validate_runtime_model_library(path)
-        )
+        try:
+            report = (
+                asset_service.validate_runtime_year_map(path)
+                if kind == "year_map"
+                else asset_service.validate_runtime_model_library(path)
+            )
+        except Exception as exc:
+            asset_service._remove_staged_file(path)
+            raise ValueError(f"负荷 runtime 文件无法读取或校验：{exc}") from exc
+        if not report.ok:
+            asset_service._remove_staged_file(path)
+            raise ValueError(asset_service._validation_failure_message([report], "负荷 runtime 文件校验未通过"))
         asset.metadata["validation"] = report.model_dump(mode="json")
         project.assets[asset.file_id] = asset
 

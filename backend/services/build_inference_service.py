@@ -110,9 +110,9 @@ class BuildInferenceService:
         if not year_asset or not model_asset:
             return {}
 
-        year_path = Path(str(year_asset.metadata.get("stored_path", "")))
-        model_path = Path(str(model_asset.metadata.get("stored_path", "")))
-        if not year_path.exists() or not model_path.exists():
+        year_path = self._asset_path(project, year_asset)
+        model_path = self._asset_path(project, model_asset)
+        if year_path is None or model_path is None:
             return {}
 
         weights: Dict[str, int] = {}
@@ -164,6 +164,24 @@ class BuildInferenceService:
             "annual_mean_kw": annual_mean_kw,
             "mean_daily_energy_kwh": mean_daily_energy_kwh,
         }
+
+    def _asset_path(self, project: Any, asset: Any) -> Path | None:
+        metadata = getattr(asset, "metadata", None)
+        if not isinstance(metadata, dict):
+            return None
+        stored_path = metadata.get("stored_path")
+        if not stored_path:
+            return None
+        project_id = str(getattr(project, "project_id", "") or "").strip()
+        if not project_id:
+            return None
+        try:
+            project_assets_dir = (self.project_service._project_dir(project_id) / "assets").resolve()
+            resolved = Path(str(stored_path)).resolve()
+            resolved.relative_to(project_assets_dir)
+        except (OSError, ValueError):
+            return None
+        return resolved if resolved.exists() else None
 
     def _safe_float(self, value: Any, default: float | None = None) -> float | None:
         if value in (None, ""):

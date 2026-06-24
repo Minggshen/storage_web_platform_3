@@ -2236,8 +2236,7 @@ print(json.dumps(result, ensure_ascii=False), flush=True)
             kva = self._num(params.get("kva"), 0.0)
             if kva > 0:
                 return kva
-            rated_kw = self._num(params.get("rated_kw"), 0.0)
-            return max(rated_kw, self._num(params.get("rated_kwh"), 0.0))
+            return self._num(params.get("rated_kw"), self._num(params.get("rated_power_kw"), 0.0))
         if node_type == "pv":
             return self._num(params.get("kva"), self._num(params.get("pmpp_kw"), self._num(params.get("rated_kw"), 0.0)))
         if node_type == "wind":

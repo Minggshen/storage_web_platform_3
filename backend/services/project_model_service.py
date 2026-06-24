@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import shutil
 import uuid
@@ -249,9 +250,17 @@ class ProjectModelService:
         asset_dir.mkdir(parents=True, exist_ok=True)
 
         target_file = asset_dir / f"{asset_id}_{safe_name}"
+        temp_file = target_file.with_name(f".{target_file.name}.{uuid.uuid4().hex}.tmp")
         upload_file.file.seek(0)
-        with target_file.open("wb") as f:
-            shutil.copyfileobj(upload_file.file, f)
+        try:
+            with temp_file.open("wb") as f:
+                shutil.copyfileobj(upload_file.file, f)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(temp_file, target_file)
+        finally:
+            if temp_file.exists():
+                temp_file.unlink()
 
         asset = AssetRef(
             file_id=asset_id,
@@ -265,7 +274,7 @@ class ProjectModelService:
             },
         )
         project.assets[asset_id] = asset
-        _, project_file = self.save_project(project)
+        project_file = self._project_file(project_id)
         return asset, target_file, project, project_file
 
     def get_asset(self, project: ProjectModel, file_id: str) -> AssetRef:
@@ -442,10 +451,40 @@ class ProjectModelService:
         cloned.created_at = None
         target_dir = self._project_dir(new_project_id)
         target_dir.mkdir(parents=True, exist_ok=True)
+        source_project_dir = self._project_dir(project_id)
         # clone assets folder if exists
-        source_assets = self._assets_dir(project_id)
+        source_assets = source_project_dir / "assets"
         if source_assets.exists():
             target_assets = target_dir / "assets"
             shutil.copytree(source_assets, target_assets, dirs_exist_ok=True)
+            self._rewrite_cloned_asset_paths(cloned, source_project_dir, target_dir)
         _, project_file = self.save_project(cloned)
         return cloned, project_file
+
+    def _rewrite_cloned_asset_paths(self, cloned: ProjectModel, source_project_dir: Path, target_project_dir: Path) -> None:
+        source_root = source_project_dir.resolve()
+        target_root = target_project_dir.resolve()
+
+        for asset in cloned.assets.values():
+            stored_path = asset.metadata.get("stored_path") if isinstance(asset.metadata, dict) else None
+            if not stored_path:
+                continue
+            try:
+                source_path = Path(str(stored_path)).resolve()
+                relative_path = source_path.relative_to(source_root)
+            except (OSError, ValueError):
+                continue
+            asset.metadata["stored_path"] = str((target_root / relative_path).resolve())
+
+        for holder in (cloned.tariff.asset, cloned.device_library.asset):
+            if holder is None:
+                continue
+            stored_path = holder.metadata.get("stored_path") if isinstance(holder.metadata, dict) else None
+            if not stored_path:
+                continue
+            try:
+                source_path = Path(str(stored_path)).resolve()
+                relative_path = source_path.relative_to(source_root)
+            except (OSError, ValueError):
+                continue
+            holder.metadata["stored_path"] = str((target_root / relative_path).resolve())

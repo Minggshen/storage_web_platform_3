@@ -460,8 +460,10 @@ def test_length_km_and_selected_frontend_linecode_are_sufficient_for_line_units_
 
 
 def _runtime_capacity_validation_case(tmp_path: Path, *, category: str = "residential") -> tuple[dict, dict]:
-    year_map = tmp_path / "runtime_year_model_map.csv"
-    model_library = tmp_path / "runtime_model_library.csv"
+    runtime_dir = tmp_path / "proj01" / "assets" / "runtime" / "load_001"
+    runtime_dir.mkdir(parents=True)
+    year_map = runtime_dir / "runtime_year_model_map.csv"
+    model_library = runtime_dir / "runtime_model_library.csv"
     year_map.write_text("internal_model_id\nm1\n", encoding="utf-8")
     hour_columns = ",".join(f"h{i:02d}" for i in range(24))
     hour_values = ",".join("120" if i == 18 else "40" for i in range(24))
@@ -787,6 +789,21 @@ def test_dss_name_sanitizers_are_ascii_consistent():
     assert build_service._dss_safe_name("母线-A") == "A"
     assert builder._safe_name("母线-A") == "A"
     assert solver._safe_name("母线-A") == "A"
+
+
+def test_storage_apparent_power_uses_power_not_energy_capacity():
+    builder = DssBuilderService()
+
+    storage_node = {
+        "id": "storage_001",
+        "type": "storage",
+        "params": {
+            "rated_kw": 100,
+            "rated_kwh": 215,
+        },
+    }
+
+    assert builder._resource_apparent_power_kva(storage_node) == 100
 
 
 def test_load_internal_ids_are_validated_after_path_sanitizing():

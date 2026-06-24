@@ -34,6 +34,11 @@ storage_engine_project/inputs/storage/*.xls
 
 patent_outputs/
 
+# Confidential patent drafts / discussion notes kept only on local machines
+docs/专利*
+docs/创新点清单_*
+docs/superpowers/plans/codex_plan_review.md
+
 # Local generated artifacts / agent scratch work
 .claude/worktrees/
 docs/patents/

@@ -3392,7 +3392,7 @@ class SolverExecutionService:
             "created_at": self._now(),
         }
         try:
-            cache_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+            write_text_atomic(cache_path, json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
         except Exception:
             return
 
@@ -3737,16 +3737,27 @@ class SolverExecutionService:
         return topology_hash_from_project(project)
 
     def _build_input_hash(self, project: Dict[str, Any]) -> str:
-        return build_input_hash(project)
+        return build_input_hash(project, project_assets_dir=self._project_assets_dir_from_project(project))
 
     def _stable_hash(self, payload: Any) -> str:
         return stable_hash(payload)
 
     def _build_input_signature(self, project: Dict[str, Any]) -> Dict[str, Any]:
-        return build_input_signature(project)
+        return build_input_signature(project, project_assets_dir=self._project_assets_dir_from_project(project))
 
     def _asset_signature(self, asset: Any) -> Dict[str, Any] | None:
         return asset_signature(asset)
+
+    def _project_assets_dir_from_project(self, project: Dict[str, Any] | None) -> Path | None:
+        if not isinstance(project, dict):
+            return None
+        project_id = str(project.get("project_id") or "").strip()
+        if not project_id:
+            return None
+        try:
+            return self._project_dir(project_id) / "assets"
+        except Exception:
+            return None
 
     def _merge_topology_edges_with_line_summary(
         self,

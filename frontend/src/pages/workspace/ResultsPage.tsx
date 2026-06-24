@@ -1011,7 +1011,7 @@ export default function ResultsPage() {
             )}
           </ChartCard>
 
-          <ChartCard title="优化收敛过程">
+          <ChartCard title="优化收敛过程" fullWidth>
             {history.length ? <HistoryChart data={history} /> : <EmptyChart />}
           </ChartCard>
         </div>

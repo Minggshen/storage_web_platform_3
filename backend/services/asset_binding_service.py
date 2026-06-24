@@ -27,6 +27,9 @@ class ParsedTable:
 
 
 DEVICE_LIBRARY_SCHEMA_VERSION = "device_library_v2"
+RUNTIME_FILE_SUFFIXES = {".csv", ".xlsx", ".xlsm"}
+TARIFF_FILE_SUFFIXES = {".csv", ".xlsx", ".xlsm"}
+DEVICE_LIBRARY_FILE_SUFFIXES = {".xlsx", ".xlsm"}
 V2_DEVICE_LIBRARY_COLUMNS = [
     "enabled",
     "manufacturer",
@@ -79,6 +82,8 @@ class AssetBindingService:
         model_library_file: UploadFile,
     ) -> tuple[AssetRef, AssetValidationReport, AssetRef, AssetValidationReport, Any, Path]:
         self.project_service.ensure_load_node(project_id, node_id)
+        self._ensure_upload_suffix(year_map_file, RUNTIME_FILE_SUFFIXES, "年度模型映射文件")
+        self._ensure_upload_suffix(model_library_file, RUNTIME_FILE_SUFFIXES, "典型日模型库文件")
 
         year_map_asset, year_map_path, _, _ = self.project_service.save_asset_upload(
             project_id=project_id,
@@ -87,8 +92,12 @@ class AssetBindingService:
             subfolder=node_id,
             metadata={"runtime_kind": "year_map", "node_id": node_id},
         )
-        year_map_report = self.validate_runtime_year_map(year_map_path)
-        year_map_asset.metadata["validation"] = year_map_report.model_dump(mode="json")
+        try:
+            year_map_report = self.validate_runtime_year_map(year_map_path)
+            year_map_asset.metadata["validation"] = year_map_report.model_dump(mode="json")
+        except Exception as exc:
+            self._remove_staged_file(year_map_path)
+            raise ValueError(f"年度模型映射文件无法读取或校验：{exc}") from exc
 
         model_asset, model_path, _, _ = self.project_service.save_asset_upload(
             project_id=project_id,
@@ -97,8 +106,17 @@ class AssetBindingService:
             subfolder=node_id,
             metadata={"runtime_kind": "model_library", "node_id": node_id},
         )
-        model_report = self.validate_runtime_model_library(model_path)
-        model_asset.metadata["validation"] = model_report.model_dump(mode="json")
+        try:
+            model_report = self.validate_runtime_model_library(model_path)
+            model_asset.metadata["validation"] = model_report.model_dump(mode="json")
+        except Exception as exc:
+            self._remove_staged_file(year_map_path)
+            self._remove_staged_file(model_path)
+            raise ValueError(f"典型日模型库文件无法读取或校验：{exc}") from exc
+        if not year_map_report.ok or not model_report.ok:
+            self._remove_staged_file(year_map_path)
+            self._remove_staged_file(model_path)
+            raise ValueError(self._validation_failure_message([year_map_report, model_report], "负荷 runtime 文件校验未通过"))
 
         project, project_file = self.project_service.bind_runtime_assets(
             project_id=project_id,
@@ -116,14 +134,22 @@ class AssetBindingService:
         project_id: str,
         tariff_file: UploadFile,
     ) -> tuple[AssetRef, AssetValidationReport, Any, Path]:
+        self._ensure_upload_suffix(tariff_file, TARIFF_FILE_SUFFIXES, "电价表")
         asset, target_path, _, _ = self.project_service.save_asset_upload(
             project_id=project_id,
             upload_file=tariff_file,
             category="tariff",
             metadata={"asset_kind": "tariff_annual"},
         )
-        report = self.validate_tariff_file(target_path)
-        asset.metadata["validation"] = report.model_dump(mode="json")
+        try:
+            report = self.validate_tariff_file(target_path)
+            asset.metadata["validation"] = report.model_dump(mode="json")
+        except Exception as exc:
+            self._remove_staged_file(target_path)
+            raise ValueError(f"电价表无法读取或校验：{exc}") from exc
+        if not report.ok:
+            self._remove_staged_file(target_path)
+            raise ValueError(self._validation_failure_message([report], "电价表校验未通过"))
         detected_year = report.parsed_preview.get("detected_year")
         project, project_file = self.project_service.bind_tariff_asset(
             project_id=project_id,
@@ -139,14 +165,22 @@ class AssetBindingService:
         project_id: str,
         device_file: UploadFile,
     ) -> tuple[AssetRef, AssetValidationReport, List[DeviceRecord], Any, Path]:
+        self._ensure_upload_suffix(device_file, DEVICE_LIBRARY_FILE_SUFFIXES, "设备策略库")
         asset, target_path, _, _ = self.project_service.save_asset_upload(
             project_id=project_id,
             upload_file=device_file,
             category="device_library",
             metadata={"asset_kind": "device_library"},
         )
-        report, records = self.validate_device_library_file(target_path)
-        asset.metadata["validation"] = report.model_dump(mode="json")
+        try:
+            report, records = self.validate_device_library_file(target_path)
+            asset.metadata["validation"] = report.model_dump(mode="json")
+        except Exception as exc:
+            self._remove_staged_file(target_path)
+            raise ValueError(f"设备策略库无法读取或校验：{exc}") from exc
+        if not report.ok:
+            self._remove_staged_file(target_path)
+            raise ValueError(self._validation_failure_message([report], "设备策略库校验未通过"))
         project, project_file = self.project_service.replace_device_library(
             project_id=project_id,
             asset=asset,
@@ -155,6 +189,35 @@ class AssetBindingService:
         project.assets[asset.file_id] = asset
         _, project_file = self.project_service.save_project(project)
         return asset, report, records, project, project_file
+
+    @staticmethod
+    def _ensure_upload_suffix(file: UploadFile, allowed_suffixes: set[str], label: str) -> None:
+        suffix = Path(file.filename or "").suffix.lower()
+        if suffix not in allowed_suffixes:
+            allowed = "、".join(sorted(allowed_suffixes))
+            raise ValueError(f"{label}文件格式不支持：{file.filename or '未命名文件'}。请上传 {allowed} 格式。")
+
+    @staticmethod
+    def _validation_failure_message(reports: Sequence[AssetValidationReport], prefix: str) -> str:
+        details: list[str] = []
+        for report in reports:
+            for message in report.messages:
+                if message.status == ValidationStatus.ERROR:
+                    detail = f"{message.title}：{message.message}"
+                    if message.detail:
+                        detail = f"{detail}（{message.detail}）"
+                    details.append(detail)
+        if not details:
+            return prefix
+        return f"{prefix}；" + "；".join(details[:5])
+
+    @staticmethod
+    def _remove_staged_file(path: Path) -> None:
+        try:
+            if path.exists() and path.is_file():
+                path.unlink()
+        except OSError:
+            pass
 
     def validate_runtime_year_map(self, file_path: str | Path) -> AssetValidationReport:
         table = self._read_table(file_path)

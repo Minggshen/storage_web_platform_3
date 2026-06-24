@@ -8,6 +8,8 @@ from typing import AsyncGenerator, Dict
 from services.atomic_io import write_bytes_atomic
 from services.project_model_service import ProjectModelService
 
+RAW_LOAD_FILE_SUFFIXES = {".xlsx", ".xlsm"}
+
 
 class LoadDataProcessingService:
     def __init__(self, project_service: ProjectModelService | None = None) -> None:
@@ -17,6 +19,10 @@ class LoadDataProcessingService:
         self, project_id: str, node_id: str, file_content: bytes, file_name: str
     ) -> tuple[str, str]:
         """保存用户上传的原始负荷 Excel 到 raw_load_data/{node_id}/ 目录"""
+        suffix = Path(file_name or "").suffix.lower()
+        if suffix not in RAW_LOAD_FILE_SUFFIXES:
+            allowed = "、".join(sorted(RAW_LOAD_FILE_SUFFIXES))
+            raise ValueError(f"原始负荷数据文件格式不支持：{file_name or '未命名文件'}。请上传 {allowed} 格式。")
         safe_node_id = self.project_service.safe_path_segment(node_id, "节点编号")
         project_dir = self.project_service._project_dir(project_id)
         raw_dir = project_dir / "raw_load_data" / safe_node_id

@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import os
 import shutil
 import stat
+import uuid
 import zipfile
 from pathlib import Path
 from typing import Optional
@@ -18,10 +20,10 @@ for directory in (RUNTIME_DIR, UPLOAD_DIR, EXPORT_DIR):
     directory.mkdir(parents=True, exist_ok=True)
 
 ALLOWED_SUFFIXES = {
-    "registry": {".xlsx", ".xls", ".csv"},
-    "tariff": {".xlsx", ".xls", ".csv"},
-    "storage": {".xlsx", ".xls"},
-    "runtime": {".xlsx", ".xls", ".csv", ".zip"},
+    "registry": {".xlsx", ".xlsm", ".csv"},
+    "tariff": {".xlsx", ".xlsm", ".csv"},
+    "storage": {".xlsx", ".xlsm"},
+    "runtime": {".xlsx", ".xlsm", ".csv", ".zip"},
     "dss": {".dss", ".txt", ".zip"},
 }
 
@@ -45,8 +47,16 @@ async def save_upload(file: Optional[UploadFile], target_dir: Path, kind: str) -
 
     safe_name = Path(file.filename).name if file.filename else f"{kind}{suffix}"
     target_path = target_dir / safe_name
-    with target_path.open("wb") as buffer:
-        shutil.copyfileobj(file.file, buffer)
+    temp_path = target_path.with_name(f".{target_path.name}.{uuid.uuid4().hex}.tmp")
+    try:
+        with temp_path.open("wb") as buffer:
+            shutil.copyfileobj(file.file, buffer)
+            buffer.flush()
+            os.fsync(buffer.fileno())
+        os.replace(temp_path, target_path)
+    finally:
+        if temp_path.exists():
+            temp_path.unlink()
     return target_path
 
 
@@ -98,7 +108,7 @@ def read_table_file(file_path: Path, sheet_name: str | int | None = 0, header: i
     suffix = file_path.suffix.lower()
     if suffix == ".csv":
         return pd.read_csv(file_path, header=header)
-    if suffix in {".xlsx", ".xls"}:
+    if suffix in {".xlsx", ".xlsm"}:
         return pd.read_excel(file_path, sheet_name=sheet_name, header=header)
     raise ValueError(f"暂不支持的表格文件格式：{file_path.name}")
 

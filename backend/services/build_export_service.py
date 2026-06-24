@@ -18,6 +18,7 @@ from services.build_signature import (
     stable_hash,
     topology_hash,
 )
+from services.atomic_io import write_text_atomic
 from services.dss_builder_service import DssBuilderService
 from services.search_space_inference_service import SearchSpaceInferenceService
 
@@ -150,7 +151,7 @@ class BuildExportService:
         }
 
         manifest_path = manifest_dir / "build_manifest.json"
-        manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+        write_text_atomic(manifest_path, json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
 
         return {
             "success": True,
@@ -204,13 +205,13 @@ class BuildExportService:
         return topology_hash(topology)
 
     def _build_input_hash(self, project: dict[str, Any]) -> str:
-        return build_input_hash(project)
+        return build_input_hash(project, project_assets_dir=self._project_assets_dir_from_project(project))
 
     def _stable_hash(self, payload: Any) -> str:
         return stable_hash(payload)
 
     def _build_input_signature(self, project: dict[str, Any]) -> dict[str, Any]:
-        return build_input_signature(project)
+        return build_input_signature(project, project_assets_dir=self._project_assets_dir_from_project(project))
 
     def _asset_signature(self, asset: Any) -> dict[str, Any] | None:
         return asset_signature(asset)
@@ -298,7 +299,8 @@ class BuildExportService:
                 "只有拓扑、DSS 结构、OpenDSS 探测和运行输入均通过时，solver 才会读取该目录。",
             ],
         }
-        (handoff_dir / "handoff_summary.json").write_text(
+        write_text_atomic(
+            handoff_dir / "handoff_summary.json",
             json.dumps(summary, ensure_ascii=False, indent=2),
             encoding="utf-8",
         )
@@ -329,8 +331,9 @@ class BuildExportService:
         warnings: list[str] = list(build_gate.get("warnings") or [])
         errors: list[str] = list(build_gate.get("errors") or [])
 
-        tariff_rel_path, tariff_abs_path = self._prepare_tariff_input(project, tariff_dir, errors)
-        strategy_rel_path, strategy_abs_path = self._prepare_strategy_library(project, storage_dir, errors, warnings)
+        project_dir = self._project_dir(project_id)
+        tariff_rel_path, tariff_abs_path = self._prepare_tariff_input(project, tariff_dir, errors, project_dir=project_dir)
+        strategy_rel_path, strategy_abs_path = self._prepare_strategy_library(project, storage_dir, errors, warnings, project_dir=project_dir)
         registry_rows = self._build_registry_rows(
             project=project,
             node_loads_dir=node_loads_dir,
@@ -338,6 +341,7 @@ class BuildExportService:
             tariff_rel_path=tariff_rel_path,
             errors=errors,
             warnings=warnings,
+            project_dir=project_dir,
         )
         runtime_manifest_rel_path = self._write_network_runtime_manifest(
             registry_dir=registry_dir,
@@ -362,7 +366,7 @@ class BuildExportService:
         )
 
         command_path = workspace_dir / "solver_command.json"
-        command_path.write_text(json.dumps(command, ensure_ascii=False, indent=2), encoding="utf-8")
+        write_text_atomic(command_path, json.dumps(command, ensure_ascii=False, indent=2), encoding="utf-8")
 
         summary = {
             "project_id": project_id,
@@ -386,7 +390,8 @@ class BuildExportService:
             "errors": self._dedupe(errors),
             "ready_for_solver": bool(build_gate.get("ready_for_solver_gate")) and len(errors) == 0 and len(registry_rows) > 0,
         }
-        (workspace_dir / "workspace_summary.json").write_text(
+        write_text_atomic(
+            workspace_dir / "workspace_summary.json",
             json.dumps(summary, ensure_ascii=False, indent=2),
             encoding="utf-8",
         )
@@ -397,9 +402,10 @@ class BuildExportService:
         project: dict[str, Any],
         tariff_dir: Path,
         errors: list[str],
+        project_dir: Path | None = None,
     ) -> tuple[str | None, Path | None]:
         asset = (project.get("tariff") or {}).get("asset") if isinstance(project.get("tariff"), dict) else None
-        source_path = self._asset_path(asset)
+        source_path = self._asset_path(asset, project_dir=project_dir)
         if source_path is None:
             errors.append("未绑定电价表，无法生成求解器 tariff 输入。")
             return None, None
@@ -416,11 +422,12 @@ class BuildExportService:
         storage_dir: Path,
         errors: list[str],
         warnings: list[str],
+        project_dir: Path | None = None,
     ) -> tuple[str | None, Path | None]:
         _ = warnings
         target_path = storage_dir / "工商业储能设备策略库.xlsx"
         asset = (project.get("device_library") or {}).get("asset") if isinstance(project.get("device_library"), dict) else None
-        source_path = self._asset_path(asset)
+        source_path = self._asset_path(asset, project_dir=project_dir)
         if source_path is not None and source_path.suffix.lower() in {".xlsx", ".xlsm"}:
             if not self._strategy_library_has_v2_schema(source_path):
                 errors.append("设备策略库必须使用 device_library_v2 模板，不能生成求解器 strategy-library 输入。")
@@ -500,6 +507,7 @@ class BuildExportService:
         tariff_rel_path: str | None,
         errors: list[str],
         warnings: list[str],
+        project_dir: Path | None = None,
     ) -> list[dict[str, Any]]:
         rows: list[dict[str, Any]] = []
         network = project.get("network") if isinstance(project.get("network"), dict) else {}
@@ -540,8 +548,8 @@ class BuildExportService:
             year_asset = assets.get(str(binding.get("year_map_file_id") or ""))
             model_asset = assets.get(str(binding.get("model_library_file_id") or ""))
 
-            year_path = self._asset_path(year_asset)
-            model_path = self._asset_path(model_asset)
+            year_path = self._asset_path(year_asset, project_dir=project_dir)
+            model_path = self._asset_path(model_asset, project_dir=project_dir)
             if year_path is None or model_path is None:
                 errors.append(f"负荷节点 {node.get('name') or node.get('id')} 未完整绑定 runtime_year_model_map/runtime_model_library。")
                 continue
@@ -714,7 +722,7 @@ class BuildExportService:
             )
 
         path = registry_dir / "network_runtime_manifest.json"
-        path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+        write_text_atomic(path, json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
         return rel_path
 
     def _resolve_default_storage_target(
@@ -813,14 +821,38 @@ class BuildExportService:
             "dss_master_path": str(dss_master_path.resolve()),
         }
 
-    def _asset_path(self, asset: dict[str, Any] | None) -> Path | None:
+    def _asset_path(self, asset: dict[str, Any] | None, project_dir: Path | None = None) -> Path | None:
         if not isinstance(asset, dict):
             return None
         stored_path = asset.get("metadata", {}).get("stored_path") if isinstance(asset.get("metadata"), dict) else None
         if not stored_path:
             return None
         path = Path(str(stored_path))
-        return path if path.exists() else None
+        try:
+            resolved = path.resolve()
+        except OSError:
+            return None
+        if project_dir is not None:
+            try:
+                resolved.relative_to((project_dir / "assets").resolve())
+            except ValueError:
+                return None
+        return resolved if resolved.exists() else None
+
+    def _project_dir_from_project(self, project: dict[str, Any] | None) -> Path | None:
+        if not isinstance(project, dict):
+            return None
+        project_id = str(project.get("project_id") or "").strip()
+        if not project_id:
+            return None
+        try:
+            return self._project_dir(project_id)
+        except Exception:
+            return None
+
+    def _project_assets_dir_from_project(self, project: dict[str, Any] | None) -> Path | None:
+        project_dir = self._project_dir_from_project(project)
+        return project_dir / "assets" if project_dir is not None else None
 
     def _strategy_library_has_v2_schema(self, path: Path) -> bool:
         try:
@@ -1217,8 +1249,9 @@ class BuildExportService:
         if not binding:
             return
         assets = project.get("assets") if isinstance(project.get("assets"), dict) else {}
-        year_path = self._asset_path(assets.get(str(binding.get("year_map_file_id") or "")))
-        model_path = self._asset_path(assets.get(str(binding.get("model_library_file_id") or "")))
+        project_dir = self._project_dir_from_project(project)
+        year_path = self._asset_path(assets.get(str(binding.get("year_map_file_id") or "")), project_dir=project_dir)
+        model_path = self._asset_path(assets.get(str(binding.get("model_library_file_id") or "")), project_dir=project_dir)
         if year_path is None or model_path is None:
             return
 

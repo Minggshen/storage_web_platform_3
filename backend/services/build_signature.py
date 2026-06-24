@@ -27,11 +27,11 @@ def topology_hash_from_project(project: dict[str, Any]) -> str:
     return topology_hash(extract_topology(project))
 
 
-def build_input_hash(project: dict[str, Any]) -> str:
-    return stable_hash(build_input_signature(project))
+def build_input_hash(project: dict[str, Any], project_assets_dir: Path | None = None) -> str:
+    return stable_hash(build_input_signature(project, project_assets_dir=project_assets_dir))
 
 
-def build_input_signature(project: dict[str, Any]) -> dict[str, Any]:
+def build_input_signature(project: dict[str, Any], project_assets_dir: Path | None = None) -> dict[str, Any]:
     network = project.get("network") if isinstance(project.get("network"), dict) else {}
     nodes = network.get("nodes") if isinstance(network.get("nodes"), list) else []
     assets = project.get("assets") if isinstance(project.get("assets"), dict) else {}
@@ -49,8 +49,8 @@ def build_input_signature(project: dict[str, Any]) -> dict[str, Any]:
             {
                 "node_id": str(node.get("id") or ""),
                 "runtime_binding": binding,
-                "year_map_asset": asset_signature(assets.get(year_asset_id)),
-                "model_library_asset": asset_signature(assets.get(model_asset_id)),
+                "year_map_asset": asset_signature(assets.get(year_asset_id), project_assets_dir=project_assets_dir),
+                "model_library_asset": asset_signature(assets.get(model_asset_id), project_assets_dir=project_assets_dir),
             }
         )
 
@@ -58,10 +58,10 @@ def build_input_signature(project: dict[str, Any]) -> dict[str, Any]:
         "topology": extract_topology(project),
         "tariff": {
             "tariff_year": tariff.get("tariff_year"),
-            "asset": asset_signature(tariff.get("asset")),
+            "asset": asset_signature(tariff.get("asset"), project_assets_dir=project_assets_dir),
         },
         "device_library": {
-            "asset": asset_signature(device_library.get("asset")),
+            "asset": asset_signature(device_library.get("asset"), project_assets_dir=project_assets_dir),
             "records": device_library.get("records") if isinstance(device_library.get("records"), list) else [],
         },
         "load_runtime_assets": sorted(load_runtime_assets, key=lambda item: item["node_id"]),
@@ -69,7 +69,7 @@ def build_input_signature(project: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def asset_signature(asset: Any) -> dict[str, Any] | None:
+def asset_signature(asset: Any, project_assets_dir: Path | None = None) -> dict[str, Any] | None:
     if not isinstance(asset, dict):
         return None
     metadata = asset.get("metadata") if isinstance(asset.get("metadata"), dict) else {}
@@ -78,11 +78,19 @@ def asset_signature(asset: Any) -> dict[str, Any] | None:
     if stored_path:
         path = Path(str(stored_path))
         try:
-            stat = path.stat()
+            resolved = path.resolve()
+            if project_assets_dir is not None:
+                resolved.relative_to(project_assets_dir.resolve())
+            stat = resolved.stat()
             file_stat = {
-                "path": str(path.resolve()),
+                "path": str(resolved),
                 "size": stat.st_size,
                 "mtime_ns": stat.st_mtime_ns,
+            }
+        except ValueError:
+            file_stat = {
+                "path": str(path),
+                "outside_project_assets": True,
             }
         except OSError:
             file_stat = {
