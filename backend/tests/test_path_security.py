@@ -17,7 +17,7 @@ if _BACKEND_DIR not in sys.path:
 sys.modules.pop("services.project_model_service", None)
 sys.modules.pop("services.load_data_processing_service", None)
 
-from models.project_model import AssetRef  # noqa: E402
+from models.project_model import AssetRef, DeviceRecord  # noqa: E402
 from services import file_store  # noqa: E402
 from services.asset_binding_service import AssetBindingService  # noqa: E402
 from services.atomic_io import write_bytes_atomic, write_text_atomic  # noqa: E402
@@ -247,6 +247,56 @@ def test_invalid_tariff_upload_does_not_bind_project_asset(tmp_path: Path) -> No
     reloaded = project_service.load_project(project.project_id)
     assert reloaded.tariff.asset is None
     assert reloaded.assets == {}
+
+
+def test_replace_device_library_keeps_only_current_upload_file(tmp_path: Path) -> None:
+    project_service = ProjectModelService(base_dir=tmp_path)
+    project, _ = project_service.create_empty_project("source")
+    assert project.project_id is not None
+
+    device_dir = tmp_path / project.project_id / "assets" / "device_library"
+    device_dir.mkdir(parents=True)
+    old_path = device_dir / "asset_old_工商业储能设备策略库.xlsx"
+    orphan_path = device_dir / "asset_orphan_工商业储能设备策略库.xlsx"
+    keep_path = device_dir / "asset_new_工商业储能设备策略库_v2模板.xlsx"
+    note_path = device_dir / "manual_note.txt"
+    old_path.write_bytes(b"old")
+    orphan_path.write_bytes(b"orphan")
+    keep_path.write_bytes(b"new")
+    note_path.write_text("keep local note", encoding="utf-8")
+
+    old_asset = AssetRef(
+        file_id="asset_old",
+        file_name="工商业储能设备策略库.xlsx",
+        source_type="upload",
+        metadata={"category": "device_library", "stored_path": str(old_path.resolve()), "is_current": True},
+    )
+    new_asset = AssetRef(
+        file_id="asset_new",
+        file_name="工商业储能设备策略库_v2模板.xlsx",
+        source_type="upload",
+        metadata={"category": "device_library", "stored_path": str(keep_path.resolve())},
+    )
+    project.assets[old_asset.file_id] = old_asset
+    project.device_library.asset = old_asset
+    project_service.save_project(project)
+
+    project_service.replace_device_library(
+        project.project_id,
+        new_asset,
+        [DeviceRecord(vendor="测试厂商", model="SafeBox-100")],
+    )
+
+    reloaded = project_service.load_project(project.project_id)
+    assert reloaded.device_library.asset is not None
+    assert reloaded.device_library.asset.file_id == "asset_new"
+    assert "device_library_cleanup_failures" not in reloaded.metadata
+    assert "asset_old" not in reloaded.assets
+    assert "asset_new" in reloaded.assets
+    assert old_path.exists() is False
+    assert orphan_path.exists() is False
+    assert keep_path.exists() is True
+    assert note_path.exists() is True
 
 
 def test_build_asset_path_rejects_files_outside_project_assets(tmp_path: Path) -> None:

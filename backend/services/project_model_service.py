@@ -372,12 +372,72 @@ class ProjectModelService:
 
     def replace_device_library(self, project_id: str, asset: AssetRef, records: List[DeviceRecord]) -> tuple[ProjectModel, Path]:
         project = self.load_project(project_id)
+        stale_asset_ids = [
+            file_id
+            for file_id, existing in project.assets.items()
+            if existing.metadata.get("category") == "device_library" and file_id != asset.file_id
+        ]
+        for file_id in stale_asset_ids:
+            project.assets.pop(file_id, None)
         project.device_library.asset = asset
         project.device_library.records = records
         project.assets[asset.file_id] = asset
         self._mark_current_asset(project, "device_library", asset.file_id)
         _, project_file = self.save_project(project)
+        cleanup_failures = self._cleanup_singleton_asset_files(
+            project_id=project_id,
+            category="device_library",
+            keep_path=Path(str(asset.metadata.get("stored_path") or "")),
+            allowed_suffixes={".xlsx", ".xlsm"},
+        )
+        metadata_key = "device_library_cleanup_failures"
+        if cleanup_failures:
+            project.metadata[metadata_key] = cleanup_failures
+            _, project_file = self.save_project(project)
+        elif project.metadata.pop(metadata_key, None) is not None:
+            _, project_file = self.save_project(project)
         return project, project_file
+
+    def _cleanup_singleton_asset_files(
+        self,
+        *,
+        project_id: str,
+        category: str,
+        keep_path: Path,
+        allowed_suffixes: set[str],
+    ) -> list[str]:
+        """Keep one current uploaded asset file for a singleton asset category."""
+        failures: list[str] = []
+        safe_category = self.safe_path_segment(category, "资产分类")
+        asset_dir = (self._assets_dir(project_id) / safe_category).resolve()
+        if not asset_dir.exists():
+            return failures
+
+        try:
+            keep_resolved = keep_path.resolve()
+            keep_resolved.relative_to(asset_dir)
+        except (OSError, ValueError):
+            return failures
+
+        for candidate in asset_dir.iterdir():
+            if not candidate.is_file():
+                continue
+            if not candidate.name.startswith("asset_"):
+                continue
+            if candidate.suffix.lower() not in allowed_suffixes:
+                continue
+            candidate_resolved = candidate.resolve()
+            try:
+                candidate_resolved.relative_to(asset_dir)
+            except ValueError:
+                continue
+            if candidate_resolved == keep_resolved:
+                continue
+            try:
+                candidate.unlink()
+            except OSError as exc:
+                failures.append(f"{candidate.name}: {exc}")
+        return failures
 
     def upsert_device_record(self, project_id: str, record: DeviceRecord) -> tuple[ProjectModel, Path]:
         project = self.load_project(project_id)
